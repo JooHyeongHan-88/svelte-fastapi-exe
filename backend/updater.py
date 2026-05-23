@@ -3,6 +3,7 @@
 Nexus raw repository 의 latest.json 을 조회하고, 새 버전이 있으면
 sha256 검증 후 번들된 updater.exe 로 self-replace 를 트리거한다.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -164,7 +165,9 @@ def _verify_signature(path: Path) -> bool:
 
 
 def _download(url: str, dest: Path, expected_size: int) -> None:
-    _set_state(status="downloading", progress=0, total=expected_size, message="다운로드 중...")
+    _set_state(
+        status="downloading", progress=0, total=expected_size, message="다운로드 중..."
+    )
 
     with httpx.Client(timeout=UPDATE_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
         with client.stream("GET", url) as r:
@@ -256,6 +259,7 @@ def apply_update() -> dict:
         except OSError:
             # 다른 볼륨 (예: tmp 가 다른 드라이브) 대비 fallback.
             import shutil
+
             shutil.move(str(new_exe_tmp), str(new_exe))
 
         _set_state(status="staging", message="재시작 준비 중...")

@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 # ---------------------------------------------------------------------------
 # 경로 해석
@@ -21,29 +23,8 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _load_dotenv() -> None:
-    """프로젝트 루트의 .env 를 dev 모드에서만 로드한다.
-
-    EXE 로 패키징된 환경에서는 .env 가 함께 배포되지 않으므로 skip.
-    이미 셸에서 export 된 값은 덮어쓰지 않는다 (os.environ.setdefault).
-    """
-    if getattr(sys, "frozen", False):
-        return
-
-    env_path = _project_root() / ".env"
-    if not env_path.is_file():
-        return
-
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-_load_dotenv()
+if not getattr(sys, "frozen", False):
+    load_dotenv(dotenv_path=_project_root() / ".env", override=False)
 
 
 # ---------------------------------------------------------------------------
