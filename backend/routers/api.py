@@ -8,7 +8,7 @@ import browser
 import updater
 from _version import __version__
 from chat import harness
-from chat.models import ChatRequest, ConversationResponse
+from chat.models import ChatRequest, ConversationResponse, RestoreRequest
 from chat.store import ConversationStore
 from chat.tools import registry
 from config import (
@@ -89,6 +89,22 @@ async def get_conversation(
 async def reset_conversation(client_id: str = Query(...)) -> dict:
     """현재 client 의 대화를 비운다 (새 대화 버튼)."""
     _store.reset(client_id)
+    return {"ok": True}
+
+
+@router.post("/conversation/restore")
+async def restore_conversation(
+    req: RestoreRequest, client_id: str = Query(...)
+) -> dict:
+    """프론트 localStorage 의 히스토리를 백엔드 store 에 다시 주입.
+
+    EXE 재시작이나 세션 전환 시 LLM context 가 끊기지 않도록 사용한다.
+    system 메시지는 harness 가 매 턴 다시 머리에 붙이므로 여기서 받아도 의미 없음 — 제거.
+    """
+    payload = [m for m in req.messages if m.role != "system"]
+    _store.reset(client_id)
+    if payload:
+        _store.append(client_id, *payload)
     return {"ok": True}
 
 

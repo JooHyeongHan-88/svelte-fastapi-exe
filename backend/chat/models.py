@@ -96,3 +96,9 @@ class ChatRequest(BaseModel):
 
 class ConversationResponse(BaseModel):
     messages: list[Message]
+
+
+class RestoreRequest(BaseModel):
+    """프론트 localStorage 의 히스토리를 백엔드에 재주입할 때의 페이로드."""
+
+    messages: Annotated[list[Message], "client 가 보존하던 전체 대화 히스토리"]

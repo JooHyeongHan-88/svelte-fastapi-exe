@@ -1,0 +1,35 @@
+// SSE 스트림을 줄(이벤트) 단위로 잘라 onEvent 콜백에 넘긴다.
+// 이벤트는 빈 줄(\n\n)로 구분되고, 우리는 data: 라인만 모아 JSON.parse 한다.
+
+export async function parseSseStream(body, onEvent) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+
+      const dataLine = rawEvent
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trimStart())
+        .join("\n");
+
+      if (!dataLine) continue;
+
+      try {
+        onEvent(JSON.parse(dataLine));
+      } catch {
+        // 손상된 chunk 는 조용히 스킵 — 다음 이벤트로 진행.
+      }
+    }
+  }
+}
