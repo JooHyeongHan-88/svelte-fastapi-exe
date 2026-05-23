@@ -3,10 +3,20 @@
 
 a = Analysis(
     ['backend\\main.py'],
-    pathex=[],
+    pathex=['backend'],
     binaries=[],
-    datas=[('dist', 'dist')],
-    hiddenimports=[],
+    datas=[
+        # source -> destination inside sys._MEIPASS
+        ('build/web', 'web'),
+        ('build/updater/Updater.exe', 'updater'),
+    ],
+    hiddenimports=[
+        'browser',
+        'config',
+        'updater',
+        '_version',
+        'routers.api',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +32,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='MyAgent',
+    name='MyAgent',  # <-- change this to rename the output EXE (e.g. 'MyTool')
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

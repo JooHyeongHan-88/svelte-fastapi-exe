@@ -1,11 +1,20 @@
 # Python
 __pycache__/
 *.py[oc]
-build/
-dist/
 wheels/
 *.egg-info
 uv.lock
+
+# Build artifacts
+build/
+build/*
+release/
+release/*
+dist/
+dist/*
+
+# Local environment overrides
+.env.local
 
 # JavaScript
 logs
