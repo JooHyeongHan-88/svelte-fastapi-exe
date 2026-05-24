@@ -1,14 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
+# SPECPATH = directory of this spec file (packaging/)
+# root     = project root (one level up)
+root = os.path.dirname(SPECPATH)
 
 a = Analysis(
-    ['backend\\main.py'],
-    pathex=['backend'],
+    [os.path.join(root, 'backend', 'main.py')],
+    pathex=[os.path.join(root, 'backend')],
     binaries=[],
     datas=[
         # source -> destination inside sys._MEIPASS
-        ('build/web', 'web'),
-        ('build/updater/Updater.exe', 'updater'),
+        (os.path.join(root, 'build', 'web'), 'web'),
+        (os.path.join(root, 'build', 'updater', 'Updater.exe'), 'updater'),
     ],
     hiddenimports=[
         'browser',

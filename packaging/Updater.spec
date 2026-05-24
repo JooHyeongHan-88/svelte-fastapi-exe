@@ -1,8 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
+# SPECPATH = directory of this spec file (packaging/)
+# root     = project root (one level up)
+root = os.path.dirname(SPECPATH)
 
 a = Analysis(
-    ['updater\\updater.py'],
+    [os.path.join(root, 'updater', 'updater.py')],
     pathex=[],
     binaries=[],
     datas=[],

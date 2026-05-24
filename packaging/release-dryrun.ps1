@@ -1,4 +1,4 @@
-# scripts/release-dryrun.ps1
+# packaging/release-dryrun.ps1
 #
 # Validates the full release pipeline locally without uploading to Nexus.
 #
@@ -9,8 +9,8 @@
 #   4. Print manual verification scenarios
 #
 # Usage:
-#   pwsh scripts/release-dryrun.ps1
-#   pwsh scripts/release-dryrun.ps1 -Port 19800 -SkipBuild
+#   pwsh packaging/release-dryrun.ps1
+#   pwsh packaging/release-dryrun.ps1 -Port 19800 -SkipBuild
 
 param(
     [int]$Port = 19800,
@@ -23,8 +23,8 @@ Set-Location $root
 
 $nexusUrl = "http://127.0.0.1:$Port"
 
-# Detect AppName from App.spec (same logic as release.ps1).
-$specContent = Get-Content "App.spec" -Raw
+# Detect AppName from packaging/App.spec (same logic as release.ps1).
+$specContent = Get-Content "packaging/App.spec" -Raw
 if ($specContent -match "name\s*=\s*'([^']+)'") {
     $AppName = $Matches[1]
 } else {

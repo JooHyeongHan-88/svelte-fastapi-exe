@@ -1,4 +1,4 @@
-# scripts/release.ps1
+# packaging/release.ps1
 #
 # Steps:
 #   1. Sync version from pyproject.toml -> backend/_version.py
@@ -8,16 +8,16 @@
 #   5. Compute sha256 + generate          release/latest.json
 #   6. Upload to Nexus raw repo (requires -Upload flag)
 #
-# App name is read automatically from the name= field in App.spec.
-# To rename the output EXE, change name='...' in App.spec — no other edits needed.
+# App name is read automatically from the name= field in packaging/App.spec.
+# To rename the output EXE, change name='...' in packaging/App.spec — no other edits needed.
 #
 # Output layout:
 #   build/    intermediate artifacts (bundled into the EXE, never uploaded)
 #   release/  final artifacts (uploaded to Nexus)
 #
 # Usage:
-#   pwsh scripts/release.ps1
-#   pwsh scripts/release.ps1 -Upload -NexusBaseUrl https://nexus.internal/repository/myapp -NexusUser foo -NexusPass bar
+#   pwsh packaging/release.ps1
+#   pwsh packaging/release.ps1 -Upload -NexusBaseUrl https://nexus.internal/repository/myapp -NexusUser foo -NexusPass bar
 
 param(
     [switch]$Upload,
@@ -34,12 +34,12 @@ Set-Location $root
 # Ensure output directories exist.
 New-Item -ItemType Directory -Force -Path "build", "release" | Out-Null
 
-# Detect AppName from App.spec's  name='...'  field.
-$specContent = Get-Content "App.spec" -Raw
+# Detect AppName from packaging/App.spec's  name='...'  field.
+$specContent = Get-Content "packaging/App.spec" -Raw
 if ($specContent -match "name\s*=\s*'([^']+)'") {
     $AppName = $Matches[1]
 } else {
-    throw "Could not detect app name from App.spec (expected: name='...')"
+    throw "Could not detect app name from packaging/App.spec (expected: name='...')"
 }
 Write-Host "==> app name  : $AppName"
 
@@ -74,7 +74,7 @@ Write-Host "==> updater build   (-> build/updater/)"
 uv run pyinstaller --noconfirm --clean `
     --distpath build/updater `
     --workpath build/pyi-updater `
-    Updater.spec
+    packaging/Updater.spec
 if ($LASTEXITCODE -ne 0) { throw "updater build failed" }
 
 if (-not (Test-Path "build/updater/Updater.exe")) {
@@ -86,7 +86,7 @@ Write-Host "==> app build       (-> release/)"
 uv run pyinstaller --noconfirm --clean `
     --distpath release `
     --workpath build/pyi-app `
-    App.spec
+    packaging/App.spec
 if ($LASTEXITCODE -ne 0) { throw "app build failed" }
 
 $exePath = "release/$AppName.exe"
