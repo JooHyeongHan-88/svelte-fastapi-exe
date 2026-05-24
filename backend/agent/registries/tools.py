@@ -18,6 +18,8 @@ from agent.models import ToolSpec
 # Harness 가 이름으로 분기하므로 외부 상수로 노출.
 PLANNER_ADD_TODO = "add_todo"
 PLANNER_COMPLETE_TODO = "complete_todo"
+# 오케스트레이터 전용 디스패치 도구 — harness 가 재귀 turn 실행으로 가로챔.
+SUB_AGENT_DISPATCH = "call_sub_agent"
 
 
 class BaseTool(ABC):
@@ -199,8 +201,49 @@ class DemoSearchTool(BaseTool):
         )
 
 
+class CallSubAgentTool(BaseTool):
+    """오케스트레이터가 서브 에이전트에게 작업을 위임할 때 호출하는 디스패치 도구.
+
+    AddTodoTool 과 동일하게 harness 가 가로채 재귀 _run_agent_turn 을 구동하므로
+    run() 자체는 도달하지 않는 placeholder. spec 만 LLM 에게 노출된다.
+    서브 에이전트 호출 시에는 _filter_specs_for_sub_agent 가 이 도구를 제거해
+    무한 재귀를 차단한다.
+    """
+
+    name = SUB_AGENT_DISPATCH
+    description = (
+        "특정 서브 에이전트에게 작업을 위임한다. agent_name 은 가용 서브 에이전트 "
+        "카탈로그에 등록된 에이전트 식별자, task 는 그 에이전트가 수행할 한국어 "
+        "작업 지시문 한 단락이다. 호출 즉시 서브 에이전트 turn 이 자동 실행되고 "
+        "결과 요약본이 tool_result 로 반환된다."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "agent_name": {
+                "type": "string",
+                "description": "위임할 서브 에이전트 식별자 (예: coding_agent)",
+            },
+            "task": {
+                "type": "string",
+                "description": "에이전트가 수행할 작업 지시문 (한국어 한 단락)",
+            },
+        },
+        "required": ["agent_name", "task"],
+    }
+    slot_prompts: dict[str, str] = {
+        "agent_name": "어느 서브 에이전트에게 작업을 맡길까요?",
+        "task": "에이전트가 수행할 작업을 한 문단으로 알려 주세요.",
+    }
+
+    async def run(self, args: dict[str, Any]) -> str:
+        # harness 가 SUB_AGENT_DISPATCH 분기에서 가로채므로 도달하지 않는다.
+        return "[dispatch] call_sub_agent placeholder — handled by harness"
+
+
 registry = ToolRegistry()
 registry.register(NowTool())
 registry.register(AddTodoTool())
 registry.register(CompleteTodoTool())
 registry.register(DemoSearchTool())
+registry.register(CallSubAgentTool())

@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from agent.registries.agents import registry as agent_registry
 from agent.registries.prompts import registry as prompt_registry
 from agent.registries.skills import registry as skill_registry
 from api import router as api_router
@@ -20,6 +21,9 @@ app = FastAPI()
 # 본문 읽을 때 mtime 으로 자동 감지하므로 부팅 시점 로드만 명시한다.
 prompt_registry.load()
 skill_registry.load()
+agent_registry.load()
+# AGENTS body 의 skills 배열이 실제 SKILLS 와 일치하는지 확인 — 부팅 시 1회 경고.
+agent_registry.cross_check_skills({m.name for m in skill_registry.list_meta()})
 
 # API 라우터는 catch-all 보다 먼저 등록해야 GET /api/* 가 SPA fallback 에 잡히지 않는다.
 app.include_router(api_router)

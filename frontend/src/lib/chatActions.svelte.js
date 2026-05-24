@@ -212,6 +212,8 @@ export async function sendMessage(text) {
     reasoning: "",        // ReasoningEvent 청크가 누적되는 추론 텍스트
     todos: null,          // TodoUpdateEvent 로 갱신되는 TodoItem[] | null
     askUser: null,        // AskUserEvent 로 설정되는 슬롯 질문 | null
+    agentTrail: [],       // {from, to, summary?} — agent:switch / agent:return chip
+    agentProgress: [],    // {agentId, deltas, toolStatus} — 서브 에이전트 진행 영역
     createdAt: now,
   };
 
@@ -289,6 +291,80 @@ export async function sendMessage(text) {
     scheduleSave();
   };
 
+  // ── 멀티 에이전트 이벤트 핸들러 ─────────────────────────────────────
+  // AgentSwitchEvent → trail 에 새 항목 push (요약 비어 있음)
+  const pushAgentSwitch = (from, to, reason) => {
+    const s = activeSession();
+    if (!s) return;
+    const last = s.messages[s.messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    last.agentTrail = [
+      ...(last.agentTrail ?? []),
+      { from, to, reason, summary: null },
+    ];
+    // 새 progress 슬롯도 미리 열어 둔다 (delta 누적용).
+    last.agentProgress = [
+      ...(last.agentProgress ?? []),
+      { agentId: to, deltas: "", toolStatus: null },
+    ];
+    ui.sessions = [...ui.sessions];
+    scheduleSave();
+  };
+
+  // AgentReturnEvent → trail 의 마지막 항목 summary 채움
+  const pushAgentReturn = (from, summary) => {
+    const s = activeSession();
+    if (!s) return;
+    const last = s.messages[s.messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    const trail = [...(last.agentTrail ?? [])];
+    for (let i = trail.length - 1; i >= 0; i--) {
+      if (trail[i].to === from && trail[i].summary == null) {
+        trail[i] = { ...trail[i], summary };
+        break;
+      }
+    }
+    last.agentTrail = trail;
+    ui.sessions = [...ui.sessions];
+    scheduleSave();
+  };
+
+  // AgentProgressEvent → 현재 활성 progress 슬롯에 inner 이벤트 반영
+  const handleAgentProgress = (agentId, innerType, innerPayload) => {
+    const s = activeSession();
+    if (!s) return;
+    const last = s.messages[s.messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    const progress = [...(last.agentProgress ?? [])];
+    // 같은 agentId 의 마지막 슬롯을 찾는다 (없으면 새로 추가).
+    let slotIdx = -1;
+    for (let i = progress.length - 1; i >= 0; i--) {
+      if (progress[i].agentId === agentId) {
+        slotIdx = i;
+        break;
+      }
+    }
+    if (slotIdx === -1) {
+      progress.push({ agentId, deltas: "", toolStatus: null });
+      slotIdx = progress.length - 1;
+    }
+    const slot = { ...progress[slotIdx] };
+    if (innerType === "delta") {
+      slot.deltas += innerPayload.content ?? "";
+    } else if (innerType === "tool_call") {
+      slot.toolStatus = `🔧 ${innerPayload.call?.name ?? "?"} 호출 중...`;
+    } else if (innerType === "tool_result") {
+      slot.toolStatus = `🔧 ${innerPayload.name ?? "?"} → ${innerPayload.result ?? ""}`;
+    } else if (innerType === "reasoning") {
+      // 추론은 deltas 와 별도로 다루지 않고 prefix 로만 시각 구분.
+      slot.deltas += `\n[reasoning] ${innerPayload.content ?? ""}`;
+    }
+    progress[slotIdx] = slot;
+    last.agentProgress = progress;
+    ui.sessions = [...ui.sessions];
+    scheduleSave();
+  };
+
   // 백엔드로 보낼 force_skills 를 미리 캡처 후, 다음 입력에 잔여물이 남지 않도록 즉시 리셋.
   const forceSkills = forced;
   ui.composerSkills = [];
@@ -326,6 +402,12 @@ export async function sendMessage(text) {
           tool_name: ev.tool_name ?? null,
           answered: false,
         });
+      } else if (ev.type === "agent:switch") {
+        pushAgentSwitch(ev.from_agent, ev.to_agent, ev.reason ?? "");
+      } else if (ev.type === "agent:return") {
+        pushAgentReturn(ev.from_agent, ev.summary ?? "");
+      } else if (ev.type === "agent:progress") {
+        handleAgentProgress(ev.agent_id, ev.inner_type, ev.inner_payload ?? {});
       }
     });
   } catch (e) {

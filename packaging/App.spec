@@ -16,6 +16,7 @@ a = Analysis(
         # Agent guideline directories — backend/agent/registries/{prompts,skills}.py 가 MEIPASS 에서 읽음.
         (os.path.join(root, 'PROMPTS'), 'PROMPTS'),
         (os.path.join(root, 'SKILLS'), 'SKILLS'),
+        (os.path.join(root, 'AGENTS'), 'AGENTS'),
     ],
     hiddenimports=[
         '_version',
@@ -33,6 +34,7 @@ a = Analysis(
         'agent.registries.prompts',
         'agent.registries.skills',
         'agent.registries.tools',
+        'agent.registries.agents',
         'agent.providers.factory',
         'agent.providers.mock',
         'agent.providers.openai',

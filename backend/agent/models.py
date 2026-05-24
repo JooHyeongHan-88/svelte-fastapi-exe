@@ -164,6 +164,54 @@ class ReasoningEvent(BaseModel):
     content: Annotated[str, "이번 chunk 에 추가된 추론 텍스트 조각"]
 
 
+# ---------------------------------------------------------------------------
+# 계층형 멀티 에이전트 이벤트 — 오케스트레이터 ↔ 서브 에이전트 제어권 전환 시각화
+# ---------------------------------------------------------------------------
+
+
+class AgentSwitchEvent(BaseModel):
+    """오케스트레이터가 서브 에이전트에게 제어권을 넘기는 순간 발송.
+
+    프론트는 메시지 카드 상단에 'orchestrator → coding_agent' 형태의 chip 으로 표시한다.
+    """
+
+    type: Literal["agent:switch"] = "agent:switch"
+    from_agent: Annotated[
+        str, "직전 활성 에이전트 — 'orchestrator' 또는 상위 에이전트 이름"
+    ]
+    to_agent: Annotated[str, "새로 활성화될 에이전트 이름"]
+    reason: Annotated[str, "위임 사유 — task 의 첫 80자 발췌"]
+
+
+class AgentReturnEvent(BaseModel):
+    """서브 에이전트가 작업을 마치고 요약본을 지닌 채 복귀할 때 발송.
+
+    부모 _run_agent_turn 은 이 이벤트의 summary 를 캡처해 tool_result 로 변환한다.
+    """
+
+    type: Literal["agent:return"] = "agent:return"
+    from_agent: Annotated[str, "복귀하는 에이전트 이름"]
+    summary: Annotated[str, "Task Summary — tool_result 와 동일한 텍스트"]
+
+
+class AgentProgressEvent(BaseModel):
+    """서브 에이전트의 raw 이벤트(delta / tool_call / tool_result / reasoning)를 래핑.
+
+    오케스트레이터 vs 서브 에이전트 이벤트를 wire 상에서 명확히 구분하기 위해 한 단계 감싼다.
+    inner_payload 는 원본 이벤트의 type 을 제외한 model_dump 결과.
+    프론트는 ev.type === 'agent:progress' 한 곳에서 inner_type 으로 재분기한다.
+    """
+
+    type: Literal["agent:progress"] = "agent:progress"
+    agent_id: Annotated[str, "현재 제어권을 가진 서브 에이전트 이름"]
+    inner_type: Annotated[
+        str, "원본 이벤트 type — delta/tool_call/tool_result/reasoning"
+    ]
+    inner_payload: Annotated[
+        dict[str, Any], "원본 이벤트의 type 을 제외한 model_dump 결과"
+    ]
+
+
 StreamEvent = Annotated[
     DeltaEvent
     | ToolCallEvent
@@ -173,7 +221,10 @@ StreamEvent = Annotated[
     | AskUserEvent
     | TodoUpdateEvent
     | SkillActiveEvent
-    | ReasoningEvent,
+    | ReasoningEvent
+    | AgentSwitchEvent
+    | AgentReturnEvent
+    | AgentProgressEvent,
     Field(discriminator="type"),
 ]
 

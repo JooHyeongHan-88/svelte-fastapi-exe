@@ -36,9 +36,11 @@ AGENT_STATE_PATH: Path = _get_agent_state_path()
 if getattr(sys, "frozen", False):
     PROMPTS_DIR: Path = _project_root() / "PROMPTS"
     SKILLS_DIR: Path = _project_root() / "SKILLS"
+    AGENTS_DIR: Path = _project_root() / "AGENTS"
 else:
     PROMPTS_DIR = _project_root() / "PROMPTS"
     SKILLS_DIR = _project_root() / "SKILLS"
+    AGENTS_DIR = _project_root() / "AGENTS"
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +65,15 @@ LLM_MAX_TOKENS: int | None = int(_max_tok_raw) if _max_tok_raw else None
 
 # Agent harness 한 턴에서 허용하는 provider→tool→provider 반복 횟수 상한.
 MAX_AGENT_ITERATIONS: int = int(os.environ.get("APP_MAX_AGENT_ITERATIONS", "5"))
+
+# 한 사용자 turn 에서 오케스트레이터 + 모든 (재귀) 서브 에이전트 합산 provider 호출 상한.
+# 무한 위임 루프와 자원 과다 소모를 차단하기 위한 budget.
+MAX_AGENT_CALLS_PER_TURN: int = int(
+    os.environ.get("APP_MAX_AGENT_CALLS_PER_TURN", "10")
+)
+
+# 서브 에이전트 호출 깊이 상한. 0=orchestrator, 1=sub-agent. 2 이상은 거부.
+MAX_AGENT_DEPTH: int = int(os.environ.get("APP_MAX_AGENT_DEPTH", "2"))
 
 # store 가 client 한 명당 보관하는 메시지 수 상한 (system 제외).
 MAX_HISTORY_MESSAGES: int = int(os.environ.get("APP_MAX_HISTORY_MESSAGES", "40"))

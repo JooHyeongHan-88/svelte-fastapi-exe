@@ -21,8 +21,10 @@ logger = logging.getLogger(__name__)
 class PromptRegistry:
     """PROMPTS/*.md 를 합성해 system prompt 베이스를 만든다."""
 
-    # 합성 순서 — base 가 먼저, safety 가 그 뒤. 파일 부재 시 조용히 건너뜀.
-    _ORDERED_FILES: tuple[str, ...] = ("base.md", "safety.md")
+    # 합성 순서 — base(페르소나) → safety(가드레일) → orchestrator(라우팅 규칙).
+    # orchestrator.md 는 오케스트레이터 호출 시에만 포함 (서브 에이전트에는 제외).
+    _ORDERED_FILES: tuple[str, ...] = ("base.md", "safety.md", "orchestrator.md")
+    _ORCHESTRATOR_ONLY: frozenset[str] = frozenset({"orchestrator.md"})
 
     def __init__(self, prompts_dir: Path | None = None) -> None:
         self._dir = prompts_dir or PROMPTS_DIR
@@ -39,10 +41,18 @@ class PromptRegistry:
             sum(1 for n in self._ORDERED_FILES if (self._dir / n).exists()),
         )
 
-    def compose(self, fallback: str = "") -> str:
-        """합성된 베이스 텍스트. 모두 비어 있으면 fallback 을 반환."""
+    def compose(self, fallback: str = "", include_orchestrator: bool = True) -> str:
+        """합성된 베이스 텍스트. 모두 비어 있으면 fallback 을 반환.
+
+        Args:
+            fallback: 모든 파일이 비어 있을 때 반환할 폴백 문자열.
+            include_orchestrator: False 면 orchestrator.md 를 제외한다 — 서브 에이전트는
+                4단계 라우팅 규칙을 받지 않아야 한다 (자신이 또 위임을 시도하는 것을 방지).
+        """
         parts: list[str] = []
         for name in self._ORDERED_FILES:
+            if not include_orchestrator and name in self._ORCHESTRATOR_ONLY:
+                continue
             text = self._read(self._dir / name)
             if text:
                 parts.append(text)

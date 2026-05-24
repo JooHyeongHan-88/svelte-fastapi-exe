@@ -1,12 +1,16 @@
 """Mock LLM provider for UI validation without real API calls.
 
-지원하는 시나리오 (SKILLS 라우팅 검증용):
+지원하는 시나리오 (SKILLS / AGENTS 라우팅 검증용):
     1. now tool       — "지금 몇 시", "현재 시각" 등 → now 도구 호출 → 시각 응답
     2. add_todo       — "보고서", "리포트", "report" → add_todo 3-step 플래너
     3. search         — "검색", "데이터 조회" → demo_search (빈 인자) → AskUserEvent
     4. reasoning      — "생각해", "추론" → ReasoningEvent 청크 → DeltaEvent 응답
     5. full report    — "전체 보고서" → add_todo 3개 → complete_todo 순차 실행
-    6. 기본 echo      — 위 트리거가 없으면 메시지를 그대로 echo
+    6. 명시 위임      — "코딩 에이전트", "리서치 에이전트" → call_sub_agent (Case 2)
+    7. 체이닝         — "전체 분석" → coding_agent → research_agent 순차 위임
+    8. 서브 에이전트  — system 메시지에 "당신은 '<name>' 서브 에이전트" 포함 시 분기
+                        (오케스트레이터가 _dispatch_sub_agent 로 호출한 격리된 turn)
+    9. 기본 echo      — 위 트리거가 없으면 메시지를 그대로 echo
 """
 
 import asyncio
@@ -49,6 +53,16 @@ _REASONING_TRIGGERS = ("생각해", "생각 해", "think", "reason", "추론")
 # full report 시나리오 — add_todo + complete_todo 순차 실행.
 _FULL_REPORT_TRIGGERS = ("전체 보고서", "full report")
 
+# Case 2: 명시 위임 — 사용자가 에이전트를 지명. 가장 먼저 검사돼야 한다.
+_CODING_AGENT_TRIGGERS = ("코딩 에이전트", "coding_agent", "코드 리팩토링")
+_RESEARCH_AGENT_TRIGGERS = ("리서치 에이전트", "research_agent", "조사 에이전트")
+
+# Case 2 + 체이닝 — 한 번의 사용자 입력으로 두 에이전트 순차 위임.
+_CHAIN_TRIGGERS = ("전체 분석", "full analysis")
+
+# 서브 에이전트 분기 marker — _compose_sub_agent_system_prompt 가 항상 포함.
+_SUB_AGENT_MARKER = "당신은 '"
+
 
 class MockProvider:
     """LLM 없이 UI 검증을 위한 가짜 프로바이더.
@@ -84,6 +98,57 @@ class MockProvider:
     ) -> AsyncIterator[StreamEvent]:
         """Stream mock response events."""
         last_user = _find_last_user(messages)
+
+        # ── 서브 에이전트 분기 — system marker 로 결정론 판별 ──────────────────
+        # _compose_sub_agent_system_prompt 가 항상 "당신은 '<name>' 서브 에이전트" 헤더를
+        # 포함하므로 mock 도 같은 marker 로 컨텍스트를 식별한다.
+        sub_name = _detect_sub_agent_name(messages)
+        if sub_name is not None:
+            async for event in _sub_agent_scenario(messages, sub_name):
+                yield event
+            return
+
+        # ── 시나리오 7: 체이닝 — coding_agent → research_agent ─────────────────
+        if last_user is not None and _matches(last_user.content, _CHAIN_TRIGGERS):
+            async for event in _chain_scenario(messages, last_user):
+                yield event
+            return
+
+        # ── 시나리오 6: Case 2 명시 위임 ───────────────────────────────────────
+        already_dispatched = _has_recent_tool_result(messages, "mock-dispatch-")
+        if last_user is not None and not already_dispatched:
+            if _matches(last_user.content, _CODING_AGENT_TRIGGERS):
+                yield ToolCallEvent(
+                    call=ToolCall(
+                        id=f"mock-dispatch-coding-{uuid.uuid4().hex[:8]}",
+                        name="call_sub_agent",
+                        arguments={
+                            "agent_name": "coding_agent",
+                            "task": last_user.content,
+                        },
+                    )
+                )
+                yield DoneEvent()
+                return
+            if _matches(last_user.content, _RESEARCH_AGENT_TRIGGERS):
+                yield ToolCallEvent(
+                    call=ToolCall(
+                        id=f"mock-dispatch-research-{uuid.uuid4().hex[:8]}",
+                        name="call_sub_agent",
+                        arguments={
+                            "agent_name": "research_agent",
+                            "task": last_user.content,
+                        },
+                    )
+                )
+                yield DoneEvent()
+                return
+
+        # 위임 결과를 받은 다음 루프 — 자연어 최종 보고.
+        if already_dispatched:
+            async for event in _orchestrator_final_report(messages):
+                yield event
+            return
 
         # ── 시나리오 1: now tool ──────────────────────────────────────────────
         already_called_now = _has_recent_tool_result(messages, "mock-now-")
@@ -272,6 +337,136 @@ async def _reasoning_scenario(user_text: str) -> AsyncIterator[StreamEvent]:
         await asyncio.sleep(_MOCK_TOKEN_DELAY)
         yield DeltaEvent(content=ch)
 
+    yield DoneEvent()
+
+
+def _detect_sub_agent_name(messages: list[Message]) -> str | None:
+    """system 메시지에 "당신은 '<name>' 서브 에이전트" 헤더가 있으면 agent_name 추출.
+
+    _compose_sub_agent_system_prompt 가 항상 이 헤더를 포함하도록 강제하므로
+    오케스트레이터 컨텍스트와 서브 에이전트 컨텍스트를 결정론적으로 구분할 수 있다.
+    """
+    if not messages or messages[0].role != "system":
+        return None
+    system_text = messages[0].content
+    marker_pos = system_text.find(_SUB_AGENT_MARKER)
+    if marker_pos == -1:
+        return None
+    start = marker_pos + len(_SUB_AGENT_MARKER)
+    end = system_text.find("'", start)
+    if end == -1:
+        return None
+    return system_text[start:end]
+
+
+async def _chain_scenario(
+    messages: list[Message], last_user: Message
+) -> AsyncIterator[StreamEvent]:
+    """체이닝 시연 — coding_agent → research_agent → 통합 보고 (3단계)."""
+    coding_done = _has_recent_tool_result(messages, "mock-dispatch-coding-")
+    research_done = _has_recent_tool_result(messages, "mock-dispatch-research-")
+
+    if not coding_done:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"mock-dispatch-coding-{uuid.uuid4().hex[:8]}",
+                name="call_sub_agent",
+                arguments={
+                    "agent_name": "coding_agent",
+                    "task": f"코드 측면 분석 ({last_user.content})",
+                },
+            )
+        )
+        yield DoneEvent()
+        return
+
+    if not research_done:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"mock-dispatch-research-{uuid.uuid4().hex[:8]}",
+                name="call_sub_agent",
+                arguments={
+                    "agent_name": "research_agent",
+                    "task": f"배경 정보 조사 ({last_user.content})",
+                },
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # 통합 보고 단계.
+    reply = (
+        "두 서브 에이전트의 결과를 통합했습니다.\n\n"
+        "- 코딩 에이전트: 코드 검토 및 리팩토링 후보 식별 완료\n"
+        "- 리서치 에이전트: 배경 정보 수집 완료\n\n"
+        "전체 분석이 마무리되었습니다."
+    )
+    for ch in reply:
+        await asyncio.sleep(_MOCK_TOKEN_DELAY)
+        yield DeltaEvent(content=ch)
+    yield DoneEvent()
+
+
+async def _sub_agent_scenario(
+    messages: list[Message], agent_name: str
+) -> AsyncIterator[StreamEvent]:
+    """서브 에이전트 시뮬레이션 — now 도구 1회 호출 후 Task Summary 마무리."""
+    already_called_now = _has_recent_tool_result(messages, "mock-sub-now-")
+    if not already_called_now:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"mock-sub-now-{uuid.uuid4().hex[:8]}",
+                name="now",
+                arguments={},
+            )
+        )
+        yield DoneEvent()
+        return
+
+    if agent_name == "coding_agent":
+        reply = (
+            "코드 부분 검토를 완료했습니다. 시각 도구로 작업 시점을 기록했고 "
+            "안전한 리팩토링 후보 3곳, 네이밍 정리 2곳을 식별했습니다.\n\n"
+            "Task Summary:\n"
+            "- 코드 검토 완료 — 리팩토링 후보 3곳·네이밍 정리 2곳 식별\n"
+            "- 다음 단계: 단위 테스트 추가 후 안전한 변경 진행 권장"
+        )
+    elif agent_name == "research_agent":
+        reply = (
+            "조사 작업을 마쳤습니다. 시각 도구로 현재 시점을 확인하고 관련 "
+            "배경 정보를 정리했습니다.\n\n"
+            "Task Summary:\n"
+            "- 조사 주제 핵심 사실 수집 완료\n"
+            "- 신뢰도: mock 환경 시뮬레이션 (실제 데이터 소스 미연결)"
+        )
+    else:
+        reply = (
+            f"{agent_name} 작업을 마쳤습니다.\n\n"
+            "Task Summary:\n"
+            f"- {agent_name} 위임 작업 완료"
+        )
+
+    for ch in reply:
+        await asyncio.sleep(_MOCK_TOKEN_DELAY)
+        yield DeltaEvent(content=ch)
+    yield DoneEvent()
+
+
+async def _orchestrator_final_report(
+    messages: list[Message],
+) -> AsyncIterator[StreamEvent]:
+    """서브 에이전트 위임 결과를 받은 후 사용자에게 자연어로 최종 보고."""
+    last_dispatch = None
+    for m in reversed(messages):
+        if m.role == "tool" and (m.tool_call_id or "").startswith("mock-dispatch-"):
+            last_dispatch = m
+            break
+
+    summary_text = last_dispatch.content if last_dispatch else "(결과 없음)"
+    reply = f"서브 에이전트의 작업이 완료되었습니다.\n\n요약:\n{summary_text}"
+    for ch in reply:
+        await asyncio.sleep(_MOCK_TOKEN_DELAY)
+        yield DeltaEvent(content=ch)
     yield DoneEvent()
 
 

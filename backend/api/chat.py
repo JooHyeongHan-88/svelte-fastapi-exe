@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from agent import harness
-from agent.config import MAX_AGENT_ITERATIONS, SYSTEM_PROMPT
+from agent.config import MAX_AGENT_CALLS_PER_TURN, MAX_AGENT_ITERATIONS, SYSTEM_PROMPT
 from agent.models import ChatRequest, ConversationResponse, RestoreRequest
 from agent.providers.factory import get_provider
+from agent.registries.agents import registry as agent_registry
 from agent.registries.prompts import registry as prompt_registry
 from agent.registries.skills import registry as skill_registry
 from agent.registries.tools import registry
@@ -39,9 +40,11 @@ async def chat(req: ChatRequest, client_id: str = Query(...)) -> StreamingRespon
                 skill_registry=skill_registry,
                 prompt_registry=prompt_registry,
                 registry=registry,
+                agent_registry=agent_registry,
                 provider=provider,
                 system_prompt_fallback=SYSTEM_PROMPT,
                 max_iterations=MAX_AGENT_ITERATIONS,
+                max_agent_calls=MAX_AGENT_CALLS_PER_TURN,
                 force_skills=req.force_skills,
             ):
                 yield f"data: {event.model_dump_json()}\n\n"

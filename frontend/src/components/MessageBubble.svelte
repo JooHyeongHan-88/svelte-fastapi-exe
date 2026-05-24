@@ -43,6 +43,35 @@
         </div>
       {/if}
 
+      <!-- 멀티 에이전트 위임 trail — AgentSwitch/Return 이벤트 누적 -->
+      {#if message.agentTrail && message.agentTrail.length > 0}
+        <div class="agent-trail">
+          {#each message.agentTrail as hop, idx (idx)}
+            <span class="agent-chip" class:returned={hop.summary != null}>
+              <span class="agent-arrow">{hop.summary != null ? "✓" : "🔄"}</span>
+              {hop.from} → {hop.to}
+            </span>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- 서브 에이전트 진행 영역 — AgentProgress 의 inner delta/tool 표시 -->
+      {#if message.agentProgress && message.agentProgress.length > 0}
+        {#each message.agentProgress as slot, idx (idx)}
+          {#if slot.deltas || slot.toolStatus}
+            <div class="agent-progress">
+              <div class="agent-progress-label">{slot.agentId}</div>
+              {#if slot.toolStatus}
+                <div class="agent-progress-tool">{slot.toolStatus}</div>
+              {/if}
+              {#if slot.deltas}
+                <div class="agent-progress-text">{slot.deltas}</div>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      {/if}
+
       <!-- 추론 과정 블록 — ReasoningEvent 수신 시 표시 -->
       {#if message.reasoning}
         <ReasoningBlock
@@ -155,6 +184,70 @@
       opacity: 1;
       transform: scale(1) translateY(0);
     }
+  }
+
+  /* ── 멀티 에이전트 trail / progress ── */
+  .agent-trail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--fg-muted);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2px 9px 2px 7px;
+    line-height: 1.6;
+    white-space: nowrap;
+    animation: skill-pop 0.18s ease-out both;
+  }
+
+  .agent-chip.returned {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .agent-arrow {
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .agent-progress {
+    margin: 6px 0 10px 12px;
+    padding: 8px 12px;
+    border-left: 2px solid var(--border);
+    background: var(--bg-elevated);
+    border-radius: 0 6px 6px 0;
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .agent-progress-label {
+    font-weight: 600;
+    font-size: 11px;
+    margin-bottom: 4px;
+    color: var(--accent);
+  }
+
+  .agent-progress-tool {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .agent-progress-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
   }
 
   /* ── 도구 상태 ── */
