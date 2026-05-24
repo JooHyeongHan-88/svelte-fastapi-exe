@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
-from chat.models import (
+from agent.models import (
     DeltaEvent,
     DoneEvent,
     Message,

@@ -17,7 +17,7 @@ from typing import Annotated
 import frontmatter
 from pydantic import BaseModel, Field, ValidationError
 
-from config import SKILLS_DIR
+from agent.config import SKILLS_DIR
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 
-from chat.models import (
+from agent.models import (
     DeltaEvent,
     DoneEvent,
     Message,

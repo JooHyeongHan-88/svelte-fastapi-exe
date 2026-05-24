@@ -13,7 +13,7 @@ import logging
 import sys
 from pathlib import Path
 
-from config import PROMPTS_DIR
+from agent.config import PROMPTS_DIR
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from chat.models import AgentState
+from agent.models import AgentState
 
 logger = logging.getLogger(__name__)
 

@@ -25,13 +25,25 @@ svelte-fastapi-exe/
 ├── .env                   # 전체 환경 변수 레퍼런스 — dev only
 ├── backend/
 │   ├── main.py            # FastAPI 앱, uvicorn 서버, SPA 라우팅
-│   ├── config.py          # 모든 환경 변수·경로·상수의 단일 진실 공급원
-│   ├── browser.py         # presence 클라이언트 추적, watchdog, graceful shutdown
-│   ├── updater.py         # 버전 체크, 다운로드, sha256 검증, self-replace 트리거
 │   ├── _version.py        # 앱 버전 단일 소스 (release.ps1 이 자동 갱신)
-│   ├── routers/api.py     # /api/* 엔드포인트, Origin 가드
-│   ├── chat/              # harness(턴 루프), store(히스토리), tools, models
+│   ├── core/              # 앱 인프라 (LLM 무관)
+│   │   ├── config.py      # 모든 환경 변수·경로·상수의 단일 진실 공급원
+│   │   ├── browser.py     # presence 클라이언트 추적, watchdog, graceful shutdown
+│   │   └── updater.py     # 버전 체크, 다운로드, sha256 검증, self-replace 트리거
+│   ├── agent/             # LLM 에이전트 런타임
+│   │   ├── config.py      # SYSTEM_PROMPT, temperature, LLM 시드값
+│   │   ├── harness.py     # run_turn — 핵심 턴 루프
+│   │   ├── models.py      # Pydantic 메시지·이벤트·상태
+│   │   ├── stores/        # conversation(히스토리), agent_state(todo 영속)
+│   │   ├── registries/    # prompts, skills, tools 카탈로그
 │   │   └── providers/     # factory + mock + openai (LLM 프로바이더 패키지)
+│   ├── api/               # /api/* 엔드포인트 — 도메인별 분할
+│   │   ├── deps.py        # Origin 가드, 싱글톤 store 초기화
+│   │   ├── chat.py        # POST /api/chat, /api/conversation CRUD
+│   │   ├── settings.py    # GET/POST /api/settings, /providers, /test
+│   │   ├── presence.py    # GET /api/presence
+│   │   ├── update.py      # GET /api/version, /api/update/*
+│   │   └── skills.py      # GET /api/skills, /api/debug/skill-route
 │   └── settings/          # LLM 설정 저장소 (models, store, masking)
 ├── frontend/
 │   ├── src/
@@ -126,7 +138,7 @@ App.exe 실행
 
 - UI 기어 아이콘 → 설정 모달에서 프로바이더·모델·API키·Base URL 변경 후 저장
 - `%APPDATA%\{APP_NAME}\settings.json` (frozen) 또는 `backend/settings/settings.json` (dev) 에 영속화
-- temperature, max_tokens, system_prompt는 `backend/config.py` / 환경 변수로 제어 (설정 모달 미노출)
+- temperature, max_tokens, system_prompt는 `backend/agent/config.py` / 환경 변수로 제어 (설정 모달 미노출)
 - 설정 변경 즉시 반영 (서버 재시작 불필요 — 매 `/api/chat` 요청마다 최신 설정 로드)
 
 ### 자동 업데이트 흐름

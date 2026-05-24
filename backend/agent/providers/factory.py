@@ -3,7 +3,7 @@
 import logging
 from typing import Protocol
 
-from config import LLM_MAX_TOKENS, LLM_TEMPERATURE
+from agent.config import LLM_MAX_TOKENS, LLM_TEMPERATURE
 from settings.models import LLMSettings
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ def get_provider(settings: LLMSettings) -> LLMProvider:
         ValueError: If provider type is unsupported or credentials are missing.
     """
     if settings.provider == "mock":
-        from chat.providers.mock import MockProvider
+        from agent.providers.mock import MockProvider
 
         return MockProvider()
 
@@ -41,7 +41,7 @@ def get_provider(settings: LLMSettings) -> LLMProvider:
         if not settings.api_key or not settings.model or not settings.base_url:
             raise ValueError("OpenAI-compatible requires api_key, model, and base_url")
 
-        from chat.providers.openai import OpenAIProvider
+        from agent.providers.openai import OpenAIProvider
 
         return OpenAIProvider(
             api_key=settings.api_key,

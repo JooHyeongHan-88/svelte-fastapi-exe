@@ -2,7 +2,13 @@ import threading
 import time
 import webbrowser
 
-from config import HOST, PORT, PRESENCE_RECONNECT_GRACE, SHUTDOWN_GRACE, STARTUP_GRACE
+from core.config import (
+    HOST,
+    PORT,
+    PRESENCE_RECONNECT_GRACE,
+    SHUTDOWN_GRACE,
+    STARTUP_GRACE,
+)
 
 
 _lock = threading.Lock()

@@ -2,7 +2,7 @@
 
 ## PyInstaller frozen 경로 분기
 
-`backend/config.py`의 `_project_root()`가 모든 경로의 단일 진실 공급원.
+`backend/core/config.py`의 `_project_root()`가 모든 경로의 단일 진실 공급원.
 
 | 모드 | 루트 | 정적 자산 | Updater |
 |---|---|---|---|
@@ -40,7 +40,7 @@
 
 ## 동시성 모델
 
-`backend/browser.py`의 `_connections: dict[str, int]`과 `_pending_disconnects: dict[str, threading.Timer]`는  
+`backend/core/browser.py`의 `_connections: dict[str, int]`과 `_pending_disconnects: dict[str, threading.Timer]`는  
 **uvicorn event-loop · watchdog 스레드 · `threading.Timer` 콜백** 3곳에서 동시 접근한다.
 
 - 모든 read/write는 `_lock` 안에서 수행
@@ -53,7 +53,7 @@
 
 ## Origin 가드 (보안 경계)
 
-`backend/routers/api.py`의 `require_local_origin` 의존성이 router 레벨에 적용된다.
+`backend/api/deps.py`의 `require_local_origin` 의존성이 router 레벨에 적용된다.
 
 - **frozen(EXE)** 에서만 활성. dev는 Vite proxy 때문에 origin이 달라 자동 패스.
 - `Origin` 헤더 있으면 `ALLOWED_ORIGIN`(`http://127.0.0.1:8765`)과 일치 확인
@@ -63,7 +63,7 @@
 
 ## 에이전트 하니스 구조
 
-`backend/chat/harness.py`의 `run_turn()` 한 번 = 사용자 입력 1건에 대한 완전한 응답 턴.
+`backend/agent/harness.py`의 `run_turn()` 한 번 = 사용자 입력 1건에 대한 완전한 응답 턴.
 
 ```
 run_turn(client_id, user_message, *, force_skills=None, ...)

@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 
-from chat.models import ToolSpec
+from agent.models import ToolSpec
 
 # Harness 가 이름으로 분기하므로 외부 상수로 노출.
 PLANNER_ADD_TODO = "add_todo"

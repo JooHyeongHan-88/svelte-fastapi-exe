@@ -5,12 +5,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-import browser
-from browser import watchdog, open_browser
-from chat.prompts import registry as prompt_registry
-from chat.skills import registry as skill_registry
-from config import ASSETS_DIR, WEB_DIR, HOST, PORT
-from routers.api import router as api_router
+from agent.registries.prompts import registry as prompt_registry
+from agent.registries.skills import registry as skill_registry
+from api import router as api_router
+from core import browser
+from core.browser import open_browser, watchdog
+from core.config import ASSETS_DIR, HOST, PORT, WEB_DIR
 
 
 app = FastAPI()

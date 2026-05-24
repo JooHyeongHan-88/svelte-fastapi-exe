@@ -68,10 +68,10 @@ testConnectionAction()
 
 ## 새 프로바이더 추가 방법
 
-1. `backend/chat/providers/<name>.py` 생성 — `astream(messages, tools)` AsyncGenerator 구현
-2. `backend/chat/providers/factory.py`의 `get_provider()`에 분기 추가
+1. `backend/agent/providers/<name>.py` 생성 — `astream(messages, tools)` AsyncGenerator 구현
+2. `backend/agent/providers/factory.py`의 `get_provider()`에 분기 추가
 3. `backend/settings/models.py`의 `Literal["mock", "openai_compatible", "<name>"]`에 추가
-4. `backend/routers/api.py`의 `list_providers()`에 `ProviderMeta` 항목 추가
+4. `backend/api/settings.py`의 `list_providers()`에 `ProviderMeta` 항목 추가
 5. `backend/settings/store.py`는 변경 불필요 (Pydantic이 알 수 없는 Literal값은 ValidationError)
 
 기존 `settings.json`에 새 provider 값이 없으면 로드 실패할 수 있으므로, Literal 변경 전에 마이그레이션 또는 기본값 처리 고려.

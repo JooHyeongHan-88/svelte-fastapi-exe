@@ -7,7 +7,7 @@ threading.Lock 으로 일관성 유지.
 
 import threading
 
-from chat.models import Message
+from agent.models import Message
 
 
 class ConversationStore:

@@ -24,8 +24,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from chat.guard import check_required_slots
-from chat.models import (
+from agent.guard import check_required_slots
+from agent.models import (
     AgentState,
     AskUserEvent,
     DoneEvent,
@@ -39,11 +39,11 @@ from chat.models import (
     ToolCall,
     ToolResultEvent,
 )
-from chat.prompts import PromptRegistry
-from chat.skills import Skill, SkillRegistry
-from chat.state_store import AgentStateStore
-from chat.store import ConversationStore
-from chat.tools import PLANNER_ADD_TODO, PLANNER_COMPLETE_TODO, ToolRegistry
+from agent.registries.prompts import PromptRegistry
+from agent.registries.skills import Skill, SkillRegistry
+from agent.registries.tools import PLANNER_ADD_TODO, PLANNER_COMPLETE_TODO, ToolRegistry
+from agent.stores.agent_state import AgentStateStore
+from agent.stores.conversation import ConversationStore
 
 logger = logging.getLogger(__name__)
 

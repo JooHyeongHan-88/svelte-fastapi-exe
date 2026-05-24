@@ -18,9 +18,9 @@ from typing import Optional
 
 import httpx
 
-import browser
 from _version import __version__
-from config import (
+from core import browser
+from core.config import (
     LATEST_JSON_URL,
     NEXUS_BASE_URL,
     UPDATE_CHECK_CACHE_TTL,
