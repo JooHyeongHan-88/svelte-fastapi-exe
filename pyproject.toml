@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn>=0.47.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.2.2",
+    "openai>=1.50.0",
 ]
 
 [dependency-groups]

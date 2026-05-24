@@ -14,6 +14,18 @@ export const ui = $state({
   applying: false,
   applyState: null,
   restarting: false,
+
+  // Settings modal
+  settingsOpen: false,
+  /** @type {null | { provider, model, api_key, _maskedKey, base_url, temperature, max_tokens, system_prompt, clearKey }} */
+  settingsDraft: null,
+  settingsSaving: false,
+  settingsError: null,
+  settingsTesting: false,
+  /** @type {null | { ok: boolean, message: string, latency_ms?: number }} */
+  settingsTestResult: null,
+  /** @type {Array<{ id, label, requires_api_key, requires_base_url, requires_model, suggested_models, docs_url }>} */
+  providers: [],
 });
 
 export function activeSession() {

@@ -1,6 +1,7 @@
 <script>
   import { ui } from "../lib/state.svelte.js";
   import { createSession, toggleTheme, toggleSidebar } from "../lib/chatActions.svelte.js";
+  import { openSettings } from "../lib/settingsActions.svelte.js";
   import { relativeTimeBucket, BUCKET_ORDER } from "../lib/format.js";
   import SessionItem from "./SessionItem.svelte";
 
@@ -78,6 +79,13 @@
         </svg>
         <span>다크 모드</span>
       {/if}
+    </button>
+
+    <button class="footer-icon-btn" onclick={openSettings} title="LLM 설정" aria-label="LLM 설정">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
     </button>
   </div>
 </aside>
@@ -188,13 +196,16 @@
   .footer {
     border-top: 1px solid var(--border);
     padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .footer-btn {
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100%;
+    flex: 1;
     padding: 8px 10px;
     border-radius: 8px;
     color: var(--fg);
@@ -203,6 +214,22 @@
 
   .footer-btn:hover {
     background: var(--bg-hover);
+  }
+
+  .footer-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    color: var(--fg-muted);
+    flex-shrink: 0;
+  }
+
+  .footer-icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
   }
 
   .backdrop {

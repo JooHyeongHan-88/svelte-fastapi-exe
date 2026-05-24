@@ -17,6 +17,7 @@
   --code-inline-bg: #eff1f3;
   --danger: #d1242f;
   --danger-bg: #ffebe9;
+  --color-success: #22863a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --radius-sm: 6px;
@@ -51,6 +52,7 @@
   --code-inline-bg: #2a2a2e;
   --danger: #ff6b6b;
   --danger-bg: #3a1f23;
+  --color-success: #7ee787;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
 

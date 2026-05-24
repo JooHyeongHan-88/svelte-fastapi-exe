@@ -23,7 +23,6 @@ from chat.models import (
     ToolCall,
     ToolResultEvent,
 )
-from chat.provider import get_provider
 from chat.store import ConversationStore
 from chat.tools import ToolRegistry
 
@@ -36,10 +35,10 @@ async def run_turn(
     *,
     store: ConversationStore,
     registry: ToolRegistry,
+    provider,
     system_prompt: str,
     max_iterations: int,
 ) -> AsyncIterator[StreamEvent]:
-    provider = get_provider()
     history = store.get_history(client_id)
     user_msg = Message(role="user", content=user_message)
 
