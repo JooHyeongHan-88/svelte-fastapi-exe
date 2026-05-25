@@ -13,7 +13,7 @@ from api import router as api_router
 from api.deps import state_store
 from core import browser
 from core.browser import open_browser, watchdog
-from core.config import ASSETS_DIR, HOST, PORT, WEB_DIR
+from core.config import ASSETS_DIR, HOST, PORT, WEB_DIR, WORKSPACE_DIR
 
 
 app = FastAPI()
@@ -38,6 +38,11 @@ if _evicted:
     _logging.getLogger(__name__).info(
         "startup: evicted %d stale agent state(s)", _evicted
     )
+
+# workspace 디렉터리 — Python 도구가 생성한 파일을 /workspace/<path> 로 서빙한다.
+# dev / frozen 모두 항상 활성화.
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/workspace", StaticFiles(directory=WORKSPACE_DIR), name="workspace")
 
 # build/web 가 존재할 때만 정적 자산을 서빙한다.
 # - frozen EXE: 항상 존재(sys._MEIPASS/web 임베드)

@@ -5,6 +5,9 @@
   import TodoProgress from "./TodoProgress.svelte";
   import SkillCompleteBadge from "./SkillCompleteBadge.svelte";
   import AskUserCard from "./AskUserCard.svelte";
+  import { openArtifact } from "../lib/artifactActions.svelte.js";
+
+  const ARTIFACT_ICON = { image: "🖼️", chart: "📊" };
 
   let { message } = $props();
 
@@ -127,6 +130,33 @@
       <!-- 슬롯 질문 카드 — AskUserEvent 수신 시 표시 -->
       {#if message.askUser}
         <AskUserCard askUser={message.askUser} />
+      {/if}
+
+      <!-- 아티팩트 칩 — display_image / display_chart 결과 -->
+      {#if message.artifactChips && message.artifactChips.length > 0}
+        <div class="artifact-chip-bar">
+          {#each message.artifactChips as chip (chip.id)}
+            <button
+              class="artifact-chip"
+              onclick={() => openArtifact(chip.id)}
+              title={chip.label}
+            >
+              {ARTIFACT_ICON[chip.kind] ?? "📄"}
+              <span class="artifact-chip-label">{chip.label}</span>
+              <svg
+                class="artifact-chip-arrow"
+                width="11"
+                height="11"
+                viewBox="0 0 11 11"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              >
+                <path d="M2 5.5h7M6 2.5l3 3-3 3" />
+              </svg>
+            </button>
+          {/each}
+        </div>
       {/if}
     {/if}
   </div>
@@ -284,6 +314,47 @@
     white-space: pre-wrap;
     word-wrap: break-word;
     line-height: 1.5;
+  }
+
+  /* ── 아티팩트 칩 ── */
+  .artifact-chip-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .artifact-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px 4px 8px;
+    cursor: pointer;
+    transition: background 0.13s;
+    white-space: nowrap;
+    max-width: 220px;
+  }
+
+  .artifact-chip:hover {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .artifact-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  .artifact-chip-arrow {
+    flex-shrink: 0;
+    opacity: 0.7;
   }
 
   /* ── 도구 상태 ── */

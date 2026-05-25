@@ -20,6 +20,7 @@ import {
 } from "./api.js";
 import { parseSseStream } from "./sse.js";
 import { autoTitle } from "./format.js";
+import { addArtifact, clearArtifacts } from "./artifactActions.svelte.js";
 
 const SAVE_DEBOUNCE_MS = 200;
 const UPDATE_POLL_MS = 500;
@@ -95,6 +96,7 @@ export async function createSession() {
   ui.activeSessionId = session.id;
   saveActiveId(session.id);
   flushSave();
+  clearArtifacts();
 
   openPresence(session.id);
   // 새 세션은 백엔드 store 도 빈 상태로 시작 — restore 는 호출 안 함.
@@ -109,6 +111,7 @@ export async function selectSession(id) {
 
   ui.activeSessionId = id;
   saveActiveId(id);
+  clearArtifacts();
 
   openPresence(id);
   // EXE 재시작 등으로 백엔드 context 가 비어있을 수 있으므로 매 선택마다 다시 주입.
@@ -400,6 +403,19 @@ export async function sendMessage(text) {
     } else if (innerType === "tool_result") {
       const prefix = innerPayload.is_error ? "⚠️" : "🔧";
       slot.toolStatus = `${prefix} ${innerPayload.name ?? "?"} → ${innerPayload.result ?? ""}`;
+      // 서브 에이전트에서도 시각화 도구 결과를 아티팩트 패널에 표시
+      if (!innerPayload.is_error && innerPayload.data?.kind && (innerPayload.name === "display_image" || innerPayload.name === "display_chart")) {
+        const s = activeSession();
+        const last = s?.messages[s.messages.length - 1];
+        const msgId = last?.id ?? null;
+        const artifactId = addArtifact(innerPayload.data.kind, innerPayload.data, msgId);
+        if (last && last.role === "assistant") {
+          last.artifactChips = [
+            ...(last.artifactChips ?? []),
+            { id: artifactId, kind: innerPayload.data.kind, label: innerPayload.data.title || innerPayload.data.alt || innerPayload.data.caption || innerPayload.name },
+          ];
+        }
+      }
     } else if (innerType === "reasoning") {
       // sub-agent 의 추론도 메인과 동일하게 ReasoningBlock 토글로 표시 — 별도 필드에 누적.
       slot.reasoning = (slot.reasoning ?? "") + (innerPayload.content ?? "");
@@ -440,9 +456,23 @@ export async function sendMessage(text) {
       } else if (ev.type === "tool_call") {
         setToolStatus(`🔧 ${ev.call.name} 호출 중...`);
       } else if (ev.type === "tool_result") {
-        // is_error 면 시각적으로 구분. data 필드는 향후 inspector UI 에서 활용 예정.
         const prefix = ev.is_error ? "⚠️" : "🔧";
         setToolStatus(`${prefix} ${ev.name} → ${ev.result}`);
+        // 시각화 도구 결과 → 아티팩트 패널 + 메시지 칩 추가
+        if (!ev.is_error && ev.data?.kind && (ev.name === "display_image" || ev.name === "display_chart")) {
+          const s = activeSession();
+          const last = s?.messages[s.messages.length - 1];
+          const msgId = last?.id ?? null;
+          const artifactId = addArtifact(ev.data.kind, ev.data, msgId);
+          if (last && last.role === "assistant") {
+            last.artifactChips = [
+              ...(last.artifactChips ?? []),
+              { id: artifactId, kind: ev.data.kind, label: ev.data.title || ev.data.alt || ev.data.caption || ev.name },
+            ];
+            ui.sessions = [...ui.sessions];
+            scheduleSave();
+          }
+        }
       } else if (ev.type === "skill_active") {
         setActiveSkills(ev.skills);
       } else if (ev.type === "error") {

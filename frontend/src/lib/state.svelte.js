@@ -33,6 +33,21 @@ export const ui = $state({
   // 현재 Composer 에 부착된 skill 이름 목록 (전송 시 force_skills 로 백엔드 전달, 직후 리셋).
   /** @type {string[]} */
   composerSkills: [],
+
+  // 아티팩트 패널 — display_image / display_chart 도구 결과 누적
+  /**
+   * @type {Array<{
+   *   id: string,
+   *   kind: "image"|"chart",
+   *   payload: object,
+   *   label: string,
+   *   sourceMessageId: string|null,
+   *   createdAt: number
+   * }>}
+   */
+  artifacts: [],
+  activeArtifactId: /** @type {string|null} */ (null),
+  artifactPanelOpen: false,
 });
 
 export function activeSession() {

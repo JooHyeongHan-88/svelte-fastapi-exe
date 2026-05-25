@@ -21,9 +21,12 @@ CATEGORY A — UI 표현 검증
 CATEGORY B — SKILL 라우팅 검증
 ============================================================
     B1. skill_time_lookup     trigger="지금 몇 시", "현재 시각"
-        검증: SkillActiveEvent(time_lookup) → now 도구 → 시각 응답
+        검증: SkillActiveEvent(time_lookup) → now 도구 → display_image(favicon) → 시각 응답
     B2. skill_report_planner  trigger="보고서", "리포트"
         검증: SkillActiveEvent(report_generator) → add_todo 3단계 플래너
+    B3. skill_data_analysis   trigger="데이터 분석", "산점도", "scatter"
+        검증: SkillActiveEvent(data_analysis) → add_todo 3단계 →
+             complete_todo × 2 → display_chart(scatter) → complete_todo × 1 → 보고
 
 ============================================================
 CATEGORY C — TOOL 실행 검증
@@ -106,6 +109,7 @@ _NOW_TRIGGERS = (
     "now()",
 )
 _REPORT_TRIGGERS = ("보고서", "리포트", "report")
+_DATA_ANALYSIS_TRIGGERS = ("데이터 분석", "data analysis", "산점도", "scatter 차트")
 
 # ============================================================
 # Category C — TOOL 실행 검증 트리거
@@ -147,9 +151,10 @@ class MockProvider:
         3) D3 chain (트리거 매칭)
         4) D1/D2 explicit delegation (트리거 매칭)
         5) 위임 결과 받은 다음 루프 — 통합 보고
-        6) B1 now skill
+        6) B1 now skill (→ display_image → 자연어 응답, 3단계)
         7) C2 full_report
         8) B2 report planner
+        8b) B3 data_analysis + scatter 차트
         9) C1 search slot guard
         10) A2~A4 ask_user 3-mode
         11) ask_user 답변 받은 다음 루프
@@ -234,22 +239,11 @@ class MockProvider:
             return
 
         # ───────────────────────────────────────────────────────────────
-        # 6) Category B1 — time_lookup skill / now tool
+        # 6) Category B1 — time_lookup skill / now + display_image (3단계)
         # ───────────────────────────────────────────────────────────────
-        already_called_now = _has_recent_tool_result(messages, "mock-now-")
-        if (
-            last_user is not None
-            and _matches(last_user.content, _NOW_TRIGGERS)
-            and not already_called_now
-        ):
-            yield ToolCallEvent(
-                call=ToolCall(
-                    id=f"mock-now-{uuid.uuid4().hex[:8]}",
-                    name="now",
-                    arguments={},
-                )
-            )
-            yield DoneEvent()
+        if last_user is not None and _matches(last_user.content, _NOW_TRIGGERS):
+            async for event in _time_skill_scenario(messages):
+                yield event
             return
 
         # ───────────────────────────────────────────────────────────────
@@ -290,6 +284,16 @@ class MockProvider:
                 )
             )
             yield DoneEvent()
+            return
+
+        # ───────────────────────────────────────────────────────────────
+        # 8b) Category B3 — data_analysis skill + scatter 차트
+        # ───────────────────────────────────────────────────────────────
+        if last_user is not None and _matches(
+            last_user.content, _DATA_ANALYSIS_TRIGGERS
+        ):
+            async for event in _data_analysis_scenario(messages):
+                yield event
             return
 
         # ───────────────────────────────────────────────────────────────
@@ -866,6 +870,208 @@ async def _composite_sub_scenario(
         )
     )
     yield DoneEvent()
+
+
+# =============================================================================
+# Category B1 확장 — time_lookup + 이미지 display 시나리오
+# =============================================================================
+
+# B1 내부 상태 prefix
+_NOW_CALL_PREFIX = "mock-now-"
+_IMG_NOW_PREFIX = "mock-img-now-"
+
+# display_image 에 사용할 프로젝트 자산 경로 (build/web/assets 에 실제로 존재)
+_FAVICON_PATH = "build/web/assets/favicon.svg"
+
+
+async def _time_skill_scenario(
+    messages: list[Message],
+) -> AsyncIterator[StreamEvent]:
+    """B1 확장 — now 도구 → display_image(favicon) → 자연어 응답 (3단계)."""
+    already_called_now = _has_recent_tool_result(messages, _NOW_CALL_PREFIX)
+    already_called_img = _has_recent_tool_result(messages, _IMG_NOW_PREFIX)
+
+    # Step 1: now 도구 호출
+    if not already_called_now:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"{_NOW_CALL_PREFIX}{uuid.uuid4().hex[:8]}",
+                name="now",
+                arguments={},
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # Step 2: now 결과를 받은 후 이미지 display
+    if not already_called_img:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"{_IMG_NOW_PREFIX}{uuid.uuid4().hex[:8]}",
+                name="display_image",
+                arguments={
+                    "source": _FAVICON_PATH,
+                    "alt": "앱 아이콘",
+                    "caption": "시각화 데모 이미지",
+                },
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # Step 3: now 결과를 찾아 최종 자연어 응답
+    now_result = next(
+        (
+            m
+            for m in reversed(messages)
+            if m.role == "tool" and (m.tool_call_id or "").startswith(_NOW_CALL_PREFIX)
+        ),
+        None,
+    )
+    time_str = now_result.content if now_result else "(알 수 없음)"
+    reply = (
+        f"현재 시각은 **{time_str}** 입니다.\n\n"
+        "우측 패널에 데모 이미지도 함께 표시했습니다."
+    )
+    for ch in reply:
+        await asyncio.sleep(_MOCK_TOKEN_DELAY)
+        yield DeltaEvent(content=ch)
+    yield DoneEvent()
+
+
+# =============================================================================
+# Category B3 — data_analysis skill + scatter 차트 시나리오
+# =============================================================================
+
+# 2차원 상관 관계 가상 데이터 — y ≈ 0.7*x + 노이즈, 30개 포인트
+_MOCK_SCATTER_DATA = [
+    [round(i * 0.35, 2), round(i * 0.35 * 0.7 + ((i * 7) % 10 - 5) * 0.18, 2)]
+    for i in range(30)
+]
+
+
+def _data_analysis_scenario(
+    messages: list[Message],
+) -> AsyncIterator[StreamEvent]:
+    """B3 — data_analysis skill: add_todo(3) → complete × 2 → display_chart → complete × 1 → 보고."""
+    has_add = _has_recent_tool_result(messages, "mock-da-add-")
+    has_chart = _has_recent_tool_result(messages, "mock-da-chart-")
+
+    # Step 1 — add_todo 3단계 등록
+    if not has_add:
+
+        async def _add() -> AsyncIterator[StreamEvent]:
+            yield SkillActiveEvent(skills=["data_analysis"])
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-da-add-{uuid.uuid4().hex[:8]}",
+                    name="add_todo",
+                    arguments={
+                        "items": [
+                            {"description": "데이터 수집 — 분석 대상 및 출처 확인"},
+                            {"description": "정제 — 결측·이상치·중복 처리"},
+                            {"description": "시각화 및 요약 — 상관관계 차트 생성"},
+                        ]
+                    },
+                )
+            )
+            yield DoneEvent()
+
+        return _add()
+
+    task_ids = _extract_task_ids(messages, "mock-da-add-")
+    completed_ids = {
+        m.tool_call_id.replace("mock-da-complete-", "", 1)
+        for m in messages
+        if m.role == "tool" and (m.tool_call_id or "").startswith("mock-da-complete-")
+    }
+    pending_ids = [tid for tid in task_ids if tid not in completed_ids]
+
+    # Step 2–3 — 앞 2개 todo 순차 완료 (차트 표시 전)
+    if len(completed_ids) < 2 and pending_ids:
+
+        async def _complete_early() -> AsyncIterator[StreamEvent]:
+            tid = pending_ids[0]
+            summaries = [
+                "데이터 30건 수집 완료 [기간 미지정]",
+                "결측 0건·이상치 1건 제거",
+            ]
+            summary = (
+                summaries[len(completed_ids)]
+                if len(completed_ids) < len(summaries)
+                else "완료"
+            )
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-da-complete-{tid}",
+                    name="complete_todo",
+                    arguments={"task_id": tid, "summary": summary},
+                )
+            )
+            yield DoneEvent()
+
+        return _complete_early()
+
+    # Step 4 — 차트 표시 (pending_ids 에 아직 미완료 항목이 있고 차트 미표시)
+    if not has_chart and pending_ids:
+
+        async def _chart() -> AsyncIterator[StreamEvent]:
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-da-chart-{uuid.uuid4().hex[:8]}",
+                    name="display_chart",
+                    arguments={
+                        "chart_type": "scatter",
+                        "series": [{"name": "X-Y 상관", "data": _MOCK_SCATTER_DATA}],
+                        "title": "변수 X와 Y의 상관관계 (가상 데이터)",
+                        "x_label": "변수 X",
+                        "y_label": "변수 Y",
+                        "extra_option": {
+                            "tooltip": {"trigger": "item", "formatter": "{b}: ({c0})"},
+                        },
+                    },
+                )
+            )
+            yield DoneEvent()
+
+        return _chart()
+
+    # Step 5 — 마지막 todo 완료
+    if pending_ids:
+
+        async def _complete_last() -> AsyncIterator[StreamEvent]:
+            tid = pending_ids[0]
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-da-complete-{tid}",
+                    name="complete_todo",
+                    arguments={
+                        "task_id": tid,
+                        "summary": "X-Y 산점도 표시 완료 — 양의 상관관계(r≈0.7) 확인",
+                    },
+                )
+            )
+            yield DoneEvent()
+
+        return _complete_last()
+
+    # Step 6 — 자연어 최종 보고
+    async def _report() -> AsyncIterator[StreamEvent]:
+        reply = (
+            "## 데이터 분석 완료\n\n"
+            "3단계 분석을 마쳤습니다.\n\n"
+            "**핵심 인사이트**\n"
+            "1. 변수 X와 Y 간 양의 선형 상관관계 확인 (r ≈ 0.7)\n"
+            "2. 이상치 1건 — 정제 후 제외\n"
+            "3. [기간 미지정] 조건으로 전체 30개 포인트 분석\n\n"
+            "우측 패널의 산점도에서 드래그로 영역을 선택하거나 확대할 수 있습니다."
+        )
+        for ch in reply:
+            await asyncio.sleep(_MOCK_TOKEN_DELAY)
+            yield DeltaEvent(content=ch)
+        yield DoneEvent()
+
+    return _report()
 
 
 # =============================================================================

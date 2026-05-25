@@ -4,8 +4,124 @@
 도구들이 있다. 이 도구들은 **파일을 수정하지 않아도 항상 LLM 에 노출**된다.
 
 도구 종류:
-- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`)
+- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`, `display_image`, `display_chart`)
 - **Sentinel 도구**: harness 가 tool_call 을 가로채 직접 처리 — 함수 본문은 절대 실행되지 않음
+
+---
+
+## 시각화 도구 (아티팩트 패널)
+
+채팅창 우측 아티팩트 패널에 이미지·차트를 표시하는 실행 도구.
+LLM 이 호출하면 `ToolResult.data` 를 통해 프론트엔드로 전달되고, 패널이 자동으로 열린다.
+메시지 버블에는 "🖼️ …" / "📊 …" 형태의 칩이 생성되어 패널 재오픈이 가능하다.
+
+---
+
+### `display_image`
+
+이미지를 아티팩트 패널에 표시한다.
+
+#### 인자
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `source` | string | **필수** | — | 이미지 경로, URL, 또는 data URI |
+| `alt` | string | 선택 | `""` | 대체 텍스트 (접근성·AI 요약) |
+| `caption` | string | 선택 | `""` | 이미지 아래 캡션 |
+
+`source` 허용 형식:
+- `build/web/assets/<파일명>` 또는 `assets/<파일명>` — 프로젝트 자산 경로 (`/assets/<파일명>` 으로 자동 변환)
+- `http://` / `https://` 로 시작하는 절대 URL
+- `data:image/...;base64,...` 형태의 data URI
+
+#### 동작
+
+1. `source` 를 정규화해 `ToolResult.data = {kind:"image", src, alt, caption}` 반환
+2. `ToolResultEvent.data` 를 통해 프론트엔드가 아티팩트 패널에 이미지 표시
+3. 메시지 버블에 "🖼️ {alt|caption|source}" 칩 추가 — 클릭 시 패널 재오픈
+4. 패널 오른쪽 상단 "새 탭" 버튼으로 원본 크기 확인 가능
+
+#### 예시 (LLM 이 호출하는 형태)
+
+```json
+{
+  "name": "display_image",
+  "arguments": {
+    "source": "build/web/assets/favicon.svg",
+    "alt": "앱 아이콘",
+    "caption": "현재 사용 중인 앱 로고"
+  }
+}
+```
+
+#### SKILL 에서 활용
+
+```markdown
+## 절차
+1. `now` 도구로 현재 시각 조회
+2. `display_image(source="build/web/assets/favicon.svg", alt="앱 아이콘")` 호출
+3. "현재 시각은 …입니다." 형식으로 응답
+```
+
+---
+
+### `display_chart`
+
+ECharts 인터랙티브 차트를 아티팩트 패널에 표시한다.
+드래그 선택(brush), 확대(dataZoom), 저장(saveAsImage) 도구가 자동 포함된다.
+
+#### 인자
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `series` | `list[{name, data}]` | **필수** | — | 시리즈 목록 |
+| `chart_type` | string | 선택 | `"scatter"` | `scatter` \| `line` \| `bar` |
+| `title` | string | 선택 | `""` | 차트 제목 |
+| `x_label` | string | 선택 | `""` | X축 레이블 |
+| `y_label` | string | 선택 | `""` | Y축 레이블 |
+| `extra_option` | object | 선택 | `null` | ECharts option 추가 필드 (기본 option 에 deep-merge) |
+
+`series` 각 항목:
+
+| 키 | 설명 |
+|---|---|
+| `name` | 범례·툴팁에 표시할 시리즈 이름 |
+| `data` | scatter: `[[x,y], ...]` / line·bar: `[v, ...]` |
+
+#### 동작
+
+1. `chart_type` + `series` 로 ECharts `option` JSON 빌드 (toolbox·dataZoom 자동 포함)
+2. `extra_option` 을 깊은 병합 (list 는 교체)
+3. `ToolResult.data = {kind:"chart", chart_type, title, option}` 반환
+4. 프론트엔드가 ECharts 로 인터랙티브 차트 렌더링 (다크 테마 자동 연동)
+5. 메시지 버블에 "📊 {title|차트유형}" 칩 추가
+
+#### 예시 (LLM 이 호출하는 형태)
+
+```json
+{
+  "name": "display_chart",
+  "arguments": {
+    "chart_type": "scatter",
+    "series": [
+      { "name": "X-Y 상관", "data": [[0.0,0.2],[1.1,0.9],[2.3,1.7]] }
+    ],
+    "title": "변수 X와 Y의 상관관계",
+    "x_label": "변수 X",
+    "y_label": "변수 Y"
+  }
+}
+```
+
+#### SKILL 에서 작성 방법
+
+```markdown
+## 절차
+1. `add_todo` 로 수집·정제·시각화 3단계 등록
+2. 수집 실행 → `complete_todo`
+3. 정제 실행 → `complete_todo`
+4. `display_chart(chart_type, series, title, ...)` 로 결과 시각화 → `complete_todo`
+```
 
 ---
 
@@ -326,6 +442,8 @@ async def fetch_sales(
 | 도구 | 종류 | 사용 주체 | 핵심 효과 |
 |---|---|---|---|
 | `now` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 시각 반환 |
+| `display_image` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 이미지 표시 |
+| `display_chart` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 ECharts 인터랙티브 차트 표시 |
 | `add_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | TodoProgress 체크리스트 생성 |
 | `complete_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | 단계 완료/실패 표시, SkillCompleteBadge |
 | `ask_user` | Sentinel | 오케스트레이터 · 서브 에이전트 | AskUserCard 표시, 턴 중단 |

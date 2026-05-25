@@ -92,3 +92,18 @@ UPDATE_CHECK_CACHE_TTL: int = int(os.environ.get("APP_UPDATE_CHECK_CACHE_TTL", "
 # ---------------------------------------------------------------------------
 
 APP_NAME: str = os.environ.get("APP_NAME", "MyAgent")
+
+
+# ---------------------------------------------------------------------------
+# 워크스페이스 — Python 도구가 생성한 파일(이미지·CSV 등)을 저장하는 디렉터리.
+# /workspace/<filename> 으로 브라우저에서 직접 접근 가능.
+# ---------------------------------------------------------------------------
+
+if getattr(sys, "frozen", False):
+    _appdata_str = os.environ.get("APPDATA", "")
+    _appdata = (
+        Path(_appdata_str) if _appdata_str else Path.home() / "AppData" / "Roaming"
+    )
+    WORKSPACE_DIR: Path = _appdata / APP_NAME / "workspace"
+else:
+    WORKSPACE_DIR: Path = _project_root() / "workspace"

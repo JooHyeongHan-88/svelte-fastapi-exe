@@ -10,6 +10,7 @@
   import UpdateBanner from "./components/UpdateBanner.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
+  import ArtifactPanel from "./components/ArtifactPanel.svelte";
 
   onMount(() => {
     initApp();
@@ -28,6 +29,7 @@
     <ChatArea />
     <Composer />
   </main>
+  <ArtifactPanel />
 </div>
 
 <UpdateBanner />
@@ -38,6 +40,7 @@
   .app {
     display: flex;
     height: 100%;
+    overflow: hidden;
   }
 
   .main {
