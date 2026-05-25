@@ -13,7 +13,7 @@ from api import router as api_router
 from api.deps import state_store
 from core import browser
 from core.browser import open_browser, watchdog
-from core.config import ASSETS_DIR, HOST, PORT, WEB_DIR, WORKSPACE_DIR
+from core.config import ASSETS_DIR, HOST, PORT, REPORT_DIR, WEB_DIR, WORKSPACE_DIR
 
 
 app = FastAPI()
@@ -43,6 +43,12 @@ if _evicted:
 # dev / frozen 모두 항상 활성화.
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/workspace", StaticFiles(directory=WORKSPACE_DIR), name="workspace")
+
+# report 디렉터리 — SKILL 실행으로 생성된 산출물(이미지·차트·markdown 등)을
+# /report/<session>/<filename> 으로 서빙한다. 세션 복귀 후 칩 클릭 시 동일 파일을
+# 다시 fetch 해 시각화를 복원한다.
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/report", StaticFiles(directory=REPORT_DIR), name="report")
 
 # build/web 가 존재할 때만 정적 자산을 서빙한다.
 # - frozen EXE: 항상 존재(sys._MEIPASS/web 임베드)

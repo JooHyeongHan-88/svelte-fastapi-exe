@@ -34,20 +34,13 @@ export const ui = $state({
   /** @type {string[]} */
   composerSkills: [],
 
-  // 아티팩트 패널 — display_image / display_chart 도구 결과 누적
-  /**
-   * @type {Array<{
-   *   id: string,
-   *   kind: "image"|"chart",
-   *   payload: object,
-   *   label: string,
-   *   sourceMessageId: string|null,
-   *   createdAt: number
-   * }>}
-   */
-  artifacts: [],
+  // 아티팩트 패널 — 활성 칩 id 와 패널 가시성만 휘발 상태로 둔다.
+  // 산출물 payload 는 메시지 안 (message.artifactChips[].payload) 에 영속.
   activeArtifactId: /** @type {string|null} */ (null),
   artifactPanelOpen: false,
+
+  // 사용자가 마우스 드래그로 조절한 우측 아티팩트 패널 너비 (px). initApp 에서 로드.
+  artifactWidth: 420,
 });
 
 export function activeSession() {

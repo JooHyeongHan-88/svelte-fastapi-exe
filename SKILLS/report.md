@@ -1,24 +1,25 @@
 ---
-name: report_generator
-description: 매출 보고서를 조회·생성하고 이메일로 발송하는 멀티스텝 작업
-trigger: ["보고서", "리포트", "report", "이메일 발송", "주간 매출", "일일 매출"]
-priority: 8
-requires_tools: ["fetch_sales", "render_report", "send_email"]
+name: report_writer
+description: Markdown 보고서를 생성하고 사이드 패널에 렌더링하는 작업
+trigger: ["리포트 작성", "보고서 작성", "리포트 에이전트", "report writer"]
+priority: 6
+requires_tools: ["display_markdown"]
 ---
 
-# 보고서 자동 생성 가이드
+# Markdown 리포트 작성 가이드
 
 ## 절차
 1. `add_todo` 로 아래 3단계를 한 번에 등록한다.
-2. `fetch_sales(date_from, date_to)` 로 원천 데이터 조회 후 `complete_todo`.
-3. `render_report(template, data)` 로 본문 생성 후 `complete_todo`.
-4. `send_email(to, subject, body)` 로 발송 후 `complete_todo`.
+2. **본문 작성** — 주제·핵심 사실·근거를 markdown 형식으로 정리한다 (헤더·표·불릿·code block).
+3. **산출물 저장** — `report/<session>/report.md` 경로에 본문을 기록한 뒤 `complete_todo`.
+4. **사이드 렌더링** — `display_markdown(source="report/<session>/report.md", title="...")`
+   도구로 우측 패널에 표시한 뒤 `complete_todo`.
 
-## 필수 슬롯
-- 보고 기간: 사용자가 "오늘 / 어제 / 이번 주" 등 명시하지 않으면 한 번에 하나씩 되묻는다.
-- 수신자: 명시하지 않으면 "기본 그룹으로 보낼까요, 특정 인원에게 보낼까요?" 라고 보기를 제시한다.
+## 행동 원칙
+- 데이터에 근거가 없는 단정은 금지한다. 추정·가정은 "[가정]" 으로 표기.
+- 본문은 200~600 단어 사이가 적절하다 — 너무 길면 요약, 너무 짧으면 표/리스트로 보강.
+- 동일 세션에서 이미 같은 산출물 파일이 있으면 덮어쓰지 말고 그대로 재사용한다.
 
 ## 금지
-- 임의의 이메일 주소나 수신자 그룹을 추측하지 않는다.
-- 데이터 조회 범위를 사용자가 지정한 기간 밖으로 확장하지 않는다.
-- 데이터가 비어 있을 때 임의의 더미 값을 채워 넣지 않는다.
+- 산출물 파일 없이 자연어로만 보고하지 않는다 — 사이드 패널에 표시될 파일이 반드시 있어야 한다.
+- 사용자가 위임한 범위 밖의 주제로 확장하지 않는다.

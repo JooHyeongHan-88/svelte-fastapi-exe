@@ -1,18 +1,76 @@
 <script>
   import { ui } from "../lib/state.svelte.js";
-  import { closeArtifactPanel, openArtifact } from "../lib/artifactActions.svelte.js";
+  import {
+    closeArtifactPanel,
+    openArtifact,
+    listSessionArtifacts,
+  } from "../lib/artifactActions.svelte.js";
+  import {
+    saveArtifactWidth,
+    ARTIFACT_WIDTH_BOUNDS,
+  } from "../lib/storage.js";
   import ArtifactImage from "./ArtifactImage.svelte";
   import ArtifactChart from "./ArtifactChart.svelte";
+  import ArtifactMarkdown from "./ArtifactMarkdown.svelte";
 
-  const KIND_ICON = { image: "🖼️", chart: "📊" };
+  const KIND_ICON = { image: "🖼️", chart: "📊", markdown: "📝" };
 
+  // 활성 세션의 모든 메시지에서 칩을 평탄화 → payload 가 메시지에 영속되어 있으므로
+  // 세션 복귀 후에도 동일한 칩 목록을 그대로 복원할 수 있다.
+  let sessionArtifacts = $derived(listSessionArtifacts());
   let activeArtifact = $derived(
-    ui.artifacts.find((a) => a.id === ui.activeArtifactId) ?? null,
+    sessionArtifacts.find((a) => a.id === ui.activeArtifactId) ?? null,
   );
+
+  // 드래그 리사이즈 — 화면 우측에서 좌측으로 갈수록 너비 증가.
+  let resizing = $state(false);
+
+  function clampWidth(px) {
+    const upper = Math.min(
+      ARTIFACT_WIDTH_BOUNDS.max,
+      Math.floor(window.innerWidth * 0.6),
+    );
+    return Math.min(upper, Math.max(ARTIFACT_WIDTH_BOUNDS.min, Math.round(px)));
+  }
+
+  function onHandlePointerDown(e) {
+    if (e.button !== 0) return;
+    resizing = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  }
+
+  function onHandlePointerMove(e) {
+    if (!resizing) return;
+    ui.artifactWidth = clampWidth(window.innerWidth - e.clientX);
+  }
+
+  function onHandlePointerUp(e) {
+    if (!resizing) return;
+    resizing = false;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    saveArtifactWidth(ui.artifactWidth);
+  }
 </script>
 
 {#if ui.artifactPanelOpen}
-  <aside class="artifact-panel" aria-label="아티팩트 패널">
+  <aside
+    class="artifact-panel"
+    class:resizing
+    style="width: {ui.artifactWidth}px"
+    aria-label="아티팩트 패널"
+  >
+    <!-- 좌측 가장자리 드래그 핸들 — 마우스로 패널 너비 조절 -->
+    <div
+      class="resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="아티팩트 패널 너비 조절"
+      onpointerdown={onHandlePointerDown}
+      onpointermove={onHandlePointerMove}
+      onpointerup={onHandlePointerUp}
+      onpointercancel={onHandlePointerUp}
+    ></div>
     <!-- 헤더 -->
     <div class="panel-header">
       <span class="panel-title">
@@ -38,9 +96,9 @@
     </div>
 
     <!-- 아티팩트 탭 목록 (2개 이상일 때만 표시) -->
-    {#if ui.artifacts.length > 1}
+    {#if sessionArtifacts.length > 1}
       <div class="tab-bar" role="tablist">
-        {#each ui.artifacts as artifact (artifact.id)}
+        {#each sessionArtifacts as artifact (artifact.id)}
           <button
             class="tab"
             class:active={artifact.id === ui.activeArtifactId}
@@ -63,6 +121,8 @@
           <ArtifactImage payload={activeArtifact.payload} />
         {:else if activeArtifact.kind === "chart"}
           <ArtifactChart payload={activeArtifact.payload} />
+        {:else if activeArtifact.kind === "markdown"}
+          <ArtifactMarkdown payload={activeArtifact.payload} />
         {:else}
           <div class="unknown-kind">알 수 없는 아티팩트 유형</div>
         {/if}
@@ -75,9 +135,7 @@
 
 <style>
   .artifact-panel {
-    width: 420px;
-    min-width: 320px;
-    max-width: 50vw;
+    /* width 는 ui.artifactWidth 로 동적 지정. min/max 가드는 JS clampWidth 가 담당. */
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -87,6 +145,30 @@
     animation: panel-slide-in 0.18s ease-out;
     overflow: hidden;
     flex-shrink: 0;
+    position: relative;
+  }
+
+  .artifact-panel.resizing {
+    user-select: none;
+    cursor: ew-resize;
+  }
+
+  .resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 100%;
+    cursor: ew-resize;
+    z-index: 10;
+    background: transparent;
+    transition: background 0.12s;
+    touch-action: none;
+  }
+
+  .resize-handle:hover,
+  .artifact-panel.resizing .resize-handle {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
   }
 
   @keyframes panel-slide-in {

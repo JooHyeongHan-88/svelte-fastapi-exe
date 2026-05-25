@@ -1,6 +1,14 @@
 <script>
   let { payload } = $props();
 
+  let loadError = $state(false);
+
+  // src 가 바뀌면 에러 상태 초기화
+  $effect(() => {
+    payload?.src;
+    loadError = false;
+  });
+
   function openInNewTab() {
     window.open(payload.src, "_blank", "noopener,noreferrer");
   }
@@ -24,11 +32,25 @@
       새 탭
     </button>
   </div>
-  <div class="img-container">
-    <img src={payload.src} alt={payload.alt || ""} loading="lazy" />
-  </div>
-  {#if payload.caption}
-    <p class="caption">{payload.caption}</p>
+
+  {#if loadError}
+    <div class="artifact-error">
+      <span class="error-icon">🖼️</span>
+      <span>이미지를 불러올 수 없습니다.</span>
+      <small>{payload.src}</small>
+    </div>
+  {:else}
+    <div class="img-container">
+      <img
+        src={payload.src}
+        alt={payload.alt || ""}
+        loading="lazy"
+        onerror={() => (loadError = true)}
+      />
+    </div>
+    {#if payload.caption}
+      <p class="caption">{payload.caption}</p>
+    {/if}
   {/if}
 </div>
 
@@ -105,5 +127,33 @@
     margin: 0;
     flex-shrink: 0;
     border-top: 1px solid var(--border);
+  }
+
+  .artifact-error {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    margin: 16px;
+    border: 2px dashed var(--color-danger, #e53e3e);
+    border-radius: var(--radius);
+    color: var(--color-danger, #e53e3e);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .artifact-error .error-icon {
+    font-size: 28px;
+    filter: grayscale(0.3);
+  }
+
+  .artifact-error small {
+    font-size: 11px;
+    color: var(--fg-muted);
+    word-break: break-all;
+    max-width: 100%;
   }
 </style>

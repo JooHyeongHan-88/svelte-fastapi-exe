@@ -4,7 +4,7 @@
 도구들이 있다. 이 도구들은 **파일을 수정하지 않아도 항상 LLM 에 노출**된다.
 
 도구 종류:
-- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`, `display_image`, `display_chart`)
+- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`, `display_image`, `display_chart`, `display_markdown`)
 - **Sentinel 도구**: harness 가 tool_call 을 가로채 직접 처리 — 함수 본문은 절대 실행되지 않음
 
 ---
@@ -122,6 +122,57 @@ ECharts 인터랙티브 차트를 아티팩트 패널에 표시한다.
 3. 정제 실행 → `complete_todo`
 4. `display_chart(chart_type, series, title, ...)` 로 결과 시각화 → `complete_todo`
 ```
+
+---
+
+### `display_markdown`
+
+Markdown 산출물 파일을 아티팩트 패널에 렌더링한다.
+`report/<session>/` 에 저장된 `.md` 파일을 백엔드에서 fetch 해 marked + DOMPurify + highlight.js 로 출력한다.
+
+#### 인자
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `source` | string | **필수** | — | 마크다운 파일 경로 (`report/...`, `workspace/...`, `assets/...`) |
+| `title` | string | 선택 | `""` | 패널 헤더에 표시할 제목 |
+
+허용 경로 프리픽스:
+- `report/<session>/` — 에이전트가 생성한 산출물 (백엔드 `/report` StaticFiles mount)
+- `workspace/` — 워크스페이스 산출물
+- `assets/` / `build/web/assets/` — 프로젝트 정적 자산
+
+#### 동작
+
+1. `_resolve_image_source(source)` 로 경로를 `/report/<rest>` 형태 URL 로 정규화
+2. `.md` / `.markdown` 확장자 검증 (불일치 시 `is_error=True` 반환)
+3. `ToolResult.data = {kind:"markdown", src, title}` 반환
+4. 프론트엔드가 `fetch(src)` 후 `renderMarkdown()` 으로 sanitized HTML 렌더링
+5. 메시지 버블에 "📝 {title|파일명}" 칩 추가 — 클릭 시 패널 재오픈 (세션 복귀 후에도 동작)
+
+#### 예시 (LLM 이 호출하는 형태)
+
+```json
+{
+  "name": "display_markdown",
+  "arguments": {
+    "source": "report/session-abc12345/report.md",
+    "title": "분석 리포트"
+  }
+}
+```
+
+#### SKILL 에서 작성 방법
+
+```markdown
+## 절차
+1. `add_todo` 로 작성·저장·렌더링 3단계 등록
+2. Markdown 본문 작성 후 `report/<session>/report.md` 에 저장 → `complete_todo`
+3. `display_markdown(source="report/<session>/report.md", title="리포트")` 호출 → `complete_todo`
+```
+
+> **파일 사전 저장 필수** — `display_markdown` 을 호출하기 전에 디스크에 `.md` 파일이 존재해야 한다.
+> 파일이 없으면 프론트엔드에서 "산출물 파일을 불러올 수 없습니다." 에러 UI 가 표시된다.
 
 ---
 
@@ -444,6 +495,7 @@ async def fetch_sales(
 | `now` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 시각 반환 |
 | `display_image` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 이미지 표시 |
 | `display_chart` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 ECharts 인터랙티브 차트 표시 |
+| `display_markdown` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 Markdown 파일 렌더링 |
 | `add_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | TodoProgress 체크리스트 생성 |
 | `complete_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | 단계 완료/실패 표시, SkillCompleteBadge |
 | `ask_user` | Sentinel | 오케스트레이터 · 서브 에이전트 | AskUserCard 표시, 턴 중단 |

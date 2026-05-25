@@ -21,12 +21,20 @@ CATEGORY A — UI 표현 검증
 CATEGORY B — SKILL 라우팅 검증
 ============================================================
     B1. skill_time_lookup     trigger="지금 몇 시", "현재 시각"
-        검증: SkillActiveEvent(time_lookup) → now 도구 → display_image(favicon) → 시각 응답
+        검증: SkillActiveEvent(time_lookup) → now 도구 →
+             report/<session>/favicon.svg 로 복사 → display_image(report/...) → 시각 응답
     B2. skill_report_planner  trigger="보고서", "리포트"
-        검증: SkillActiveEvent(report_generator) → add_todo 3단계 플래너
+        검증: SkillActiveEvent(report_writer) → add_todo 3단계 플래너
     B3. skill_data_analysis   trigger="데이터 분석", "산점도", "scatter"
         검증: SkillActiveEvent(data_analysis) → add_todo 3단계 →
-             complete_todo × 2 → display_chart(scatter) → complete_todo × 1 → 보고
+             complete_todo × 3 + display_chart(scatter) 일괄 → 자연어 보고
+             (사전 정의된 _MOCK_SCATTER_DATA 30포인트를 데모 시점에 디스크 기록)
+
+산출물 생성 규약:
+    - 데모 데이터는 모두 in-code 상수 (예: _MOCK_SCATTER_DATA) 로만 정의.
+    - report/<session>/* 파일은 트리거 발동 순간 _ensure_*_artifact() 헬퍼가 생성.
+    - 헬퍼는 idempotent — 같은 세션 재실행 시 파일을 다시 쓰지 않음.
+    - report/ 디렉터리는 .gitignore 대상 (사전 스테이징 금지).
 
 ============================================================
 CATEGORY C — TOOL 실행 검증
@@ -47,6 +55,9 @@ CATEGORY D — 서브 에이전트 위임 검증
         검증: coding_agent → research_agent 순차 위임 (체이닝)
     D4. sub_inner_now         (sub-agent context, D1/D2/D3 의 위임 후)
         검증: 서브 에이전트 내부에서 now 도구 1회 + Task Summary 종료
+    D5. sub_explicit_report   trigger="리포트 에이전트", "report_agent"
+        검증: Case 2 명시 위임 — call_sub_agent(report_agent) →
+             서브 에이전트가 report/<session>/report.md 생성 → display_markdown
 
 ============================================================
 CATEGORY E — 복합 통합 시나리오 (신규)
@@ -69,9 +80,13 @@ CATEGORY E — 복합 통합 시나리오 (신규)
 """
 
 import asyncio
+import json
+import logging
 import re
+import shutil
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from agent.models import (
     DeltaEvent,
@@ -85,6 +100,9 @@ from agent.models import (
     ToolSpec,
 )
 from agent.registries.tools import ASK_USER
+from core.config import REPORT_DIR, WEB_DIR
+
+logger = logging.getLogger(__name__)
 
 # 스트리밍 체감을 위한 토큰 간 지연 (초).
 _MOCK_TOKEN_DELAY = 0.02
@@ -123,6 +141,7 @@ _FULL_REPORT_TRIGGERS = ("전체 보고서", "full report")
 # Case 2 — 명시 위임. 가장 먼저 검사돼야 다른 트리거에 흡수되지 않는다.
 _CODING_AGENT_TRIGGERS = ("코딩 에이전트", "coding_agent", "코드 리팩토링")
 _RESEARCH_AGENT_TRIGGERS = ("리서치 에이전트", "research_agent", "조사 에이전트")
+_REPORT_AGENT_TRIGGERS = ("리포트 에이전트", "report_agent", "리포트에이전트")
 # Case 2 + 체이닝 — 한 사용자 입력으로 두 에이전트 순차 위임.
 _CHAIN_TRIGGERS = ("전체 분석", "full analysis")
 
@@ -205,6 +224,19 @@ class MockProvider:
         # ───────────────────────────────────────────────────────────────
         already_dispatched = _has_recent_tool_result(messages, "mock-dispatch-")
         if last_user is not None and not already_dispatched:
+            if _matches(last_user.content, _REPORT_AGENT_TRIGGERS):
+                yield ToolCallEvent(
+                    call=ToolCall(
+                        id=f"mock-dispatch-report-{uuid.uuid4().hex[:8]}",
+                        name="call_sub_agent",
+                        arguments={
+                            "agent_name": "report_agent",
+                            "task": last_user.content,
+                        },
+                    )
+                )
+                yield DoneEvent()
+                return
             if _matches(last_user.content, _CODING_AGENT_TRIGGERS):
                 yield ToolCallEvent(
                     call=ToolCall(
@@ -554,7 +586,13 @@ async def _chain_scenario(
 async def _sub_agent_scenario(
     messages: list[Message], agent_name: str
 ) -> AsyncIterator[StreamEvent]:
-    """D4 — 서브 에이전트 일반 시나리오 (now 도구 1회 + Task Summary)."""
+    """D4/D5 — 서브 에이전트 일반 시나리오."""
+    # D5 — report_agent: markdown 산출물 생성 후 display_markdown + complete_subagent
+    if agent_name == "report_agent":
+        async for ev in _report_agent_scenario(messages):
+            yield ev
+        return
+
     already_called_now = _has_recent_tool_result(messages, "mock-sub-now-")
     if not already_called_now:
         yield ToolCallEvent(
@@ -880,14 +918,42 @@ async def _composite_sub_scenario(
 _NOW_CALL_PREFIX = "mock-now-"
 _IMG_NOW_PREFIX = "mock-img-now-"
 
-# display_image 에 사용할 프로젝트 자산 경로 (build/web/assets 에 실제로 존재)
-_FAVICON_PATH = "build/web/assets/favicon.svg"
+
+def _ensure_favicon_artifact(messages: list[Message]) -> str:
+    """SKILL 실행 결과로 favicon 산출물을 report/<session>/ 에 복사한다.
+
+    이미 파일이 존재하면 재사용 (idempotent). WEB_DIR 의 원본이 없으면
+    (dev 환경에서 npm run build 전) 폴백으로 직접 경로를 그대로 반환한다.
+
+    Returns:
+        display_image source 인자로 넘길 상대 경로 문자열.
+    """
+    session_dir = _session_report_dir(messages)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    artifact = session_dir / "favicon.svg"
+
+    if not artifact.exists():
+        source_path = WEB_DIR / "assets" / "favicon.svg"
+        if not source_path.exists():
+            logger.debug(
+                "favicon source not found at %s — falling back to direct asset path",
+                source_path,
+            )
+            return "build/web/assets/favicon.svg"
+        shutil.copy2(source_path, artifact)
+
+    return f"report/{session_dir.name}/{artifact.name}"
 
 
 async def _time_skill_scenario(
     messages: list[Message],
 ) -> AsyncIterator[StreamEvent]:
-    """B1 확장 — now 도구 → display_image(favicon) → 자연어 응답 (3단계)."""
+    """B1 확장 — now 도구 → display_image(report/<session>/favicon.svg) → 자연어 응답.
+
+    이미지는 SKILL 산출물 형태로 report/<session>/ 에 복사된 사본을 사용한다 —
+    B3 (correlation.json) 와 동일한 패턴. 세션 복귀 후 칩 클릭 시에도 동일 경로
+    fetch 로 복원된다.
+    """
     already_called_now = _has_recent_tool_result(messages, _NOW_CALL_PREFIX)
     already_called_img = _has_recent_tool_result(messages, _IMG_NOW_PREFIX)
 
@@ -903,16 +969,17 @@ async def _time_skill_scenario(
         yield DoneEvent()
         return
 
-    # Step 2: now 결과를 받은 후 이미지 display
+    # Step 2: 산출물 폴더에 favicon 복사 후 display_image 호출
     if not already_called_img:
+        favicon_path = _ensure_favicon_artifact(messages)
         yield ToolCallEvent(
             call=ToolCall(
                 id=f"{_IMG_NOW_PREFIX}{uuid.uuid4().hex[:8]}",
                 name="display_image",
                 arguments={
-                    "source": _FAVICON_PATH,
+                    "source": favicon_path,
                     "alt": "앱 아이콘",
-                    "caption": "시각화 데모 이미지",
+                    "caption": "시각화 데모 이미지 (산출물 폴더 복사본)",
                 },
             )
         )
@@ -944,33 +1011,85 @@ async def _time_skill_scenario(
 # =============================================================================
 
 # 2차원 상관 관계 가상 데이터 — y ≈ 0.7*x + 노이즈, 30개 포인트
-_MOCK_SCATTER_DATA = [
+_MOCK_SCATTER_DATA: list[list[float]] = [
     [round(i * 0.35, 2), round(i * 0.35 * 0.7 + ((i * 7) % 10 - 5) * 0.18, 2)]
     for i in range(30)
 ]
 
 
+def _session_report_dir(messages: list[Message]) -> Path:
+    """현재 대화 세션의 리포트 산출물 폴더 경로를 반환한다.
+
+    세션 식별자는 system 메시지 내용 길이의 hex 해시를 폴백으로 사용한다 — 결정론적이고
+    mock 컨텍스트로 충분하다. 실제 client_id 는 provider 시그니처상 노출되지 않으므로
+    안전한 대용물을 채택했다.
+    """
+    seed = messages[0].content if messages else "anon"
+    digest = f"session-{abs(hash(seed)) % (16**8):08x}"
+    return REPORT_DIR / digest
+
+
+def _ensure_correlation_artifact(messages: list[Message]) -> Path:
+    """`report/<session>/correlation.json` 가상 산출물을 생성(또는 재사용)한다.
+
+    Provider 가 data_analysis SKILL 을 실행해 만들어 낸 결과라고 가정한다.
+    파일 포맷:
+        {"x_label": "...", "y_label": "...", "points": [[x, y], ...]}
+    """
+    session_dir = _session_report_dir(messages)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    artifact = session_dir / "correlation.json"
+    if not artifact.exists():
+        payload = {
+            "x_label": "변수 X",
+            "y_label": "변수 Y",
+            "points": _MOCK_SCATTER_DATA,
+        }
+        artifact.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return artifact
+
+
+def _load_correlation_artifact(artifact: Path) -> dict:
+    """파일을 읽어 display_chart 인자로 변환할 raw payload 를 반환한다."""
+    return json.loads(artifact.read_text(encoding="utf-8"))
+
+
 def _data_analysis_scenario(
     messages: list[Message],
 ) -> AsyncIterator[StreamEvent]:
-    """B3 — data_analysis skill: add_todo(3) → complete × 2 → display_chart → complete × 1 → 보고."""
+    """B3 — data_analysis skill: 3회 provider 호출 + 파일 산출물 기반.
+
+    호출 1: SKILL 실행 결과물 파일을 `report/<session>/correlation.json` 에
+            기록하고 add_todo(3) 등록.
+    호출 2: complete_todo × 3 + display_chart  (파일을 읽어 차트 인자로 변환)
+    호출 3: 자연어 최종 보고
+
+    SkillActiveEvent 는 harness 가 `SkillRegistry.select` 결과로 이미 emit 하므로
+    mock 에서 별도로 yield 하지 않는다.
+    """
     has_add = _has_recent_tool_result(messages, "mock-da-add-")
     has_chart = _has_recent_tool_result(messages, "mock-da-chart-")
 
-    # Step 1 — add_todo 3단계 등록
+    # ── 호출 1: SKILL 실행 → 가상 산출물 파일 생성 + add_todo 등록 ────────
     if not has_add:
+        artifact = _ensure_correlation_artifact(messages)
 
         async def _add() -> AsyncIterator[StreamEvent]:
-            yield SkillActiveEvent(skills=["data_analysis"])
             yield ToolCallEvent(
                 call=ToolCall(
                     id=f"mock-da-add-{uuid.uuid4().hex[:8]}",
                     name="add_todo",
                     arguments={
                         "items": [
-                            {"description": "데이터 수집 — 분석 대상 및 출처 확인"},
+                            {
+                                "description": (
+                                    f"데이터 수집 — 가상 표본 30건 저장 ({artifact.name})"
+                                )
+                            },
                             {"description": "정제 — 결측·이상치·중복 처리"},
-                            {"description": "시각화 및 요약 — 상관관계 차트 생성"},
+                            {"description": "시각화 및 요약 — X-Y 산점도 생성"},
                         ]
                     },
                 )
@@ -980,91 +1099,55 @@ def _data_analysis_scenario(
         return _add()
 
     task_ids = _extract_task_ids(messages, "mock-da-add-")
-    completed_ids = {
-        m.tool_call_id.replace("mock-da-complete-", "", 1)
-        for m in messages
-        if m.role == "tool" and (m.tool_call_id or "").startswith("mock-da-complete-")
-    }
-    pending_ids = [tid for tid in task_ids if tid not in completed_ids]
 
-    # Step 2–3 — 앞 2개 todo 순차 완료 (차트 표시 전)
-    if len(completed_ids) < 2 and pending_ids:
+    # ── 호출 2: complete_todo × 3 + display_chart (산출물 파일에서 빌드) ──
+    if not has_chart and task_ids:
+        artifact = _ensure_correlation_artifact(messages)
+        payload = _load_correlation_artifact(artifact)
 
-        async def _complete_early() -> AsyncIterator[StreamEvent]:
-            tid = pending_ids[0]
+        async def _complete_all_and_chart() -> AsyncIterator[StreamEvent]:
             summaries = [
-                "데이터 30건 수집 완료 [기간 미지정]",
+                f"가상 데이터 {len(payload['points'])}건 수집 → {artifact.name}",
                 "결측 0건·이상치 1건 제거",
+                "X-Y 산점도 생성 — 양의 상관관계(r≈0.7) 확인",
             ]
-            summary = (
-                summaries[len(completed_ids)]
-                if len(completed_ids) < len(summaries)
-                else "완료"
-            )
-            yield ToolCallEvent(
-                call=ToolCall(
-                    id=f"mock-da-complete-{tid}",
-                    name="complete_todo",
-                    arguments={"task_id": tid, "summary": summary},
+            for tid, summary in zip(task_ids, summaries):
+                yield ToolCallEvent(
+                    call=ToolCall(
+                        id=f"mock-da-complete-{tid}",
+                        name="complete_todo",
+                        arguments={"task_id": tid, "summary": summary},
+                    )
                 )
-            )
-            yield DoneEvent()
-
-        return _complete_early()
-
-    # Step 4 — 차트 표시 (pending_ids 에 아직 미완료 항목이 있고 차트 미표시)
-    if not has_chart and pending_ids:
-
-        async def _chart() -> AsyncIterator[StreamEvent]:
             yield ToolCallEvent(
                 call=ToolCall(
                     id=f"mock-da-chart-{uuid.uuid4().hex[:8]}",
                     name="display_chart",
                     arguments={
                         "chart_type": "scatter",
-                        "series": [{"name": "X-Y 상관", "data": _MOCK_SCATTER_DATA}],
+                        "series": [{"name": "X-Y 상관", "data": payload["points"]}],
                         "title": "변수 X와 Y의 상관관계 (가상 데이터)",
-                        "x_label": "변수 X",
-                        "y_label": "변수 Y",
-                        "extra_option": {
-                            "tooltip": {"trigger": "item", "formatter": "{b}: ({c0})"},
-                        },
+                        "x_label": payload["x_label"],
+                        "y_label": payload["y_label"],
                     },
                 )
             )
             yield DoneEvent()
 
-        return _chart()
+        return _complete_all_and_chart()
 
-    # Step 5 — 마지막 todo 완료
-    if pending_ids:
+    # ── 호출 3: 자연어 최종 보고 ─────────────────────────────────────────
+    artifact = _ensure_correlation_artifact(messages)
 
-        async def _complete_last() -> AsyncIterator[StreamEvent]:
-            tid = pending_ids[0]
-            yield ToolCallEvent(
-                call=ToolCall(
-                    id=f"mock-da-complete-{tid}",
-                    name="complete_todo",
-                    arguments={
-                        "task_id": tid,
-                        "summary": "X-Y 산점도 표시 완료 — 양의 상관관계(r≈0.7) 확인",
-                    },
-                )
-            )
-            yield DoneEvent()
-
-        return _complete_last()
-
-    # Step 6 — 자연어 최종 보고
     async def _report() -> AsyncIterator[StreamEvent]:
         reply = (
             "## 데이터 분석 완료\n\n"
-            "3단계 분석을 마쳤습니다.\n\n"
+            f"산출물: `{artifact.relative_to(REPORT_DIR.parent)}`\n\n"
             "**핵심 인사이트**\n"
-            "1. 변수 X와 Y 간 양의 선형 상관관계 확인 (r ≈ 0.7)\n"
-            "2. 이상치 1건 — 정제 후 제외\n"
-            "3. [기간 미지정] 조건으로 전체 30개 포인트 분석\n\n"
-            "우측 패널의 산점도에서 드래그로 영역을 선택하거나 확대할 수 있습니다."
+            "1. 변수 X와 Y 간 양의 선형 상관관계 (r ≈ 0.7)\n"
+            "2. 정제 단계에서 이상치 1건 제거\n"
+            "3. [기간 미지정] 30개 가상 표본 분석\n\n"
+            "우측 패널에서 드래그·확대·저장 도구로 차트를 탐색할 수 있습니다."
         )
         for ch in reply:
             await asyncio.sleep(_MOCK_TOKEN_DELAY)
@@ -1072,6 +1155,108 @@ def _data_analysis_scenario(
         yield DoneEvent()
 
     return _report()
+
+
+# =============================================================================
+# Category D5 — report_agent 서브 에이전트 시나리오
+# =============================================================================
+
+# 데모용 markdown 본문 — 데이터 분석을 끝낸 가상의 리포트.
+# 헤더·표·불릿·code block 을 모두 포함해 ArtifactMarkdown 의 렌더링을 검증.
+_MOCK_REPORT_MARKDOWN = """# 분기별 매출 분석 리포트
+
+## 요약
+
+[가정] 2025 Q1~Q4 가상 데이터를 바탕으로 작성된 데모 리포트입니다.
+실제 데이터 소스는 mock 환경에서 연결되어 있지 않습니다.
+
+## 핵심 지표
+
+| 분기 | 매출(억) | 전기 대비 | 비고 |
+|---|---|---|---|
+| Q1 | 12.4 | — | 신제품 출시 |
+| Q2 | 15.1 | +21.8% | 마케팅 캠페인 |
+| Q3 | 13.8 | -8.6% | 비수기 진입 |
+| Q4 | 18.9 | +37.0% | 연말 프로모션 |
+
+## 인사이트
+
+- **Q4 가 연간 최고치** — 연말 프로모션 효과가 가장 컸음
+- **Q2 → Q3 하락은 계절성** — 동기 대비 평년과 유사한 수준
+- **연간 평균 성장률 +16.7%** [가정 — 단순 산술 평균]
+
+## 후속 액션
+
+```text
+1. Q4 프로모션 분석을 별도 보고서로 분리
+2. Q3 비수기 대응 전략 수립
+3. 2026 Q1 신제품 라인업 ROI 추정
+```
+
+> 본 리포트는 mock provider 데모용 산출물입니다. 동일 세션에서 재실행해도
+> 같은 파일이 재사용됩니다.
+"""
+
+
+def _ensure_report_markdown(messages: list[Message]) -> Path:
+    """report_agent 산출물 markdown 파일을 report/<session>/ 에 기록한다.
+
+    idempotent — 같은 세션에서 동일 데모를 재실행해도 파일을 다시 쓰지 않는다.
+    """
+    session_dir = _session_report_dir(messages)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    artifact = session_dir / "report.md"
+    if not artifact.exists():
+        artifact.write_text(_MOCK_REPORT_MARKDOWN, encoding="utf-8")
+    return artifact
+
+
+def _report_agent_scenario(
+    messages: list[Message],
+) -> AsyncIterator[StreamEvent]:
+    """D5 — report_agent 서브 에이전트: markdown 산출물 생성 + display + 종료.
+
+    호출 1: display_markdown 도구 호출 (파일은 그 직전에 디스크에 기록)
+    호출 2: complete_subagent 로 종료 (summary 반환)
+    """
+    has_displayed = _has_recent_tool_result(messages, "mock-sub-report-md-")
+
+    if not has_displayed:
+        artifact = _ensure_report_markdown(messages)
+        session_dir = _session_report_dir(messages)
+        rel_source = f"report/{session_dir.name}/{artifact.name}"
+
+        async def _display() -> AsyncIterator[StreamEvent]:
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-sub-report-md-{uuid.uuid4().hex[:8]}",
+                    name="display_markdown",
+                    arguments={
+                        "source": rel_source,
+                        "title": "분기별 매출 분석 리포트",
+                    },
+                )
+            )
+            yield DoneEvent()
+
+        return _display()
+
+    async def _finish() -> AsyncIterator[StreamEvent]:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"mock-sub-report-finish-{uuid.uuid4().hex[:8]}",
+                name="complete_subagent",
+                arguments={
+                    "summary": (
+                        "report.md 산출물을 생성하고 사이드 패널에 렌더링했습니다 "
+                        "— 분기별 매출 표 + 인사이트 3건 포함."
+                    ),
+                },
+            )
+        )
+        yield DoneEvent()
+
+    return _finish()
 
 
 # =============================================================================

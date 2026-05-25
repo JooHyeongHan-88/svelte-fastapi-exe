@@ -8,6 +8,7 @@ import {
   saveActiveId,
   loadTheme,
   saveTheme,
+  loadArtifactWidth,
 } from "./storage.js";
 import {
   chat,
@@ -20,7 +21,10 @@ import {
 } from "./api.js";
 import { parseSseStream } from "./sse.js";
 import { autoTitle } from "./format.js";
-import { addArtifact, clearArtifacts } from "./artifactActions.svelte.js";
+import {
+  makeArtifactChip,
+  resetArtifactPanelState,
+} from "./artifactActions.svelte.js";
 
 const SAVE_DEBOUNCE_MS = 200;
 const UPDATE_POLL_MS = 500;
@@ -96,7 +100,7 @@ export async function createSession() {
   ui.activeSessionId = session.id;
   saveActiveId(session.id);
   flushSave();
-  clearArtifacts();
+  resetArtifactPanelState();
 
   openPresence(session.id);
   // 새 세션은 백엔드 store 도 빈 상태로 시작 — restore 는 호출 안 함.
@@ -111,7 +115,7 @@ export async function selectSession(id) {
 
   ui.activeSessionId = id;
   saveActiveId(id);
-  clearArtifacts();
+  resetArtifactPanelState();
 
   openPresence(id);
   // EXE 재시작 등으로 백엔드 context 가 비어있을 수 있으므로 매 선택마다 다시 주입.
@@ -404,16 +408,14 @@ export async function sendMessage(text) {
       const prefix = innerPayload.is_error ? "⚠️" : "🔧";
       slot.toolStatus = `${prefix} ${innerPayload.name ?? "?"} → ${innerPayload.result ?? ""}`;
       // 서브 에이전트에서도 시각화 도구 결과를 아티팩트 패널에 표시
-      if (!innerPayload.is_error && innerPayload.data?.kind && (innerPayload.name === "display_image" || innerPayload.name === "display_chart")) {
+      if (_isArtifactToolResult(innerPayload)) {
         const s = activeSession();
         const last = s?.messages[s.messages.length - 1];
-        const msgId = last?.id ?? null;
-        const artifactId = addArtifact(innerPayload.data.kind, innerPayload.data, msgId);
         if (last && last.role === "assistant") {
-          last.artifactChips = [
-            ...(last.artifactChips ?? []),
-            { id: artifactId, kind: innerPayload.data.kind, label: innerPayload.data.title || innerPayload.data.alt || innerPayload.data.caption || innerPayload.name },
-          ];
+          const chip = makeArtifactChip(innerPayload.data.kind, innerPayload.data);
+          last.artifactChips = [...(last.artifactChips ?? []), chip];
+          ui.activeArtifactId = chip.id;
+          ui.artifactPanelOpen = true;
         }
       }
     } else if (innerType === "reasoning") {
@@ -459,16 +461,14 @@ export async function sendMessage(text) {
         const prefix = ev.is_error ? "⚠️" : "🔧";
         setToolStatus(`${prefix} ${ev.name} → ${ev.result}`);
         // 시각화 도구 결과 → 아티팩트 패널 + 메시지 칩 추가
-        if (!ev.is_error && ev.data?.kind && (ev.name === "display_image" || ev.name === "display_chart")) {
+        if (_isArtifactToolResult(ev)) {
           const s = activeSession();
           const last = s?.messages[s.messages.length - 1];
-          const msgId = last?.id ?? null;
-          const artifactId = addArtifact(ev.data.kind, ev.data, msgId);
           if (last && last.role === "assistant") {
-            last.artifactChips = [
-              ...(last.artifactChips ?? []),
-              { id: artifactId, kind: ev.data.kind, label: ev.data.title || ev.data.alt || ev.data.caption || ev.name },
-            ];
+            const chip = makeArtifactChip(ev.data.kind, ev.data);
+            last.artifactChips = [...(last.artifactChips ?? []), chip];
+            ui.activeArtifactId = chip.id;
+            ui.artifactPanelOpen = true;
             ui.sessions = [...ui.sessions];
             scheduleSave();
           }
@@ -528,6 +528,7 @@ export async function sendMessage(text) {
 export async function initApp() {
   ui.theme = loadTheme();
   document.documentElement.setAttribute("data-theme", ui.theme);
+  ui.artifactWidth = loadArtifactWidth();
 
   const sessions = loadSessions();
   ui.sessions = sessions.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -630,4 +631,23 @@ export function closeUpdateModal() {
 export function teardown() {
   closePresence();
   flushSave();
+}
+
+// ---------- 내부 헬퍼 ----------
+
+// 시각화 도구 결과인지 판별. tool_result / agent:progress 양쪽에서 공유한다.
+const _ARTIFACT_TOOL_NAMES = new Set([
+  "display_image",
+  "display_chart",
+  "display_markdown",
+]);
+const _ARTIFACT_KINDS = new Set(["image", "chart", "markdown"]);
+
+function _isArtifactToolResult(ev) {
+  return (
+    !ev.is_error &&
+    ev.data?.kind &&
+    _ARTIFACT_KINDS.has(ev.data.kind) &&
+    _ARTIFACT_TOOL_NAMES.has(ev.name)
+  );
 }

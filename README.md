@@ -173,6 +173,13 @@ cd backend && uv run python -m pytest tests/ -v
 **서브 에이전트가 다시 서브 에이전트를 부르는 중첩 위임은 4중 방어선으로 차단된다.**
 `AGENTS/` Front Matter의 `skills` 목록에 선언된 SKILL만 서브 에이전트가 사용할 수 있다.
 
+현재 등록된 서브 에이전트:
+
+| 에이전트 | 트리거 | 역할 |
+|---|---|---|
+| `coding_agent` | "코딩", "코드 작성" 등 | 코드 작업 전담 |
+| `report_agent` | "리포트 에이전트", "report_agent" | Markdown 리포트 작성·`display_markdown` 렌더링 전담 |
+
 ### 에이전트 런타임 안전장치
 
 | 장치 | 동작 |

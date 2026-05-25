@@ -26,6 +26,8 @@ _ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "assets\\",
     "workspace/",
     "workspace\\",
+    "report/",
+    "report\\",
 )
 
 
@@ -67,9 +69,17 @@ def _resolve_image_source(source: str) -> tuple[str, str | None]:
             return "", f"허용되지 않는 워크스페이스 경로: {source!r}"
         return f"/workspace/{rest}", None
 
+    # 5) 리포트 산출물 경로 → /report/<path>
+    if normalized.startswith("report/"):
+        rest = normalized[len("report/") :]
+        if not rest or ".." in rest:
+            return "", f"허용되지 않는 리포트 경로: {source!r}"
+        return f"/report/{rest}", None
+
     return "", (
         f"지원하지 않는 이미지 소스: {source!r}. "
-        "data URI, http(s) URL, 'build/web/assets/'·'assets/'·'workspace/' 경로만 허용됩니다."
+        "data URI, http(s) URL, "
+        "'build/web/assets/'·'assets/'·'workspace/'·'report/' 경로만 허용됩니다."
     )
 
 
@@ -272,6 +282,7 @@ _TYPE_LABEL: dict[str, str] = {
         "이미지를 채팅창 우측 아티팩트 패널에 표시한다. "
         "source 는 프로젝트 자산 경로('build/web/assets/...' 또는 'assets/...'), "
         "워크스페이스 경로('workspace/...'), "
+        "리포트 산출물 경로('report/<session>/...'), "
         "http(s) URL, 또는 data URI 형식을 지원한다."
     ),
     slot_prompts={"source": "표시할 이미지의 경로 또는 URL을 알려주세요."},
@@ -365,5 +376,47 @@ async def display_chart(
             "chart_type": chart_type,
             "title": title,
             "option": echarts_option,
+        },
+    )
+
+
+@register_tool(
+    description=(
+        "Markdown 산출물 파일을 채팅창 우측 아티팩트 패널에 렌더링한다. "
+        "source 는 리포트 산출물 경로('report/<session>/<file>.md'), "
+        "워크스페이스 경로('workspace/...'), 또는 자산 경로('assets/...') 를 지원한다. "
+        "파일은 사전에 디스크에 저장되어 있어야 한다."
+    ),
+    slot_prompts={
+        "source": "표시할 markdown 파일 경로를 알려주세요 (예: report/<session>/report.md)."
+    },
+    timeout_seconds=5,
+)
+async def display_markdown(
+    source: Annotated[
+        str,
+        "마크다운 파일 경로 (report/... 또는 workspace/... 또는 assets/...).",
+    ],
+    title: Annotated[str, "패널 헤더에 표시할 제목"] = "",
+) -> ToolResult:
+    """Markdown 파일을 아티팩트 패널에 렌더링한다."""
+    resolved, error = _resolve_image_source(source)
+    if error:
+        return ToolResult(content=f"[display_markdown 오류] {error}", is_error=True)
+
+    # 확장자 검증 — markdown 파일만 허용 (다른 텍스트 파일은 별도 도구 권장).
+    if not resolved.lower().endswith((".md", ".markdown")):
+        return ToolResult(
+            content=f"[display_markdown 오류] .md / .markdown 확장자만 허용: {source!r}",
+            is_error=True,
+        )
+
+    label = title or source
+    return ToolResult(
+        content=f"마크다운 문서: {label}",
+        data={
+            "kind": "markdown",
+            "src": resolved,
+            "title": title,
         },
     )

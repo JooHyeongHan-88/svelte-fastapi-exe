@@ -148,6 +148,7 @@ backend/
 PROMPTS/              base.md + safety.md + orchestrator.md — system prompt 합성
 SKILLS/               작업별 가이드. Front Matter trigger 로 라우팅, 매칭된 본문만 lazy 로드
 AGENTS/               서브 에이전트 페르소나 정의. Front Matter에 name/description/skills/tools 선언
+                      현재 등록: coding_agent (코드 작업 전담), report_agent (markdown 리포트 작성·렌더링 전담)
 
 frontend/src/
   App.svelte          레이아웃 셸

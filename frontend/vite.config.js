@@ -30,6 +30,15 @@ export default defineConfig(() => {
     build: {
       outDir: "../build/web",
       emptyOutDir: true,
+      // ECharts 번들이 ~1.1MB 로 경고 임계값을 넘으므로 허용치를 올린다.
+      chunkSizeWarningLimit: 1500,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("echarts")) return "echarts";
+          },
+        },
+      },
     },
   };
 });
