@@ -72,6 +72,49 @@ release/{AppName}.exe ─(sha256 + copy)─► release/{AppName}-X.X.X.exe + rel
 
 ---
 
+## Harness 이벤트 & UI 컴포넌트 매핑
+
+백엔드 harness(`backend/agent/harness.py`)는 SSE 스트림으로 이벤트를 발행하고, 프론트엔드는 이를 수신해 컴포넌트를 갱신한다.
+
+| SSE 이벤트 (`type`) | 발생 조건 | 처리 UI 컴포넌트 | 화면 표현 |
+|---|---|---|---|
+| `delta` | LLM 응답 텍스트 청크 | `MessageBubble` | 마크다운 스트리밍 렌더링 |
+| `tool_call` | LLM이 도구 호출 결정 | `MessageBubble` | `🔧 <도구명> 호출 중...` 상태 라벨 |
+| `tool_result` | 도구 실행 완료 (성공/실패) | `MessageBubble` | `🔧`/`⚠️ <도구명> → <결과>` 상태 라벨 |
+| `reasoning` | LLM 내부 추론 청크 (o-series) | `ReasoningBlock` | 접을 수 있는 "추론 과정" 블록 |
+| `skill_active` | SKILL 트리거 매칭 직후 | `MessageBubble` | ✦ 스킬 이름 칩(뱃지) |
+| `todo_update` | `add_todo` / `complete_todo` 호출 시 | `TodoProgress` | 접을 수 있는 체크리스트 (pending/running/completed/failed/skipped) |
+| `skill_complete` | todo_list 전체 terminal 상태 도달 | `SkillCompleteBadge` | "작업 완료 N완료 M실패" 배지 |
+| `ask_user` | 슬롯 가드 실패 또는 `ask_user` sentinel 호출 | `AskUserCard` | 질문 + 선택지 버튼 카드 (choice/text/both 모드) |
+| `agent:switch` | 오케스트레이터가 서브 에이전트에게 위임 | `MessageBubble` (agentTrail) | `🔄 orchestrator → <에이전트명>` 칩 |
+| `agent:return` | 서브 에이전트 작업 완료 후 복귀 | `MessageBubble` (agentTrail) | `✓ orchestrator → <에이전트명>` 칩 (accent) |
+| `agent:progress` | 서브 에이전트의 delta/tool/todo/reasoning 래핑 | `MessageBubble` (agentProgress) | 들여쓰기 슬롯 — 내부 delta·tool status·todo·reasoning 표시 |
+| `error` (`is_fallback=false`) | 예외 또는 budget 초과 | `MessageBubble` | `[error] ...` 텍스트 추가 |
+| `error` (`is_fallback=true`) | max_iterations 도달 후 자연어 응답 | `MessageBubble` | 메시지에 danger 테마 (점선 테두리) |
+| `done` | 턴 정상 종료 | `chatActions` | `ui.streaming = false`, localStorage flush |
+
+### Harness 안전장치
+
+| 장치 | 구현 위치 | 동작 |
+|---|---|---|
+| **슬롯 가드** | `agent/guard.py` | 도구 인자 누락 시 `AskUserEvent` 발행, 채워지면 다음 턴에 재호출 |
+| **루프 감지** | `harness.py` `history_calls` set | 동일 도구·동일 인자 재호출 차단, RCA 유도 메시지 주입 |
+| **에러 회복** | `harness.py` `_execute_tool` | `is_error=True` 결과에 RCA + 1회 재시도 유도 메시지 자동 append |
+| **Fallback** | `harness.py` else 절 | `max_iterations` 도달 시 tools 없이 LLM 재호출 → `is_fallback=true` ErrorEvent |
+| **Budget 가드** | `TurnBudget` | 오케스트레이터 + 서브 에이전트 provider 호출 합산 상한 |
+| **중첩 위임 차단** | L0~L3 (harness + guard) | 서브 에이전트의 `call_sub_agent` 재호출 4중 방어 |
+
+### ask_user 두 경로 비교
+
+| 경로 | 트리거 | 상태 저장 |
+|---|---|---|
+| **슬롯 가드** | 도구 인자 형식/누락 오류 | `state.pending_tool` + `state.missing_slots` — 다음 턴에 자동 재호출 |
+| **ask_user sentinel** | LLM이 능동적으로 `ask_user` 도구 호출 | `state.pending_question` — 다음 턴 system prompt에 질문 재주입 |
+
+두 경로 모두 `AskUserCard`로 렌더링되며, 사용자 답변 시 `AskUserCard`가 `answered=true`로 전환된다.
+
+---
+
 ## 개발 환경 설정
 
 ```powershell
