@@ -603,11 +603,21 @@ async def _dispatch_sub_agent(
         reason=task[:80],
     )
 
+    # 서브 에이전트가 가지고 진입한 SKILL 목록을 progress 채널로 노출.
+    # — UI 가 sub-agent 슬롯 안에 어떤 SKILL 이 활성화됐는지 뱃지로 보여줄 수 있다.
+    skill_bodies = _resolve_agent_skills(agent, skill_registry)
+    if skill_bodies:
+        yield AgentProgressEvent(
+            agent_id=agent.meta.name,
+            inner_type="skill_active",
+            inner_payload={"skills": [s.meta.name for s in skill_bodies]},
+        )
+
     # 격리된 system prompt — base + safety + agent body + 학습 SKILL body.
     sub_system = _compose_sub_agent_system_prompt(
         base=prompt_registry.compose(fallback="", include_orchestrator=False),
         agent=agent_registry._ensure_body(agent),
-        skill_bodies=_resolve_agent_skills(agent, skill_registry),
+        skill_bodies=skill_bodies,
     )
     sub_messages: list[Message] = [
         Message(role="system", content=sub_system),
@@ -676,8 +686,10 @@ async def _dispatch_sub_agent(
             )
             continue
 
-        if isinstance(ev, (TodoUpdateEvent, SkillCompleteEvent)):
-            # 서브 에이전트의 PLANNER 상태 변화와 SKILL 완료 신호를 프론트에 전달.
+        if isinstance(ev, (TodoUpdateEvent, SkillCompleteEvent, SkillActiveEvent)):
+            # 서브 에이전트의 PLANNER 상태 변화 / SKILL 활성·완료 신호를 프론트에 전달.
+            # SkillActiveEvent 는 provider 가 sub-agent context 에서 직접 yield 한 경우
+            # — mock 의 복합 시연 시나리오가 이 경로로 sub-skill 뱃지를 갱신한다.
             yield AgentProgressEvent(
                 agent_id=agent.meta.name,
                 inner_type=ev.type,
@@ -706,7 +718,7 @@ async def _dispatch_sub_agent(
             )
             return
 
-        # 그 외(SkillActiveEvent 등)는 silent drop.
+        # 그 외 이벤트는 silent drop.
 
     summary = complete_subagent_summary or _extract_task_summary(
         "".join(last_assistant_text).strip(), agent.meta.name

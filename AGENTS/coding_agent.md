@@ -1,7 +1,7 @@
 ---
 name: coding_agent
 description: 소스코드 분석·리팩토링·테스트 작성을 수행하는 코딩 전문 에이전트
-skills: ["test"]
+skills: ["code_review"]
 tools: []
 priority: 5
 ---

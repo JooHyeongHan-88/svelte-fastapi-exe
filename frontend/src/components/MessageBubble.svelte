@@ -56,12 +56,28 @@
         </div>
       {/if}
 
-      <!-- 서브 에이전트 진행 영역 — AgentProgress 의 inner delta/tool/todo 표시 -->
+      <!-- 서브 에이전트 진행 영역 — AgentProgress 의 inner delta/tool/todo/skill/reasoning 표시 -->
       {#if message.agentProgress && message.agentProgress.length > 0}
         {#each message.agentProgress as slot, idx (idx)}
-          {#if slot.deltas || slot.toolStatus || (slot.todos && slot.todos.length > 0)}
+          {#if slot.deltas || slot.toolStatus || (slot.todos && slot.todos.length > 0) || (slot.activeSkills && slot.activeSkills.length > 0) || slot.reasoning}
             <div class="agent-progress">
               <div class="agent-progress-label">{slot.agentId}</div>
+              {#if slot.activeSkills && slot.activeSkills.length > 0}
+                <div class="skill-bar">
+                  {#each slot.activeSkills as skill (skill)}
+                    <span class="skill-chip">
+                      <span class="skill-icon">✦</span>
+                      {skill}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              {#if slot.reasoning}
+                <ReasoningBlock
+                  text={slot.reasoning}
+                  streaming={isStreaming && !slot.deltas}
+                />
+              {/if}
               {#if slot.toolStatus}
                 <div class="agent-progress-tool">{slot.toolStatus}</div>
               {/if}

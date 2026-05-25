@@ -316,7 +316,15 @@ export async function sendMessage(text) {
     // 새 progress 슬롯도 미리 열어 둔다 (delta 누적용).
     last.agentProgress = [
       ...(last.agentProgress ?? []),
-      { agentId: to, deltas: "", toolStatus: null, todos: null, skillComplete: null },
+      {
+        agentId: to,
+        deltas: "",
+        toolStatus: null,
+        todos: null,
+        skillComplete: null,
+        activeSkills: null, // sub-agent SKILL 뱃지 (AgentProgressEvent[skill_active])
+        reasoning: "",      // sub-agent 의 ReasoningEvent 청크 누적 — 별도 토글 블록으로 렌더
+      },
     ];
     ui.sessions = [...ui.sessions];
     scheduleSave();
@@ -373,7 +381,15 @@ export async function sendMessage(text) {
       }
     }
     if (slotIdx === -1) {
-      progress.push({ agentId, deltas: "", toolStatus: null, todos: null, skillComplete: null });
+      progress.push({
+        agentId,
+        deltas: "",
+        toolStatus: null,
+        todos: null,
+        skillComplete: null,
+        activeSkills: null,
+        reasoning: "",
+      });
       slotIdx = progress.length - 1;
     }
     const slot = { ...progress[slotIdx] };
@@ -385,10 +401,12 @@ export async function sendMessage(text) {
       const prefix = innerPayload.is_error ? "⚠️" : "🔧";
       slot.toolStatus = `${prefix} ${innerPayload.name ?? "?"} → ${innerPayload.result ?? ""}`;
     } else if (innerType === "reasoning") {
-      // 추론은 deltas 와 별도로 다루지 않고 prefix 로만 시각 구분.
-      slot.deltas += `\n[reasoning] ${innerPayload.content ?? ""}`;
+      // sub-agent 의 추론도 메인과 동일하게 ReasoningBlock 토글로 표시 — 별도 필드에 누적.
+      slot.reasoning = (slot.reasoning ?? "") + (innerPayload.content ?? "");
     } else if (innerType === "todo_update") {
       slot.todos = innerPayload.todos ?? [];
+    } else if (innerType === "skill_active") {
+      slot.activeSkills = innerPayload.skills ?? [];
     } else if (innerType === "skill_complete") {
       slot.skillComplete = {
         completed: innerPayload.completed ?? 0,

@@ -1,7 +1,7 @@
 ---
 name: research_agent
 description: 정보 조사·사실 확인·시간/날짜 조회를 수행하는 리서치 전문 에이전트
-skills: ["time_lookup"]
+skills: ["time_lookup", "data_analysis"]
 tools: []
 priority: 5
 ---
