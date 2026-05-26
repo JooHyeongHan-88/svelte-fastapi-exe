@@ -29,8 +29,21 @@ async def presence(request: Request, client_id: str = Query(...)) -> StreamingRe
             yield f"retry: {PRESENCE_RETRY_HINT_MS}\n\n"
             yield ": connected\n\n"
 
+            shutdown_event = browser.get_shutdown_event()
+
             while True:
-                await asyncio.sleep(PRESENCE_KEEPALIVE_INTERVAL)
+                # shutdown 이벤트가 설정되면 즉시 깨어나 루프를 종료한다.
+                if shutdown_event is not None:
+                    try:
+                        await asyncio.wait_for(
+                            shutdown_event.wait(),
+                            timeout=PRESENCE_KEEPALIVE_INTERVAL,
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(PRESENCE_KEEPALIVE_INTERVAL)
 
                 if await request.is_disconnected():
                     break

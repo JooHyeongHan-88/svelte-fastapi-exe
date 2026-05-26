@@ -129,7 +129,7 @@ $_nexusBase = $_nexusBase.TrimEnd('/')
 
 $latest = [ordered]@{
     version               = $version
-    url                   = "$_nexusBase/$versionedName"
+    url                   = "$_nexusBase/$AppName.exe"
     sha256                = $sha256
     size                  = $size
     released_at           = $releasedAt

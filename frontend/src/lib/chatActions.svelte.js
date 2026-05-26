@@ -607,6 +607,9 @@ export async function startUpdate() {
   ui.applyState = { status: "starting", progress: 0, total: 0, message: "" };
   ui.modalOpen = true;
 
+  // 서버의 graceful shutdown 이 SSE 연결에 블로킹되지 않도록 선제 해제.
+  closePresence();
+
   const pollId = setInterval(async () => {
     const state = await getUpdateStatus().catch(() => null);
     if (state) {

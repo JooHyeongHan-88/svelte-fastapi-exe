@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import webbrowser
@@ -12,6 +13,11 @@ from core.config import (
 
 
 _lock = threading.Lock()
+
+# shutdown 이벤트 — presence SSE 루프가 즉시 깨어나도록 한다.
+# asyncio.Event 는 특정 이벤트 루프에 바인딩되므로 서버 startup 시점에 초기화한다.
+_shutdown_event: asyncio.Event | None = None
+_loop: asyncio.AbstractEventLoop | None = None
 
 # client_id → 살아있는 presence SSE 개수.
 # 탭 복제 / "Open in new tab" 의 경우 sessionStorage 가 복사돼 두 탭이 같은 client_id 를
@@ -94,16 +100,36 @@ def _snapshot() -> tuple[set[str], bool]:
         return alive, _ever_registered
 
 
+def init_shutdown_event() -> None:
+    """서버 이벤트 루프 안에서 호출. shutdown 이벤트를 현재 루프에 바인딩한다."""
+    global _shutdown_event, _loop
+    _loop = asyncio.get_running_loop()
+    _shutdown_event = asyncio.Event()
+
+
+def get_shutdown_event() -> asyncio.Event | None:
+    """presence SSE 루프가 shutdown 신호를 수신하기 위해 참조한다."""
+    return _shutdown_event
+
+
 def open_browser() -> None:
     time.sleep(1)
     webbrowser.open(f"http://{HOST}:{PORT}")
 
 
 def request_shutdown() -> None:
+    """uvicorn 종료를 요청한다.
+
+    background thread 에서 호출되므로 asyncio.Event 설정은
+    call_soon_threadsafe 로 이벤트 루프에 위임한다.
+    """
     print("shutdown server")
 
     if server is not None:
         server.should_exit = True
+
+    if _shutdown_event is not None and _loop is not None:
+        _loop.call_soon_threadsafe(_shutdown_event.set)
 
 
 def watchdog() -> None:

@@ -23,6 +23,12 @@ mimetypes.add_type("image/svg+xml", ".svg")
 
 app = FastAPI()
 
+
+@app.on_event("startup")
+async def _init_shutdown_event() -> None:
+    browser.init_shutdown_event()
+
+
 # PROMPTS / SKILLS 베이스 메타데이터는 1회 캐시. dev 모드 핫리로드는 각 registry 가
 # 본문 읽을 때 mtime 으로 자동 감지하므로 부팅 시점 로드만 명시한다.
 prompt_registry.load()
@@ -85,7 +91,7 @@ if WEB_DIR.exists():
 
 
 if __name__ == "__main__":
-    config = uvicorn.Config(app, host=HOST, port=PORT)
+    config = uvicorn.Config(app, host=HOST, port=PORT, timeout_graceful_shutdown=5)
     server = uvicorn.Server(config)
     browser.server = server
 

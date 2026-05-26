@@ -47,12 +47,14 @@ if (-not $AppName) {
 if (-not $SkipBuild) {
     Write-Host "==> build (dryrun -- no upload)" -ForegroundColor Cyan
     
+    # release.ps1 reads Nexus URL from $env:APP_NEXUS_BASE_URL.
+    $env:APP_NEXUS_BASE_URL = $nexusUrl
+
     $releaseArgs = @{
-        NexusBaseUrl = $nexusUrl
         Notes = "dryrun build"
     }
     if ($Force) { $releaseArgs["Force"] = $true }
-    
+
     & "$PSScriptRoot\release.ps1" @releaseArgs
 } else {
     Write-Host "==> SkipBuild: skipping build step" -ForegroundColor Yellow
@@ -95,6 +97,14 @@ try {
     Write-Host "    url        : $($latest.url)"
     Write-Host "    sha256     : $($latest.sha256.Substring(0,16))..."
     Write-Host "    size       : $($latest.size) bytes"
+
+    # Verify both EXE files exist in release/
+    $plainExe = "release/$AppName.exe"
+    $versionedExe = Get-ChildItem "release/$AppName-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    Write-Host ""
+    Write-Host "    plain exe  : $(if (Test-Path $plainExe) { 'OK' } else { 'MISSING' })"
+    Write-Host "    versioned  : $(if ($versionedExe) { $versionedExe.Name } else { 'MISSING' })"
+    Write-Host "    url target : $AppName.exe (version-less)"
 } catch {
     Write-Host "ERROR: failed to fetch latest.json: $_" -ForegroundColor Red
 }
