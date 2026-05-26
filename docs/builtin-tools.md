@@ -76,19 +76,20 @@ ECharts 인터랙티브 차트를 아티팩트 패널에 표시한다.
 
 | 인자 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---|---|---|
-| `series` | `list[{name, data}]` | **필수** | — | 시리즈 목록 |
-| `chart_type` | string | 선택 | `"scatter"` | `scatter` \| `line` \| `bar` |
+| `series` | `list[{name, data}]` | 조건부 | — | 시리즈 목록. `option` 지정 시 무시됨 |
+| `chart_type` | string | 선택 | `"scatter"` | `scatter` \| `line` \| `bar` \| `histogram` \| `box` \| `heatmap` |
 | `title` | string | 선택 | `""` | 차트 제목 |
 | `x_label` | string | 선택 | `""` | X축 레이블 |
 | `y_label` | string | 선택 | `""` | Y축 레이블 |
-| `extra_option` | object | 선택 | `null` | ECharts option 추가 필드 (기본 option 에 deep-merge) |
+| `extra_option` | object | 선택 | `null` | ECharts option 추가 필드 (기본 option 에 deep-merge, list 는 교체) |
+| `option` | object | 선택 | `null` | 완전한 ECharts option 직접 전달. **지정 시 `series`·`chart_type` 완전 무시** |
 
 `series` 각 항목:
 
 | 키 | 설명 |
 |---|---|
 | `name` | 범례·툴팁에 표시할 시리즈 이름 |
-| `data` | scatter: `[[x,y], ...]` / line·bar: `[v, ...]` |
+| `data` | scatter: `[[x,y], ...]` / line·bar: `[v, ...]` / box: `[[min,Q1,median,Q3,max], ...]` / heatmap: `[[x_idx,y_idx,value], ...]` |
 
 #### 동작
 
@@ -115,6 +116,100 @@ ECharts 인터랙티브 차트를 아티팩트 패널에 표시한다.
 }
 ```
 
+#### 고급 차트 타입별 예시
+
+**시계열 Scatter** — `extra_option` 으로 x축을 time 타입으로 전환. x 값은 ISO 8601 문자열.
+
+```json
+{
+  "name": "display_chart",
+  "arguments": {
+    "chart_type": "scatter",
+    "series": [
+      { "name": "측정값", "data": [["2024-01-01T09:00:00", 12.3], ["2024-01-02T09:00:00", 14.5]] }
+    ],
+    "title": "일별 측정값 추이",
+    "x_label": "날짜",
+    "y_label": "측정값",
+    "extra_option": {
+      "xAxis": { "type": "time" },
+      "tooltip": { "trigger": "item" }
+    }
+  }
+}
+```
+
+**ECDF** — ECharts 네이티브 타입 없음. 도구 또는 SKILL 에서 누적분포 데이터를 직접 계산한 뒤 `line` + `step: "end"` 로 전달.
+
+```json
+{
+  "name": "display_chart",
+  "arguments": {
+    "chart_type": "line",
+    "series": [
+      { "name": "ECDF", "data": [1.0, 2.1, 3.4, 4.8, 6.2] }
+    ],
+    "title": "누적분포함수 (ECDF)",
+    "x_label": "값",
+    "y_label": "누적 확률",
+    "extra_option": {
+      "series": [{ "step": "end" }],
+      "yAxis": { "min": 0, "max": 1 }
+    }
+  }
+}
+```
+
+> data 는 정렬된 원시값 목록이 아니라 `[[값, 누적확률], ...]` 형태의 scatter 포맷으로 전달해야 정확하다.  
+> 예: `[[1.0, 0.1], [2.1, 0.2], [3.4, 0.5], ...]`
+
+**Box Plot** — `chart_type="box"` 사용. data 각 항목은 `[min, Q1, median, Q3, max]`.
+
+```json
+{
+  "name": "display_chart",
+  "arguments": {
+    "chart_type": "box",
+    "series": [
+      { "name": "박스플롯", "data": [[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]] }
+    ],
+    "title": "그룹별 분포",
+    "extra_option": {
+      "xAxis": { "data": ["그룹A", "그룹B"] }
+    }
+  }
+}
+```
+
+> Python 도구 안에서는 `from agent.tools._chart_builders import build_box_series` 를 활용하면  
+> 그룹별 raw 값 목록 → boxplot series + extra_option 을 자동 생성할 수 있다.
+
+**완전 커스텀 (`option` 직접 전달)** — ECharts 가 지원하는 모든 타입(radar, candlestick, gauge, sunburst 등) 사용 가능.
+
+```json
+{
+  "name": "display_chart",
+  "arguments": {
+    "option": {
+      "title": { "text": "역량 레이더" },
+      "radar": {
+        "indicator": [
+          { "name": "속도", "max": 100 },
+          { "name": "정확도", "max": 100 },
+          { "name": "안정성", "max": 100 }
+        ]
+      },
+      "series": [
+        {
+          "type": "radar",
+          "data": [{ "name": "현재", "value": [80, 95, 70] }]
+        }
+      ]
+    }
+  }
+}
+```
+
 #### SKILL 에서 작성 방법
 
 ```markdown
@@ -123,6 +218,17 @@ ECharts 인터랙티브 차트를 아티팩트 패널에 표시한다.
 2. 수집 실행 → `complete_todo`
 3. 정제 실행 → `complete_todo`
 4. `display_chart(chart_type, series, title, ...)` 로 결과 시각화 → `complete_todo`
+```
+
+SKILL 에서 특수 차트를 사용할 때는 어떤 인자를 어떻게 넘길지 명시해야 LLM 이 올바르게 호출한다. 예:
+
+```markdown
+## 시각화 규칙
+- 시계열 scatter: `chart_type="scatter"`, `extra_option={"xAxis": {"type": "time"}}` 필수.
+  x축 값은 ISO 8601 문자열 형식으로 전달한다.
+- ECDF: `chart_type="line"`, data 는 `[[값, 누적확률], ...]` scatter 포맷,
+  `extra_option={"series": [{"step": "end"}], "yAxis": {"min": 0, "max": 1}}` 포함.
+- 완전 커스텀: `option=` 에 ECharts option 전체를 전달하고 `series`·`chart_type` 생략.
 ```
 
 ---
