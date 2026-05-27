@@ -1219,9 +1219,22 @@ async def _execute_tool(call: ToolCall, registry: ToolRegistry) -> ToolResult:
             is_error=True,
         )
 
+    # LLM 이 보낸 raw 문자열 인자를 Pydantic 으로 강제 변환 (str → date 등).
+    # validate_tool_args 가 통과시킨 후에도 실제 호출 직전에 한 번 더 coerce 해
+    # 도구 함수 본체에서 타입 불일치 에러가 발생하는 경우를 사전 차단한다.
+    try:
+        parsed = tool.input_model.model_validate(call.arguments or {})
+        coerced_args = parsed.model_dump()
+    except Exception as exc:
+        logger.warning("tool '%s' argument coercion failed: %s", call.name, exc)
+        return ToolResult(
+            content=f"[error] 인자 변환 실패: {type(exc).__name__}: {exc}",
+            is_error=True,
+        )
+
     try:
         result = await asyncio.wait_for(
-            tool.fn(**(call.arguments or {})), timeout=tool.timeout_seconds
+            tool.fn(**coerced_args), timeout=tool.timeout_seconds
         )
     except asyncio.TimeoutError:
         result = ToolResult(

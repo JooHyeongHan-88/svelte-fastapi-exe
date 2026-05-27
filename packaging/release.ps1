@@ -20,7 +20,7 @@
 #   pwsh packaging/release.ps1 -Upload -Notes "변경사항 요약"
 #
 # Nexus URL/자격증명은 .env(APP_NEXUS_BASE_URL, APP_NEXUS_USER, APP_NEXUS_PASSWORD)에서 읽는다.
-# 업로드 실행은 packaging/update.py 에 위임된다.
+# 업로드 실행은 packaging/upload.py 에 위임된다.
 
 param(
     [switch]$Upload,
@@ -153,11 +153,11 @@ Write-Host "    $versionedPath  ($size bytes)"
 Write-Host "    sha256 : $sha256"
 Write-Host "    $latestJsonPath"
 
-# 6. upload — Python 스크립트에 위임 (프록시·SSL 설정은 update.py 에서 처리)
+# 6. upload — Python 스크립트에 위임 (프록시·SSL 설정은 upload.py 에서 처리)
 if ($Upload) {
-    Write-Host "==> uploading via packaging/update.py"
-    uv run packaging/update.py
-    if ($LASTEXITCODE -ne 0) { throw "upload failed (packaging/update.py exited $LASTEXITCODE)" }
+    Write-Host "==> uploading via packaging/upload.py"
+    uv run packaging/upload.py
+    if ($LASTEXITCODE -ne 0) { throw "upload failed (packaging/upload.py exited $LASTEXITCODE)" }
 } else {
     Write-Host ""
     Write-Host "Skipping upload. Add -Upload flag to push to Nexus."

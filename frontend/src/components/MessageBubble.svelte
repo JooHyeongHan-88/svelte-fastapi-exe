@@ -66,10 +66,10 @@
             <div class="agent-progress">
               <div class="agent-progress-label">{slot.agentId}</div>
               {#if slot.activeSkills && slot.activeSkills.length > 0}
-                <div class="skill-bar">
+                <div class="agent-skill-bar">
                   {#each slot.activeSkills as skill (skill)}
-                    <span class="skill-chip">
-                      <span class="skill-icon">✦</span>
+                    <span class="agent-skill-chip">
+                      <span class="agent-skill-icon">◆</span>
                       {skill}
                     </span>
                   {/each}
@@ -250,6 +250,37 @@
       opacity: 1;
       transform: scale(1) translateY(0);
     }
+  }
+
+  /* ── 에이전트 내부 스킬 뱃지 (skill-chip 과 구분) ── */
+  .agent-skill-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+
+  .agent-skill-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    background: color-mix(in srgb, var(--border) 40%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 7px 2px 6px;
+    line-height: 1.6;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+    animation: skill-pop 0.18s ease-out both;
+  }
+
+  .agent-skill-icon {
+    font-size: 8px;
+    line-height: 1;
+    opacity: 0.65;
   }
 
   /* ── 멀티 에이전트 trail / progress ── */
