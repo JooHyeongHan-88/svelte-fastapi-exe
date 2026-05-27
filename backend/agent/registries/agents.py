@@ -23,7 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 class AgentMeta(BaseModel):
-    """AGENTS/*.md 의 YAML Front Matter 스키마."""
+    """AGENTS/*.md 의 YAML Front Matter 스키마.
+
+    role/goal/when_to_delegate 는 CrewAI 스타일 페르소나 메타데이터로, 오케스트레이터가
+    위임 판단을 더 정확히 할 수 있도록 추가됐다. 모두 Optional 이므로 기존 .md 파일은
+    변경 없이 그대로 파싱된다.
+    """
 
     name: Annotated[str, "에이전트 식별자 — call_sub_agent 의 agent_name 인자"]
     description: Annotated[str, "오케스트레이터가 위임 결정에 참고할 한 줄 요약"]
@@ -34,6 +39,14 @@ class AgentMeta(BaseModel):
         list[str], "이 에이전트가 노출받을 도구 화이트리스트 — 빈 리스트면 전체"
     ] = Field(default_factory=list)
     priority: Annotated[int, "여러 에이전트가 동일 스킬을 등록했을 때 우선순위"] = 5
+    role: Annotated[
+        str | None, "에이전트 직무 정체성 한 줄 (예: '시니어 소프트웨어 엔지니어')"
+    ] = None
+    goal: Annotated[str | None, "에이전트가 달성하려는 궁극 목표 한 줄"] = None
+    when_to_delegate: Annotated[
+        str | None,
+        "오케스트레이터가 이 에이전트에게 위임해야 하는 신호 — 어떤 입력 패턴이 들어오면 위임할지",
+    ] = None
 
 
 class Agent(BaseModel):

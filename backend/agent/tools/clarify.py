@@ -20,11 +20,14 @@ from agent.registries.tools import ASK_USER, register_tool
     name=ASK_USER,
     description=(
         "사용자의 요청이 모호하거나 핵심 정보가 빠져 있을 때 호출한다. "
-        "도구 인자 검증 실패는 가드가 자동 처리하므로 그 경우엔 호출하지 말 것. "
+        "When to use: 대상·범위·기간 등 핵심 인자가 다의적이라 추정으로 진행하기 어려울 때, "
+        "또는 두 가지 행동을 모두 의도할 수 있어 한쪽으로 단정 불가능할 때. "
+        "When NOT to use: 도구 인자 형식 오류(슬롯 가드가 자동 처리), "
+        "합리적 추정이 가능한 경우(추정 후 진행 + 결과 보고에서 가정 명시), "
+        "또는 같은 질문을 직전 턴에 이미 던졌을 때(반복 금지 — 가장 합리적 해석으로 진행). "
         "input_type='choice' 이면 사용자는 options 중에서만 고를 수 있고, "
         "'text' 이면 자유 입력만 받으며, 'both' 이면 옵션도 보여주고 자유 입력도 허용한다. "
-        "options 가 비어 있으면 input_type 은 자동으로 'text' 로 강제된다. "
-        "같은 질문을 두 턴 연속 반복하지 말 것 — 답변이 여전히 모호하면 가장 합리적인 해석으로 진행한다."
+        "options 가 비어 있으면 input_type 은 자동으로 'text' 로 강제된다."
     ),
     sentinel=True,
 )

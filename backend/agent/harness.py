@@ -871,9 +871,17 @@ def _compose_orchestrator_system_prompt(
         skill_to_agent: dict[str, str] = {}
         for m in metas:
             skills_str = ", ".join(m.skills) if m.skills else "(없음)"
-            catalog_lines.append(
-                f"- **{m.name}**: {m.description}\n  전담 스킬: {skills_str}"
-            )
+            agent_block: list[str] = [f"- **{m.name}**: {m.description}"]
+            if m.role:
+                agent_block.append(f"  Role: {m.role}")
+            if m.goal:
+                agent_block.append(f"  Goal: {m.goal}")
+            if m.when_to_delegate:
+                # YAML | 블록 입력에 포함된 줄바꿈은 시각적 노이즈가 되므로 한 줄로 정규화.
+                inlined = " ".join(m.when_to_delegate.split())
+                agent_block.append(f"  When to delegate: {inlined}")
+            agent_block.append(f"  전담 스킬: {skills_str}")
+            catalog_lines.append("\n".join(agent_block))
             for sk in m.skills:
                 skill_to_agent.setdefault(sk, m.name)
 
@@ -903,7 +911,16 @@ def _compose_sub_agent_system_prompt(
     LLM 시야에 보이지 않는다 (무한 재귀 방지).
     """
     parts: list[str] = [base] if base else []
-    parts.append(f"\n# 당신은 '{agent.meta.name}' 서브 에이전트입니다\n{agent.body}")
+    identity_lines: list[str] = [f"\n# 당신은 '{agent.meta.name}' 서브 에이전트입니다"]
+    if agent.meta.role:
+        identity_lines.append(f"- Role: {agent.meta.role}")
+    if agent.meta.goal:
+        identity_lines.append(f"- Goal: {agent.meta.goal}")
+    if len(identity_lines) > 1:
+        # role/goal 블록과 body 사이 시각 구분을 위한 빈 줄.
+        identity_lines.append("")
+    identity_lines.append(agent.body)
+    parts.append("\n".join(identity_lines))
     for s in skill_bodies:
         parts.append(f"\n# 학습 Skill: {s.meta.name}\n{s.body}")
     parts.append(

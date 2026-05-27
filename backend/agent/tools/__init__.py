@@ -7,6 +7,14 @@
 부팅 진입점: `backend/main.py` 가 `import agent.tools` 한 줄로 트리거.
 """
 
-from agent.tools import builtin, clarify, demo, dispatch, planner, visualize  # noqa: F401 — 등록 부수효과
+from agent.tools import (  # noqa: F401 — 등록 부수효과
+    artifact,
+    builtin,
+    clarify,
+    demo,
+    dispatch,
+    planner,
+    visualize,
+)
 
 __all__: list[str] = []

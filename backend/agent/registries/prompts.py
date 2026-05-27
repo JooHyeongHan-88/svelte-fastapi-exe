@@ -21,10 +21,16 @@ logger = logging.getLogger(__name__)
 class PromptRegistry:
     """PROMPTS/*.md 를 합성해 system prompt 베이스를 만든다."""
 
-    # 합성 순서 — base(페르소나) → safety(가드레일) → orchestrator(라우팅 규칙).
+    # 합성 순서 — base(페르소나) → safety(가드레일) → tools_guide(도구 사용 철학) → orchestrator(라우팅 규칙).
+    # tools_guide.md 는 오케스트레이터·서브 에이전트 양쪽에 모두 적용되도록 orchestrator 보다 앞에 둔다.
     # orchestrator.md 는 오케스트레이터 호출 시에만 포함 (서브 에이전트에는 제외).
-    # 이 세 파일 외에 PROMPTS/ 에 추가된 .md 파일은 동적으로 뒤에 이어 붙는다.
-    _ORDERED_FILES: tuple[str, ...] = ("base.md", "safety.md", "orchestrator.md")
+    # 이 네 파일 외에 PROMPTS/ 에 추가된 .md 파일은 동적으로 뒤에 이어 붙는다.
+    _ORDERED_FILES: tuple[str, ...] = (
+        "base.md",
+        "safety.md",
+        "tools_guide.md",
+        "orchestrator.md",
+    )
     _ORCHESTRATOR_ONLY: frozenset[str] = frozenset({"orchestrator.md"})
 
     def __init__(self, prompts_dir: Path | None = None) -> None:

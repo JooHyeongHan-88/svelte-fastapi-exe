@@ -23,6 +23,7 @@ Svelte(Vite) 정적 자산을 FastAPI가 서빙하고 PyInstaller로 단일 `.ex
 | 일반 질문 | 텍스트로 직접 답변 |
 | 도구 실행이 필요한 작업 | `add_todo` 로 plan 작성 → 등록된 tool 순차 실행 → `complete_todo` |
 | 복잡한 작업 (여러 도메인) | 오케스트레이터가 `call_sub_agent` 로 서브 에이전트에게 위임 |
+| 산출물을 저장해야 할 때 | `save_artifact(filename, content, kind)` → 반환된 `path` 를 `display_markdown` 등에 전달 |
 
 **서브 에이전트 제약**: 항상 순차 실행, 백그라운드 실행 없음, `call_sub_agent` 재호출 불가(4중 방어선).
 
@@ -38,6 +39,33 @@ Svelte(Vite) 정적 자산을 FastAPI가 서빙하고 PyInstaller로 단일 `.ex
 - **L3** `_execute_tool` sentinel guard: hallucinate 호출도 `[error] sentinel tool ...` 반환
 
 회귀 테스트: `backend/tests/test_subagent_isolation.py`
+
+### 산출물 저장 패턴 (`save_artifact` + `turn_slot`)
+
+LLM이 파일을 직접 영속화할 수 있는 유일한 경로. `backend/agent/tools/artifact.py`.
+
+```python
+# 표준 체인 — LLM이 한 턴에서 실행하는 순서
+save_artifact(filename="report.md", content="# ...", kind="markdown")
+# → result/<session>/<ts>/report.md 생성, 반환값에 상대경로 포함
+display_markdown(source="result/<session>/<ts>/report.md")
+```
+
+- **`turn_slot()`** (`core/result_store.py`): 같은 턴 내 `save_artifact` 를 여러 번 호출해도 단일 타임스탬프 폴더를 재사용한다. 새 턴 진입 시 `set_session_context()` 가 캐시를 리셋.
+- filename 에 `/`, `\`, `..`, 절대경로 포함 시 `is_error=True` 반환.
+- `kind` 와 파일 확장자가 불일치해도 `is_error=True` (예: `kind="markdown"`, `filename="data.json"`).
+
+### AgentMeta 확장 필드 (`AGENTS/*.md` Front Matter)
+
+`backend/agent/registries/agents.py`의 `AgentMeta` 에 CrewAI 스타일 Optional 필드 추가:
+
+| 필드 | 설명 |
+|---|---|
+| `role` | 에이전트 직무 정체성 한 줄 (예: "시니어 소프트웨어 엔지니어") |
+| `goal` | 에이전트가 달성하려는 궁극 목표 한 줄 |
+| `when_to_delegate` | 오케스트레이터가 이 에이전트로 위임해야 하는 상황 설명 |
+
+세 필드 모두 Optional — 기존 `.md` 파일은 변경 없이 파싱 가능. 값이 있으면 오케스트레이터 카탈로그와 서브 에이전트 자기 인식 헤더에 자동으로 주입된다.
 
 ---
 
@@ -123,8 +151,8 @@ pwsh packaging/release-dryrun.ps1 -Force
 
 | 파일 | 내용 |
 |---|---|
-| `builtin-tools.md` | 내장 도구(display_image·display_chart·display_markdown·add_todo 등) 인자·동작·예시 |
+| `builtin-tools.md` | 내장 도구(save_artifact·display_image·display_chart·display_markdown·add_todo 등) 인자·동작·예시 |
 | `mock-scenarios.md` | MockProvider 전체 시나리오(A~E) 트리거·흐름·산출물 경로·신규 시나리오 추가 방법 |
 | `skills.md` | `SKILLS/*.md` Front Matter 필드, 트리거 매칭 원리, 본문 작성 패턴 |
 | `agents.md` | `AGENTS/*.md` Front Matter 필드, Case 3 라우팅, 페르소나 작성법 |
-| `prompts.md` | `PROMPTS/*.md` 파일별 역할, 합성 순서, 핫리로드 정책 |
+| `prompts.md` | `PROMPTS/*.md` 파일별 역할, 합성 순서(`base → safety → tools_guide → orchestrator`), 핫리로드 정책 |

@@ -280,6 +280,10 @@ _TYPE_LABEL: dict[str, str] = {
 @register_tool(
     description=(
         "이미지를 채팅창 우측 아티팩트 패널에 표시한다. "
+        "When to use: 디스크에 존재하는 이미지(스크린샷·차트 이미지·아이콘 등) 또는 "
+        "공개 URL 이미지를 사용자에게 보여줄 때. "
+        "When NOT to use: 파일이 아직 디스크에 없을 때(저장 도구로 먼저 생성), "
+        "또는 동적 데이터를 시각화할 때(그 경우 display_chart 사용). "
         "source 는 프로젝트 자산 경로('build/web/assets/...' 또는 'assets/...'), "
         "워크스페이스 경로('workspace/...'), "
         "산출물 경로('result/<session>/...'), "
@@ -316,9 +320,14 @@ async def display_image(
 @register_tool(
     description=(
         "분석 결과를 ECharts 인터랙티브 차트로 아티팩트 패널에 표시한다. "
-        "scatter / line / bar / histogram / box / heatmap 타입을 지원하며 "
-        "드래그 선택·확대·저장 도구가 자동 포함된다. "
-        "extra_option 으로 ECharts option 을 직접 확장하거나, "
+        "When to use: 수치 데이터의 분포·추세·상관관계를 사용자에게 시각적으로 전달할 때. "
+        "데이터 성격에 맞춰 chart_type 을 골라라 — 상관관계는 scatter, 시계열은 line, "
+        "범주 비교는 bar, 분포는 histogram/box, 2차원 밀도는 heatmap. "
+        "When NOT to use: 데이터가 텍스트/표 형태일 때(그 경우 save_artifact + display_markdown), "
+        "또는 시리즈가 비어 있을 때(에러 반환). "
+        "Expected chaining: 데이터를 보유하면 즉시 호출 가능 — 사전 save 불필요. "
+        "단 원본 데이터를 디스크에도 남기려면 save_artifact(kind='json') 를 함께 호출해도 좋다. "
+        "extra_option 으로 ECharts option 을 부분 확장하거나, "
         "option 으로 완전한 ECharts option 을 직접 전달할 수 있다."
     ),
     slot_prompts={
@@ -383,9 +392,12 @@ async def display_chart(
 @register_tool(
     description=(
         "Markdown 산출물 파일을 채팅창 우측 아티팩트 패널에 렌더링한다. "
+        "When to use: 사전 저장된 .md 파일(보고서·요약·체크리스트 등)을 사용자에게 보여줄 때. "
+        "When NOT to use: 파일이 디스크에 아직 없을 때 — 반드시 save_artifact 로 먼저 저장하고 "
+        "반환된 path 를 source 로 전달하라. 짧은 텍스트 한두 줄은 도구 호출 없이 그냥 응답에 쓰면 된다. "
+        "Expected chaining: 표준 체인은 save_artifact(kind='markdown') → display_markdown(source=반환path). "
         "source 는 산출물 경로('result/<session>/<file>.md'), "
-        "워크스페이스 경로('workspace/...'), 또는 자산 경로('assets/...') 를 지원한다. "
-        "파일은 사전에 디스크에 저장되어 있어야 한다."
+        "워크스페이스 경로('workspace/...'), 또는 자산 경로('assets/...') 를 지원한다."
     ),
     slot_prompts={
         "source": "표시할 markdown 파일 경로를 알려주세요 (예: result/<session>/report.md)."

@@ -27,14 +27,43 @@ from agent.registries.tools import (  # noqa: E402
 from tests._runner import run_tests  # noqa: E402
 
 
+def _reload_all_tool_modules() -> None:
+    """Tool 모듈 전부를 reload 해 @register_tool 데코레이터를 재실행한다.
+
+    test_guard_pydantic·test_tools_decorator 등이 호출한 _reset_registry_for_tests 로
+    빈 상태가 된 registry 를 복구한다. 단순 ``import agent.tools`` 는 sys.modules
+    캐시 때문에 데코레이터가 다시 돌지 않으므로 명시적 reload 가 필요하다.
+    """
+    import importlib
+
+    import agent.tools.artifact
+    import agent.tools.builtin
+    import agent.tools.clarify
+    import agent.tools.demo
+    import agent.tools.dispatch
+    import agent.tools.planner
+    import agent.tools.visualize
+
+    for mod in (
+        agent.tools.builtin,
+        agent.tools.clarify,
+        agent.tools.dispatch,
+        agent.tools.planner,
+        agent.tools.visualize,
+        agent.tools.demo,
+        agent.tools.artifact,
+    ):
+        importlib.reload(mod)
+
+
 # ---------------------------------------------------------------------------
 # #10 — complete_subagent sentinel 등록 확인
 # ---------------------------------------------------------------------------
 
 
 def test_complete_subagent_is_registered() -> None:
-    """agent.tools import 없이 직접 확인 — 상수와 도구 이름이 일치해야 한다."""
-    import agent.tools  # noqa: F401 — 자기등록 트리거
+    """상수와 도구 이름이 일치해야 한다 — registry 가 비어 있어도 강건하게 복구."""
+    _reload_all_tool_modules()
 
     tool = get_registered_tool(COMPLETE_SUB_AGENT)
     assert tool is not None, "complete_subagent 가 등록되지 않음"
@@ -43,7 +72,7 @@ def test_complete_subagent_is_registered() -> None:
 
 
 def test_complete_subagent_has_summary_param() -> None:
-    import agent.tools  # noqa: F401
+    _reload_all_tool_modules()
 
     tool = get_registered_tool(COMPLETE_SUB_AGENT)
     assert tool is not None
@@ -171,7 +200,7 @@ def test_agent_state_backward_compat_old_json() -> None:
 
 def test_filter_specs_excludes_only_sub_agent_dispatch() -> None:
     """_filter_specs_for_sub_agent 가 SUB_AGENT_DISPATCH 만 제거하는지 확인."""
-    import agent.tools  # noqa: F401
+    _reload_all_tool_modules()
 
     from agent.harness import _filter_specs_for_sub_agent
     from agent.registries.agents import Agent, AgentMeta

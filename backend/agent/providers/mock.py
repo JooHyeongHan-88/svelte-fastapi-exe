@@ -1066,24 +1066,42 @@ def _load_correlation_artifact(artifact: Path) -> dict:
 def _data_analysis_scenario(
     messages: list[Message],
 ) -> AsyncIterator[StreamEvent]:
-    """B3 — data_analysis skill: 3회 provider 호출 + 파일 산출물 기반.
+    """B3 — data_analysis skill: 3회 provider 호출 + LLM-visible save_artifact 시연.
 
-    호출 1: SKILL 실행 결과물 파일을 `result/{session}/{ts}/correlation.json` 에
-            기록하고 add_todo(3) 등록.
-    호출 2: complete_todo × 3 + display_chart  (파일을 읽어 차트 인자로 변환)
+    호출 1: save_artifact(correlation.json) + add_todo(3) — Python 이 파일을 직접 쓰지 않고
+            LLM 이 호출하는 save_artifact 도구로 산출물을 저장하는 패턴을 시연한다.
+            실제 LLM 으로 전환했을 때도 동일하게 동작하도록 설계.
+    호출 2: complete_todo × 3 + display_chart  (저장된 파일을 읽어 차트 인자로 변환)
     호출 3: 자연어 최종 보고
 
     SkillActiveEvent 는 harness 가 `SkillRegistry.select` 결과로 이미 emit 하므로
     mock 에서 별도로 yield 하지 않는다.
     """
-    has_add = _has_recent_tool_result(messages, "mock-da-add-")
+    has_save = _has_recent_tool_result(messages, "mock-da-save-")
     has_chart = _has_recent_tool_result(messages, "mock-da-chart-")
 
-    # ── 호출 1: SKILL 실행 → 가상 산출물 파일 생성 + add_todo 등록 ────────
-    if not has_add:
-        artifact = _ensure_correlation_artifact()
+    # ── 호출 1: save_artifact(LLM-visible) + add_todo 등록 ────────────────
+    if not has_save:
+        payload = {
+            "x_label": "변수 X",
+            "y_label": "변수 Y",
+            "points": _MOCK_SCATTER_DATA,
+        }
+        content_str = json.dumps(payload, ensure_ascii=False, indent=2)
 
-        async def _add() -> AsyncIterator[StreamEvent]:
+        async def _save_and_add() -> AsyncIterator[StreamEvent]:
+            # save_artifact 가 먼저 와야 add_todo 의 description 에서 파일명을 참조할 수 있다.
+            yield ToolCallEvent(
+                call=ToolCall(
+                    id=f"mock-da-save-{uuid.uuid4().hex[:8]}",
+                    name="save_artifact",
+                    arguments={
+                        "filename": "correlation.json",
+                        "content": content_str,
+                        "kind": "json",
+                    },
+                )
+            )
             yield ToolCallEvent(
                 call=ToolCall(
                     id=f"mock-da-add-{uuid.uuid4().hex[:8]}",
@@ -1092,7 +1110,7 @@ def _data_analysis_scenario(
                         "items": [
                             {
                                 "description": (
-                                    f"데이터 수집 — 가상 표본 30건 저장 ({artifact.name})"
+                                    "데이터 수집 — 가상 표본 30건 저장 (correlation.json)"
                                 )
                             },
                             {"description": "정제 — 결측·이상치·중복 처리"},
@@ -1103,7 +1121,7 @@ def _data_analysis_scenario(
             )
             yield DoneEvent()
 
-        return _add()
+        return _save_and_add()
 
     task_ids = _extract_task_ids(messages, "mock-da-add-")
 

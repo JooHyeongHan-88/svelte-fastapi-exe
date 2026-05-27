@@ -16,9 +16,13 @@ from agent.registries.tools import (
 @register_tool(
     name=PLANNER_ADD_TODO,
     description=(
-        "두 단계 이상이 필요한 작업을 시작할 때 항상 먼저 호출한다. "
+        "작업을 단계별로 분해해 todo 체크리스트에 추가한다. "
+        "When to use: 도구를 2회 이상 호출해야 하거나 도메인이 다른 작업이 섞여 있을 때, "
+        "또는 멀티 스킬이 동시 활성화됐을 때 반드시 먼저 호출한다. "
+        "When NOT to use: 단일 도구 1회로 끝나는 단순 질의(예: '지금 몇 시야?'). "
+        "Expected chaining: add_todo → 각 step 도구 실행 → 각 단계 완료 즉시 complete_todo. "
         "각 item 은 description(필수)과 tool_name(선택, 사용할 도구 힌트)을 가진다. "
-        "호출 즉시 todo_list 에 PENDING 상태로 추가된다."
+        "호출 즉시 todo_list 에 PENDING 상태로 추가되며 사용자 UI 에도 표시된다."
     ),
     slot_prompts={"items": "어떤 단계들로 작업을 분해하면 좋을까요?"},
     sentinel=True,
@@ -35,9 +39,13 @@ async def add_todo(
 @register_tool(
     name=PLANNER_COMPLETE_TODO,
     description=(
-        "todo_list 의 한 단계를 처리 완료 표시한다. task_id 는 add_todo 또는 직전 "
-        "todo_update 이벤트에서 얻은 식별자를 사용한다. "
-        "도구 실행이 실패했거나 단계를 건너뛸 때는 status 를 'failed' 또는 'skipped' 로 지정한다."
+        "todo_list 의 한 단계를 처리 완료 표시한다. "
+        "When to use: add_todo 로 등록한 step 의 실제 작업(도구 호출·분석)이 끝나는 즉시. "
+        "여러 단계를 한 번에 묶어 표시하지 말고 step 마다 곧바로 호출한다. "
+        "When NOT to use: add_todo 가 등록되지 않은 task_id 호출(매칭 실패), "
+        "또는 아직 작업이 끝나지 않은 step 을 미리 표시하는 행위. "
+        "도구 실행이 실패했거나 단계를 건너뛸 때는 status 를 'failed' 또는 'skipped' 로 지정한다. "
+        "task_id 는 add_todo 또는 직전 todo_update 이벤트에서 얻은 식별자를 사용한다."
     ),
     slot_prompts={"task_id": "어느 단계를 완료 처리하시겠습니까?"},
     sentinel=True,

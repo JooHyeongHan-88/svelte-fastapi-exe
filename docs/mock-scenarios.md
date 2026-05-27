@@ -226,6 +226,35 @@ f"result/{session_dir_name()}/{slot.name}/{dest.name}"
 f"result/{artifact.parent.parent.name}/{artifact.parent.name}/{artifact.name}"
 ```
 
+### LLM-visible 산출물 저장 패턴 (권장)
+
+가능하면 mock 시나리오도 Python 이 직접 디스크에 쓰지 말고 **`save_artifact` 도구 호출
+이벤트를 yield** 해 실제 LLM 동작을 모방한다. 이렇게 하면 mock → real LLM 전환 시
+파이프라인이 그대로 작동하며, save_artifact 의 검증·turn_slot 캐시 동작도 함께 검증된다.
+
+```python
+yield ToolCallEvent(
+    call=ToolCall(
+        id=f"mock-xxx-save-{uuid.uuid4().hex[:8]}",
+        name="save_artifact",
+        arguments={
+            "filename": "my_output.json",
+            "content": json.dumps(data, ensure_ascii=False, indent=2),
+            "kind": "json",
+        },
+    )
+)
+```
+
+후속 호출에서 파일을 읽을 때는 `_find_existing_artifact(filename)` 로 같은 세션 디렉터리를
+역순 탐색하면 turn_slot 이 만든 폴더에서 곧바로 발견된다.
+
+**현재 상태**:
+- B3 (data_analysis) 시나리오 — `save_artifact` 호출 패턴으로 시연 (권장 패턴 레퍼런스)
+- D5 (report_agent) 시나리오 — 직접 write 유지 (신/구 패턴 비교용 디버깅 레퍼런스)
+
+새 시나리오는 가능하면 B3 패턴을 따른다.
+
 ### Mock Provider 전환
 
 설정 UI(`/api/settings`) 에서 provider 를 `mock` 으로 전환하거나,
