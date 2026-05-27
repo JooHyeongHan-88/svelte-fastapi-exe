@@ -1,5 +1,42 @@
 # 에이전트 확장 패턴
 
+## 라이브러리 노출 패턴 선택
+
+외부 Python 라이브러리(`sensordx` 등)를 Agent 에게 노출할 때 두 가지 패턴이 있다:
+
+| 패턴 | 언제 |
+|---|---|
+| **A. `@register_tool` 1:1 매핑** | 함수가 5개 이하, 인자/반환 타입이 단순(`str`/`int`/`dict`/...), 시그니처가 LLM 에 명시적으로 보이는 게 더 안전한 경우 |
+| **B. `api_refs` 메타 도구** | API 가 많음, DataFrame/ndarray 등 객체 반환·체이닝 필요, 라이브러리가 자주 업데이트되어 wrapper 유지보수 비용이 큼 |
+
+대부분의 도메인 라이브러리(특히 데이터 분석)는 **B 패턴**이 적합하다. `.env` 의 `APP_ALLOWED_LIBRARIES` 에 패키지 루트 한 줄, SKILL/AGENT 의 `api_refs` 에 노출하고 싶은 함수만 적으면 끝. 자세한 내용은 [docs/library-runtime.md](../../docs/library-runtime.md).
+
+A 패턴은 아래 절차를 따른다.
+
+### `backend/scripts/` — 프로젝트 전용 Python 스크립트 패키지
+
+`.venv` 에 설치하기엔 과한 경량 유틸리티나 도메인 전용 로직은 `backend/scripts/` 에 Python 파일로 추가한다.
+
+```
+backend/scripts/
+  __init__.py        ← 반드시 존재해야 Python 패키지로 인식
+  my_util.py
+  data_transform.py
+```
+
+**사용 방법**: `APP_ALLOWED_LIBRARIES=scripts` + SKILL 의 `api_refs`:
+
+```yaml
+api_refs:
+  - scripts.my_util.process_data
+```
+
+**EXE 자동 번들링**: `App.spec` 이 `collect_submodules('scripts')` 로 자동 수집. 파일 추가만으로 다음 빌드에 반영된다 — spec 파일 수정 불필요.
+
+> `scripts` 는 `APP_ALLOWED_LIBRARIES` 에서 `collect_all()` 대신 `collect_submodules()` 로 수집됨 (App.spec 에 명시적으로 처리됨).
+
+---
+
 ## 새 API를 Tool로 등록하기
 
 `backend/agent/tools/` 에 새 `.py` 파일을 만들고 `@register_tool` 데코레이터를 붙이기만 하면 된다.

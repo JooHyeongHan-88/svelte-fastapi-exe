@@ -129,6 +129,9 @@ pwsh packaging/release-dryrun.ps1 -Force
 | `APP_MAX_HISTORY_MESSAGES` | `40` | 클라이언트당 보관 메시지 수 상한 |
 | `APP_SETTINGS_TEST_TIMEOUT` | `10` | 연결 테스트 타임아웃 (초) |
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | Tool 1회 실행 timeout (초) — 도구별 `timeout_seconds` 로 override |
+| `APP_ALLOWED_LIBRARIES` | — | 라이브러리 런타임에 노출할 패키지 루트 CSV (예: `sensordx,my_lib`). `App.spec` 빌드 시 자동으로 `collect_all()` 수행 → `.env` 한 줄만 추가하면 EXE에도 번들링됨. [docs/library-runtime.md](docs/library-runtime.md) |
+| `APP_NAMESPACE_MEMORY_THRESHOLD` | `10485760` (10MB) | 세션 namespace 변수 in-memory 한계. 초과 시 disk 로 spill |
+| `APP_NAMESPACE_MAX_VARS` | `20` | 세션당 namespace 변수 총 상한. 초과 시 LRU 제거 |
 
 > `.env` 값에 `# 인라인 주석`이 있어도 파서가 자동으로 제거한다.
 
@@ -152,6 +155,7 @@ pwsh packaging/release-dryrun.ps1 -Force
 | 파일 | 내용 |
 |---|---|
 | `builtin-tools.md` | 내장 도구(save_artifact·display_image·display_chart·display_markdown·add_todo 등) 인자·동작·예시 |
+| `library-runtime.md` | 외부 Python 라이브러리를 `api_refs` 로 동적 노출하는 baseline — 8개 메타 도구(`exec_code` 포함), 세션 namespace, 보안 모델 |
 | `mock-scenarios.md` | MockProvider 전체 시나리오(A~E) 트리거·흐름·산출물 경로·신규 시나리오 추가 방법 |
 | `skills.md` | `SKILLS/*.md` Front Matter 필드, 트리거 매칭 원리, 본문 작성 패턴 |
 | `agents.md` | `AGENTS/*.md` Front Matter 필드, Case 3 라우팅, 페르소나 작성법 |

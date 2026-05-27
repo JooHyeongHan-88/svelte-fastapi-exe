@@ -68,6 +68,8 @@ from agent.registries.tools import (
     SUB_AGENT_DISPATCH,
     ToolRegistry,
 )
+from agent.runtime import introspect
+from agent.tools.runtime import INFRASTRUCTURE_TOOL_NAMES
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
 
@@ -228,6 +230,10 @@ async def run_turn(
             if s.name != COMPLETE_SUB_AGENT
             and (has_agents or s.name != SUB_AGENT_DISPATCH)
         ]
+        # api_refs 가 있는 SKILL 이 활성화되면 infrastructure tools 를 자동 노출한다 —
+        # SKILL 본문에 명시하지 않아도 LLM 이 자체 plan 에 활용 가능.
+        if _skills_require_runtime_tools(skills):
+            orchestrator_specs = _inject_runtime_tools(orchestrator_specs, registry)
 
         budget = TurnBudget(max_calls=max_agent_calls)
 
@@ -689,7 +695,7 @@ async def _dispatch_sub_agent(
         Message(role="system", content=sub_system),
         Message(role="user", content=task),
     ]
-    sub_specs = _filter_specs_for_sub_agent(registry.specs(), agent)
+    sub_specs = _filter_specs_for_sub_agent(registry.specs(), agent, skill_bodies)
 
     # 서브 에이전트 전용 로컬 상태 — PLANNER 도구 지원용. 디스크에 영속화하지 않음.
     sub_state = AgentState()
@@ -895,7 +901,56 @@ def _compose_orchestrator_system_prompt(
             )
         parts.append("\n".join(catalog_lines))
 
+    # Library runtime — 활성 스킬들의 api_refs 를 모아 한 섹션으로 주입.
+    api_section = _render_skills_api_refs(skills)
+    if api_section:
+        parts.append("\n" + api_section)
+
     return "\n".join(parts)
+
+
+def _render_skills_api_refs(skills: list[Skill]) -> str:
+    """활성 SKILL 목록의 api_refs 를 평면화해 ApiDoc 섹션으로 렌더링한다.
+
+    중복 ref 는 한 번만 노출하고, 모두 비어 있으면 빈 문자열 반환.
+    """
+    refs: list[str] = []
+    seen: set[str] = set()
+    for s in skills:
+        for r in s.meta.api_refs:
+            if r not in seen:
+                refs.append(r)
+                seen.add(r)
+    if not refs:
+        return ""
+    docs = introspect.collect_api_docs(refs)
+    return introspect.render_api_docs_section(docs)
+
+
+def _skills_require_runtime_tools(skills: list[Skill]) -> bool:
+    """활성 SKILL 중 하나라도 api_refs 를 가지면 infrastructure tools 가 필요하다."""
+    return any(s.meta.api_refs for s in skills)
+
+
+def _inject_runtime_tools(
+    specs: list[ToolSpec], registry: ToolRegistry
+) -> list[ToolSpec]:
+    """specs 에 INFRASTRUCTURE_TOOL_NAMES 가 빠져 있으면 추가한다.
+
+    이미 포함된 경우(자동 등록 등)는 중복 추가하지 않는다.
+    """
+    existing = {s.name for s in specs}
+    extra: list[ToolSpec] = []
+    for name in INFRASTRUCTURE_TOOL_NAMES:
+        if name in existing:
+            continue
+        rt = registry.get(name)
+        if rt is None:
+            continue
+        extra.append(
+            ToolSpec(name=rt.name, description=rt.description, parameters=rt.parameters)
+        )
+    return specs + extra
 
 
 def _compose_sub_agent_system_prompt(
@@ -907,8 +962,8 @@ def _compose_sub_agent_system_prompt(
     """서브 에이전트 system prompt — 격리된 컨텍스트로 페르소나·스킬 본문 주입.
 
     구성: safety+base (orchestrator.md 제외) + 에이전트 본문 + 학습 SKILL 본문
-    + Task Summary 종료 규약. 'call_sub_agent' 도구는 spec 에서 제거되므로
-    LLM 시야에 보이지 않는다 (무한 재귀 방지).
+    + Library APIs (있으면) + Task Summary 종료 규약. 'call_sub_agent' 도구는
+    spec 에서 제거되므로 LLM 시야에 보이지 않는다 (무한 재귀 방지).
     """
     parts: list[str] = [base] if base else []
     identity_lines: list[str] = [f"\n# 당신은 '{agent.meta.name}' 서브 에이전트입니다"]
@@ -923,6 +978,12 @@ def _compose_sub_agent_system_prompt(
     parts.append("\n".join(identity_lines))
     for s in skill_bodies:
         parts.append(f"\n# 학습 Skill: {s.meta.name}\n{s.body}")
+
+    # 에이전트 자체 api_refs + 학습 SKILL 들의 api_refs 를 합쳐 API 섹션으로 주입.
+    api_section = _collect_agent_api_refs_section(agent, skill_bodies)
+    if api_section:
+        parts.append("\n" + api_section)
+
     parts.append(
         "\n# 종료 규약 (필수)\n"
         "작업을 완료했으면 반드시 `complete_subagent` 도구를 호출해 결과를 반환하라.\n"
@@ -933,6 +994,25 @@ def _compose_sub_agent_system_prompt(
     return "\n".join(parts)
 
 
+def _collect_agent_api_refs_section(agent: Agent, skill_bodies: list[Skill]) -> str:
+    """에이전트 + 학습 SKILL 들의 api_refs 를 평면화해 ApiDoc 섹션 텍스트로 반환."""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for r in agent.meta.api_refs:
+        if r not in seen:
+            refs.append(r)
+            seen.add(r)
+    for s in skill_bodies:
+        for r in s.meta.api_refs:
+            if r not in seen:
+                refs.append(r)
+                seen.add(r)
+    if not refs:
+        return ""
+    docs = introspect.collect_api_docs(refs)
+    return introspect.render_api_docs_section(docs)
+
+
 def _resolve_agent_skills(agent: Agent, skill_registry: SkillRegistry) -> list[Skill]:
     """agent.meta.skills 의 이름들을 SkillRegistry 에서 lazy load. 미존재는 무시."""
     if not agent.meta.skills:
@@ -941,7 +1021,9 @@ def _resolve_agent_skills(agent: Agent, skill_registry: SkillRegistry) -> list[S
 
 
 def _filter_specs_for_sub_agent(
-    all_specs: list[ToolSpec], agent: Agent
+    all_specs: list[ToolSpec],
+    agent: Agent,
+    skill_bodies: list[Skill] | None = None,
 ) -> list[ToolSpec]:
     """서브 에이전트에게 노출할 도구 스펙.
 
@@ -954,14 +1036,29 @@ def _filter_specs_for_sub_agent(
     화이트리스트:
         - agent.meta.tools 비어 있으면 위 금지 외 전체.
         - 비어있지 않으면 그 화이트리스트만 (단 금지 도구는 항상 제외).
+
+    Infrastructure tools 자동 노출:
+        - 에이전트 또는 학습 SKILL 에 api_refs 가 하나라도 있으면 화이트리스트와
+          무관하게 INFRASTRUCTURE_TOOL_NAMES 가 specs 에 포함된다. SKILL 본문에
+          명시하지 않아도 LLM 이 자체 plan 으로 call_function/eval_expression 등을
+          호출 가능.
     """
     forbidden: frozenset[str] = frozenset({SUB_AGENT_DISPATCH})
     allowed = set(agent.meta.tools)
+
+    needs_runtime = bool(agent.meta.api_refs) or (
+        skill_bodies is not None and any(s.meta.api_refs for s in skill_bodies)
+    )
+    if needs_runtime:
+        allowed_runtime: set[str] = set(INFRASTRUCTURE_TOOL_NAMES)
+    else:
+        allowed_runtime = set()
+
     out: list[ToolSpec] = []
     for spec in all_specs:
         if spec.name in forbidden:
             continue
-        if allowed and spec.name not in allowed:
+        if allowed and spec.name not in allowed and spec.name not in allowed_runtime:
             continue
         out.append(spec)
     return out

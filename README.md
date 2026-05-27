@@ -36,10 +36,14 @@ svelte-fastapi-exe/
 │   ├── core/              # 앱 인프라 (LLM 무관)
 │   │   ├── config.py      # RESULT_DIR 등 모든 경로·타이머 상수
 │   │   └── result_store.py# 산출물 경로 관리 (artifact_slot, session_dir_name 등)
+│   ├── scripts/           # 프로젝트 전용 Python 유틸리티 패키지 (__init__.py 필수)
+│   │                      # APP_ALLOWED_LIBRARIES=scripts + api_refs 로 SKILL에서 사용
 │   ├── agent/             # LLM 에이전트 런타임
 │   │   ├── harness.py     # 핵심 턴 루프 (loop detection, error recovery, fallback 포함)
 │   │   ├── tools/         # @register_tool 기반 사내 API 도구 모음
+│   │   │   ├── runtime.py # 라이브러리 런타임 8개 메타 도구 (exec_code 등)
 │   │   │   └── visualize.py # display_image / display_chart / display_markdown
+│   │   ├── runtime/       # 세션 namespace · evaluator · introspect (library runtime 인프라)
 │   │   ├── registries/    # prompts, skills, tools, agents 카탈로그
 │   │   └── providers/     # factory + mock + openai (LLM 프로바이더 패키지)
 │   ├── api/               # /api/* 엔드포인트 — 도메인별 분할
@@ -184,6 +188,23 @@ cd backend && uv run python -m pytest tests/ -v
 |---|---|---|
 | `coding_agent` | "코딩", "코드 작성" 등 | 코드 작업 전담 |
 | `report_agent` | "리포트 에이전트", "report_agent" | Markdown 리포트 작성·`display_markdown` 렌더링 전담 |
+
+### 라이브러리 런타임 (`api_refs`)
+
+`.venv` 에 설치된 외부 Python 라이브러리(또는 `backend/scripts/`)를 SKILL/AGENT 에서 직접 호출할 수 있다.
+`@register_tool` 래핑 없이 `api_refs` 한 줄만 추가하면 LLM 이 해당 함수의 시그니처를 인지하고 8개 메타 도구로 실행한다.
+
+```yaml
+# SKILLS/sensor_max.md Front Matter 예시
+api_refs:
+  - sensordx.utils.load_df   # 함수 시그니처가 system prompt 에 자동 주입
+```
+
+LLM 은 `call_function` / `eval_expression` / `exec_code` 등 8개 메타 도구로 라이브러리를 호출하고 결과를 세션 namespace 에 보관한다.
+`.env` 의 `APP_ALLOWED_LIBRARIES` CSV 에 등록된 패키지만 허용 (보안 화이트리스트).
+App.spec 빌드 시 이 목록을 읽어 `collect_all()` 을 자동 실행 → EXE 에도 번들링됨.
+
+자세한 내용: [docs/library-runtime.md](docs/library-runtime.md)
 
 ### 아티팩트 패널 & 산출물 저장
 

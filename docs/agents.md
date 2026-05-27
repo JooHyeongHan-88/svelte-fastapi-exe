@@ -42,6 +42,10 @@ priority: 5
 | `skills` | string[] | 선택 | `[]` | 이 에이전트가 전담하는 SKILL 이름 목록. Case 3 자동 라우팅의 핵심 |
 | `tools` | string[] | 선택 | `[]` | 허용 도구 화이트리스트. **빈 리스트면 전체 도구 노출** |
 | `priority` | int | 선택 | `5` | 동일 스킬을 전담하는 에이전트가 여럿일 때 우선순위 |
+| `role` | string | 선택 | `null` | 직무 정체성 한 줄. 오케스트레이터 카탈로그·에이전트 자기인식에 사용 |
+| `goal` | string | 선택 | `null` | 에이전트가 달성하려는 궁극 목표 한 줄 |
+| `when_to_delegate` | string | 선택 | `null` | 오케스트레이터가 이 에이전트로 위임해야 하는 신호 — 입력 패턴 설명 |
+| `api_refs` | string[] | 선택 | `[]` | 외부 Python 라이브러리 dotted-path 목록. 위임 시 시그니처·docstring 이 system prompt 에 자동 주입되고 메타 도구 7종이 화이트리스트와 무관하게 노출됨 → [library-runtime.md](library-runtime.md) |
 
 ### name
 

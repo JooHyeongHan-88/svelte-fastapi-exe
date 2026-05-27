@@ -41,6 +41,7 @@ requires_tools: ["fetch_sales", "render_report", "send_email"]
 | `trigger` | string[] | 선택 | `[]` | 사용자 메시지에서 찾을 키워드 목록. 대소문자 무관 부분문자열 매칭 |
 | `priority` | int | 선택 | `5` | 여러 스킬이 동시에 매칭될 때 우선순위. 값이 클수록 먼저 선택 |
 | `requires_tools` | string[] | 선택 | `[]` | 이 스킬이 사용하는 도구 이름 힌트. 해당 도구가 미등록이면 priority 에서 감점 |
+| `api_refs` | string[] | 선택 | `[]` | 외부 Python 라이브러리 dotted-path 목록. 활성화 시 시그니처·docstring 이 system prompt 에 자동 주입되고 메타 도구 7종이 자동 노출됨 → [library-runtime.md](library-runtime.md) |
 
 ### name
 

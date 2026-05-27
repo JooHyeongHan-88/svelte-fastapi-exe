@@ -11,6 +11,10 @@
 
 > **새 정적 자산을 추가할 때** → `packaging/App.spec`의 `datas`에도 등록 필수.  
 > `PROMPTS/`, `SKILLS/`, `AGENTS/` 는 디렉터리 단위로 이미 등록됐으므로 파일 추가만으로 다음 빌드에 반영된다.
+>
+> **`backend/scripts/` 패키지**: `backend/` 가 PyInstaller `pathex` 에 포함되므로 `scripts/` 는 일반 Python 패키지(`__init__.py` 필수)로 자동 인식된다. `App.spec` 이 `collect_submodules('scripts')` 를 실행하므로 파일을 추가하면 다음 빌드에서 자동 번들링된다.
+>
+> **`APP_ALLOWED_LIBRARIES` 자동 번들링**: `App.spec` 이 빌드 시 `.env` 의 `APP_ALLOWED_LIBRARIES` 를 읽어 각 패키지에 `collect_all()` 을 실행한다. `.env` 한 줄 추가만으로 dev 런타임과 EXE 번들 양쪽에서 동시 사용 가능.
 
 ---
 
@@ -114,6 +118,28 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
 - `tools` 비어 있으면 에이전트에게 전체 도구 노출. 채워져 있으면 화이트리스트만.
 - `agent_registry` 가 `None` 이거나 빈 경우 → 단층 동작 (하위호환, SKILLS 직접 라우팅).
 - `TurnBudget`: 오케스트레이터 + 모든 서브 에이전트 provider 호출 합산 상한 (`max_agent_calls`, `APP_MAX_AGENT_CALLS_PER_TURN`, 기본 10). 같은 서브 에이전트 3회 연속 위임은 `loop-guard` 로 차단.
+
+### 라이브러리 런타임 인프라 도구 (8개)
+
+`backend/agent/tools/runtime.py` 에 등록된 메타 도구들. SKILL/AGENT 에 `api_refs` 가 있으면 harness 가 자동 주입.
+
+| 도구 | 역할 |
+|---|---|
+| `inspect_callable` | 함수/클래스 시그니처 + docstring 조회 |
+| `list_module_members` | 모듈의 public 멤버 목록 |
+| `call_function` | 라이브러리 함수 실행 → namespace 저장 (`$varname` 치환 지원) |
+| `eval_expression` | 단일 Python 식 평가 (namespace 변수 참조 가능) |
+| `exec_code` | 다중 statement 코드 실행 (import·할당·제어흐름·stdout 캡쳐) |
+| `list_namespace` | 세션 namespace 변수 목록 요약 |
+| `describe_variable` | 변수 타입별 상세 요약 (DataFrame shape, ndarray min/max 등) |
+| `delete_variable` | namespace 변수 영구 삭제 |
+
+**evaluator 보안 모델** (`backend/agent/runtime/evaluator.py`): 단일 사용자 로컬 데스크탑 앱 위협 모델에 맞게 완화됨.
+- **차단**: `exec`, `eval`, `compile` (재귀 인젝션 방지), `__import__` 직접 무제한 사용
+- **허용**: 그 외 모든 public builtin (`open`, `print`, `getattr`, `vars`, `dir`, `iter`, `next`, ...)
+- **import 허용 목록**: stdlib 안전 목록(`math`, `statistics`, `json`, `datetime`, `pathlib`, `re`, `collections` 등) + `APP_ALLOWED_LIBRARIES`
+- **차단 목록**: `os`, `sys`, `subprocess`, `socket`, `shutil` (시스템·외부통신 — runaway 방지)
+- 진정한 sandbox 가 아님. dunder 우회를 완전히 막지는 않음. LLM 실수·runaway 방지 가드.
 
 ### Tool 등록 패턴 (`agent/tools/`)
 

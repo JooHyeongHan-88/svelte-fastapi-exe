@@ -57,3 +57,30 @@
 - **동일 인자로 즉시 재시도 금지** — 중복 호출 가드가 차단한다.
 - **동일 도구 2회 연속 실패하면 접근 방식을 바꿔라** — 같은 도구를 세 번째 호출하지 말 것.
 - 사용자에게 진행 상황을 한 줄로 보고한 뒤 다음 시도를 한다 — 침묵 속에서 실패를 반복하지 말 것.
+
+## 7. 라이브러리 런타임 (api_refs · call_function · eval_expression · namespace)
+
+system prompt 의 `# Available Library APIs` 섹션이 보이거나 활성 SKILL/에이전트가 `api_refs` 를 가지면, 백엔드 환경에 설치된 외부 Python 라이브러리를 다음 도구들로 실행할 수 있다. SKILL 본문이 절차를 명세하지 않아도 LLM 이 스스로 plan 을 세워 사용하는 것이 표준 흐름이다.
+
+### 7.1 표준 워크플로우 (api_refs 가 있는 SKILL/에이전트)
+
+1. `# Available Library APIs` 섹션에 노출된 시그니처/docstring 으로 충분하면 추가 조회 없이 진행.
+2. 시그니처가 모호하거나 펼침에 누락된 멤버를 써야 하면 `inspect_callable(qualified_name=...)` 또는 `list_module_members(module_path=...)` 로 보충.
+3. 함수 호출에 필요한 핵심 입력값(파일 경로, 기간 등)이 사용자 발화에 없으면 `ask_user` 로 확인. 슬롯 가드가 자동으로 잡아주는 경우 직접 호출은 생략.
+4. 실행: `call_function(qualified_name=..., kwargs={...}, store_as="이름")` 형태로 호출한다. `store_as` 는 Python identifier (`df`, `df_clean`, `stats` 등) 만 허용된다.
+5. 후속 연산이 필요하면 같은 세션 namespace 변수를 `eval_expression("df['temp'].max()")` 으로 평가하거나, 다른 함수의 인자에 `"$df"` 형태로 참조해 전달한다 (자동 치환).
+6. 변수의 실제 데이터가 궁금하면 `describe_variable(name=...)` 으로 타입별 요약 (DataFrame head, ndarray shape 등) 확인.
+7. 작업이 끝나면 결과 수치/통계를 사용자에게 자연어로 답한다. Case 5 형식에 맞춰 어떤 함수를 호출했고 어떤 결과가 나왔는지 한두 줄로 보고한다.
+
+### 7.2 namespace 변수 lifecycle
+
+- 변수는 같은 세션 동안만 유효하며, 세션 종료 또는 EXE 재기동 시 자동 정리된다.
+- 큰 객체(예: 대용량 DataFrame)는 자동으로 디스크에 spill 되어도 LLM 이 신경 쓸 필요는 없다 — `tier=disk` 표시는 단순 정보용.
+- 변수 총 수에 한도(`APP_NAMESPACE_MAX_VARS`, 기본 20)가 있어 초과 시 가장 오래된 변수가 제거된다. 명시적 정리를 원하면 `delete_variable(name=...)`.
+
+### 7.3 자주 하는 실수
+
+- ❌ `call_function` 의 `kwargs` 에 namespace 변수 객체를 통째로 JSON 으로 직렬화해 넣으려 함 → ✅ `"$varname"` 으로 참조 전달.
+- ❌ `eval_expression` 에 `import os` 같은 statement → ✅ 짧은 표현식만. 라이브러리 함수가 필요하면 `call_function`.
+- ❌ `store_as` 에 공백·하이픈 포함된 이름 → ✅ `df_clean` 처럼 Python identifier.
+- ❌ 매번 `inspect_callable` 로 같은 함수 재조회 → ✅ 이미 system prompt 에 정보가 있으면 그대로 사용.

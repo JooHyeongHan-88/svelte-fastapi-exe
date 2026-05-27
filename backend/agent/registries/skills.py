@@ -34,6 +34,12 @@ class SkillMeta(BaseModel):
     requires_tools: Annotated[list[str], "이 스킬이 호출하는 도구 이름 힌트"] = Field(
         default_factory=list
     )
+    api_refs: Annotated[
+        list[str],
+        "라이브러리 dotted-path 목록 (예: 'sensordx.utils.load_df'). 활성화 시 "
+        "introspect 로 시그니처·docstring 을 system prompt 에 자동 주입하고, "
+        "infrastructure tools(call_function/eval_expression/...)을 자동 노출한다.",
+    ] = Field(default_factory=list)
 
 
 class Skill(BaseModel):

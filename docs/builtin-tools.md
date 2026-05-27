@@ -613,3 +613,24 @@ async def fetch_sales(
 | `ask_user` | Sentinel | 오케스트레이터 · 서브 에이전트 | AskUserCard 표시, 턴 중단 |
 | `call_sub_agent` | Sentinel | **오케스트레이터 전용** | 서브 에이전트 위임, AgentTrail 표시 |
 | `complete_subagent` | Sentinel | **서브 에이전트 전용** | 오케스트레이터에 결과 반환, 턴 종료 |
+
+---
+
+## 라이브러리 런타임 메타 도구 (api_refs 활성 시 자동 노출)
+
+SKILL/AGENT 의 `api_refs` 가 비어있지 않으면 harness 가 다음 7개 도구를 specs 에 자동 주입한다. 자세한 사용법과 보안 모델은 [library-runtime.md](library-runtime.md) 참고.
+
+| 도구 | 인자 | 효과 |
+|---|---|---|
+| `inspect_callable` | `qualified_name: str` | 라이브러리 함수/클래스의 시그니처 + docstring 반환 |
+| `list_module_members` | `module_path: str` | 모듈의 public 멤버 목록과 한줄 docstring |
+| `call_function` | `qualified_name: str`, `kwargs: dict`, `store_as: str` | 함수 실행 후 결과를 세션 namespace 에 변수로 저장. `kwargs` 값에 `"$varname"` 이 있으면 namespace 변수로 자동 치환 |
+| `eval_expression` | `expression: str`, `store_as: str = ""` | namespace 변수 + 안전 builtins 환경에서 짧은 식 평가. `store_as` 가 있으면 결과 저장 |
+| `exec_code` | `code: str` | 다중 statement Python 코드 실행 (import / 할당 / for / 함수 정의). stdout 캡쳐 + 신규 변수 namespace 자동 저장 |
+| `list_namespace` | (없음) | 세션 namespace 의 모든 변수 한 줄씩 요약 |
+| `describe_variable` | `name: str` | 변수 타입별 상세 (DataFrame head, ndarray shape 등) |
+| `delete_variable` | `name: str` | namespace 변수 영구 삭제 (memory + disk 모두) |
+
+**자동 노출 조건**:
+- 활성 SKILL 중 하나라도 `api_refs` 가 있으면 오케스트레이터에 자동 노출.
+- 서브 에이전트의 `api_refs` 또는 학습 SKILL 의 `api_refs` 가 있으면 서브 에이전트에 노출 (화이트리스트 `tools` 와 무관).

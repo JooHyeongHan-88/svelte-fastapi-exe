@@ -59,6 +59,16 @@ def set_session_context(client_id: str, session_title: str) -> None:
     _current_turn_slot.set(None)
 
 
+def current_client_id() -> str:
+    """현재 turn 의 client_id 반환. set_session_context 전에는 빈 문자열."""
+    return _current_client_id.get()
+
+
+def current_session_title() -> str:
+    """현재 turn 의 session_title 반환. set_session_context 전에는 빈 문자열."""
+    return _current_session_title.get()
+
+
 def sanitize_title(raw: str, max_len: int = _TITLE_MAX_LEN) -> str:
     """Windows/POSIX 안전한 폴더명으로 변환한다.
 

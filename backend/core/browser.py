@@ -88,9 +88,19 @@ def _finalize_disconnect(client_id: str) -> None:
 
     grace 도중 재연결이 들어왔으면 connect_client 가 이미 이 timer 를 취소했어야
     하지만, 콜백이 락 대기 중이었다면 여기서 한 번 더 정리한다.
+
+    세션 종료가 확정되었으므로 LLM 라이브러리 런타임 namespace 도 함께 정리한다
+    (메모리 + disk 스필 파일). namespace 정리는 별도 락(namespace._registry_lock,
+    cleanup 내부 _lock)을 사용하므로 우리 _lock 밖에서 호출해 lock ordering 보존.
     """
     with _lock:
         _pending_disconnects.pop(client_id, None)
+
+    # 지연 import — 부팅 순서 의존을 만들지 않기 위함. core 가 agent 에 종속되지 않도록
+    # 호출 시점에만 모듈을 가져온다.
+    from agent.runtime.namespace import cleanup_namespace
+
+    cleanup_namespace(client_id)
 
 
 def _snapshot() -> tuple[set[str], bool]:

@@ -47,6 +47,11 @@ class AgentMeta(BaseModel):
         str | None,
         "오케스트레이터가 이 에이전트에게 위임해야 하는 신호 — 어떤 입력 패턴이 들어오면 위임할지",
     ] = None
+    api_refs: Annotated[
+        list[str],
+        "이 에이전트가 사용하는 라이브러리 dotted-path 목록. 위임 시 introspect 로 "
+        "system prompt 에 자동 주입되고, infrastructure tools 가 자동 노출된다.",
+    ] = Field(default_factory=list)
 
 
 class Agent(BaseModel):

@@ -12,3 +12,9 @@
   `tools_guide.md` §6 의 RCA 절차(에러 본문 인용 → 원인 추정 → 다음 조치)를 따라
   인자를 수정해 1회 재시도하거나, 다른 도구로 전환하거나, `ask_user` 로 보완 정보를 받는다.
   동일 도구가 2회 연속 실패하면 접근 방식 자체를 바꿔야 한다.
+- `eval_expression` 에는 `import`, `open`, `exec`, `compile` 같은 statement 또는 시스템 접근
+  코드를 절대 넣지 않는다. 안전 builtins 환경이 이를 거부하지만 시도 자체가 정책 위반이다.
+  파일 IO·네트워크·라이브러리 함수 호출이 필요하면 `call_function` 으로 명시적으로 분기한다.
+- `call_function` / `inspect_callable` / `list_module_members` 의 첫 인자 `qualified_name`
+  은 `APP_ALLOWED_LIBRARIES` 화이트리스트에 속한 패키지여야 한다. 화이트리스트 외 모듈을
+  추측해 호출하지 않는다 — 거부될 뿐 아니라 사용자 의도와도 어긋난다.

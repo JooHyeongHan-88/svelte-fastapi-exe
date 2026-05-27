@@ -1,9 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 
 # SPECPATH = directory of this spec file (packaging/)
 # root     = project root (one level up)
 root = os.path.dirname(SPECPATH)
+
+# backend/ 를 sys.path 에 추가해야 collect_submodules('scripts') 가 동작한다.
+sys.path.insert(0, os.path.join(root, 'backend'))
+
+from PyInstaller.utils.hooks import collect_all, collect_submodules  # noqa: E402
 
 # Detect AppName from .env
 app_name = 'MyAgent'
@@ -19,10 +25,47 @@ if os.path.exists(env_path):
                 app_name = raw.strip().strip('"\'')
                 break
 
+# ---------------------------------------------------------------------------
+# backend/scripts/ — 사내 스크립트 패키지.
+# backend/ 가 pathex 에 있으므로 collect_submodules 로 전체 서브모듈을 수집한다.
+# scripts/ 에 새 .py 파일을 추가해도 spec 을 수정할 필요가 없다.
+# ---------------------------------------------------------------------------
+scripts_hidden = collect_submodules('scripts')
+
+# ---------------------------------------------------------------------------
+# APP_ALLOWED_LIBRARIES — .env 에서 읽어 외부 라이브러리를 hiddenimports 에 추가.
+# resolver.py 가 importlib.import_module(string) 을 사용하므로
+# PyInstaller 정적 분석에서 누락되는 라이브러리를 여기서 강제 수집한다.
+# ---------------------------------------------------------------------------
+_allowed_libs_raw = ''
+if os.path.exists(os.path.join(root, '.env')):
+    with open(os.path.join(root, '.env'), 'r', encoding='utf-8') as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line.startswith('APP_ALLOWED_LIBRARIES='):
+                _allowed_libs_raw = _line.split('=', 1)[1].split('#', 1)[0].strip()
+                break
+
+_allowed_extra_datas = []
+_allowed_extra_binaries = []
+_allowed_extra_hidden = []
+for _lib in [l.strip() for l in _allowed_libs_raw.split(',') if l.strip()]:
+    if _lib == 'scripts':
+        continue  # scripts 는 위에서 별도 처리
+    try:
+        _d, _b, _h = collect_all(_lib)
+        _allowed_extra_datas += _d
+        _allowed_extra_binaries += _b
+        _allowed_extra_hidden += _h
+        print(f'[spec] collect_all({_lib!r}): {len(_h)} hidden imports')
+    except Exception as _e:
+        print(f'[spec] collect_all({_lib!r}) 실패 — hiddenimports 에 루트만 추가: {_e}')
+        _allowed_extra_hidden.append(_lib)
+
 a = Analysis(
     [os.path.join(root, 'backend', 'main.py')],
     pathex=[os.path.join(root, 'backend')],
-    binaries=[],
+    binaries=[] + _allowed_extra_binaries,
     datas=[
         # source -> destination inside sys._MEIPASS
         (os.path.join(root, '.env'), '.'),
@@ -32,7 +75,7 @@ a = Analysis(
         (os.path.join(root, 'PROMPTS'), 'PROMPTS'),
         (os.path.join(root, 'SKILLS'), 'SKILLS'),
         (os.path.join(root, 'AGENTS'), 'AGENTS'),
-    ],
+    ] + _allowed_extra_datas,
     hiddenimports=[
         '_version',
         'core',
@@ -64,7 +107,15 @@ a = Analysis(
         'api.update',
         'api.settings',
         'api.skills',
-    ],
+        # runtime 인프라 — importlib.import_module 동적 호출로 정적 분석 누락 방지
+        'agent.runtime',
+        'agent.runtime.resolver',
+        'agent.runtime.namespace',
+        'agent.runtime.serialization',
+        'agent.runtime.evaluator',
+        'agent.runtime.introspect',
+        'agent.tools.runtime',
+    ] + scripts_hidden + _allowed_extra_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
