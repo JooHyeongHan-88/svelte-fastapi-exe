@@ -28,7 +28,7 @@ import asyncio
 import logging
 import uuid
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -61,6 +61,7 @@ from agent.registries.agents import Agent, AgentRegistry
 from agent.registries.prompts import PromptRegistry
 from agent.registries.skills import Skill, SkillRegistry
 from agent.registries.tools import (
+    ACTIVATE_SKILL,
     ASK_USER,
     COMPLETE_SUB_AGENT,
     PLANNER_ADD_TODO,
@@ -191,20 +192,31 @@ async def run_turn(
 
         has_agents = agent_registry is not None and len(agent_registry.list_meta()) > 0
 
+        # activate_skill 이 호출될 때 새 system prompt 를 동적 재조립하기 위한 클로저.
+        # base prompt 와 state 는 이미 이번 턴 시점으로 확정됐으므로 클로저에 캡처해도 안전.
         if has_agents:
-            composed_system = _compose_orchestrator_system_prompt(
-                base=prompt_registry.compose(include_orchestrator=True),
-                skills=skills,
-                state=state,
-                agent_registry=agent_registry,
-            )
+            _base_prompt = prompt_registry.compose(include_orchestrator=True)
+
+            def _recompose(updated_skills: list[Skill]) -> str:
+                return _compose_orchestrator_system_prompt(
+                    base=_base_prompt,
+                    skills=updated_skills,
+                    state=state,
+                    agent_registry=agent_registry,  # type: ignore[arg-type]
+                    skill_registry=skill_registry,
+                )
+
+            composed_system = _recompose(skills)
         else:
             # 하위호환 — AGENTS 가 없으면 orchestrator.md 제외하고 단층 동작.
-            composed_system = _compose_system_prompt(
-                prompt_registry.compose(include_orchestrator=False),
-                skills,
-                state,
-            )
+            _base_prompt = prompt_registry.compose(include_orchestrator=False)
+
+            def _recompose(updated_skills: list[Skill]) -> str:  # type: ignore[misc]
+                return _compose_system_prompt(
+                    _base_prompt, updated_skills, state, skill_registry
+                )
+
+            composed_system = _recompose(skills)
 
         # pending_question 은 직전 턴 ask_user 의 잔재 — 시스템 프롬프트에 1회 주입됐으면
         # 즉시 클리어해야 같은 질문이 두 턴 연속 컨텍스트에 남지 않는다.
@@ -237,6 +249,8 @@ async def run_turn(
 
         budget = TurnBudget(max_calls=max_agent_calls)
 
+        active_skills = list(skills)  # turn-local mutable copy for activate_skill
+
         async for ev in _run_agent_turn(
             agent_id=ORCHESTRATOR_ID,
             messages=messages,
@@ -251,6 +265,8 @@ async def run_turn(
             depth=0,
             state=state,
             max_iterations=max_iterations,
+            active_skills=active_skills,
+            recompose_system=_recompose,
         ):
             yield ev
 
@@ -283,6 +299,8 @@ async def _run_agent_turn(
     depth: int,
     state: AgentState | None,
     max_iterations: int,
+    active_skills: list[Skill] | None = None,
+    recompose_system: Callable[[list[Skill]], str] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """provider→tool 반복 루프 (agent_id 무관 공통).
 
@@ -377,6 +395,39 @@ async def _run_agent_turn(
 
         interrupted = False
         for call in pending_tool_calls:
+            # activate_skill — SKILL 카탈로그 의미 기반 활성화. turn-local active_skills 갱신.
+            if call.name == ACTIVATE_SKILL and active_skills is not None:
+                skill_name = (call.arguments or {}).get("name", "").strip()
+                existing_names = {s.meta.name for s in active_skills}
+                newly_activated = (
+                    skill_registry.get_by_names([skill_name])
+                    if skill_name and skill_name not in existing_names
+                    else []
+                )
+                active_skills.extend(newly_activated)
+                if newly_activated and recompose_system is not None:
+                    messages[0] = Message(
+                        role="system", content=recompose_system(list(active_skills))
+                    )
+                    yield SkillActiveEvent(skills=[s.meta.name for s in active_skills])
+                    if state is not None:
+                        state.active_skills = [s.meta.name for s in active_skills]
+                result_text = (
+                    f"SKILL '{skill_name}' 활성화됨. 이제 해당 SKILL 의 지침이 컨텍스트에 포함됩니다."
+                    if newly_activated
+                    else (
+                        f"SKILL '{skill_name}' 은(는) 이미 활성화되어 있거나 카탈로그에 없습니다."
+                    )
+                )
+                _append_tool_result(messages, turn_messages, call, result_text)
+                yield ToolResultEvent(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    result=result_text,
+                    is_error=not newly_activated,
+                )
+                continue
+
             # complete_subagent — 서브 에이전트 종료 sentinel (turn_messages=None 이 서브 에이전트 지표).
             if call.name == COMPLETE_SUB_AGENT and turn_messages is None:
                 result_text = (call.arguments or {}).get("summary", "")
@@ -815,12 +866,31 @@ def _compose_orchestrator_system_prompt(
     skills: list[Skill],
     state: AgentState,
     agent_registry: AgentRegistry,
+    skill_registry: SkillRegistry | None = None,
 ) -> str:
     """오케스트레이터 system prompt — 기존 조립 + 가용 에이전트 카탈로그 동적 주입."""
     parts: list[str] = [base] if base else []
 
     for s in skills:
         parts.append(f"\n# Skill: {s.meta.name}\n{s.body}")
+
+    # 비활성 SKILL 카탈로그 — LLM 이 의미 기반으로 activate_skill 을 호출할 수 있도록.
+    if skill_registry is not None:
+        active_names = {s.meta.name for s in skills}
+        inactive_metas = [
+            m for m in skill_registry.list_meta() if m.name not in active_names
+        ]
+        if inactive_metas:
+            catalog_lines: list[str] = [
+                "\n# 가용 SKILL 카탈로그 (비활성)",
+                "trigger 키워드가 질의에 없어도 의미가 맞으면 `activate_skill(name=...)` 으로 활성화하라.",
+            ]
+            for m in inactive_metas:
+                trigger_hint = (
+                    f"  (예시 트리거: {', '.join(m.trigger[:3])})" if m.trigger else ""
+                )
+                catalog_lines.append(f"- **{m.name}**: {m.description}{trigger_hint}")
+            parts.append("\n".join(catalog_lines))
 
     if len(skills) > 1:
         skill_names = ", ".join(f"`{s.meta.name}`" for s in skills)
@@ -1140,6 +1210,7 @@ def _compose_system_prompt(
     base: str,
     skills: list[Skill],
     state: AgentState,
+    skill_registry: SkillRegistry | None = None,
 ) -> str:
     """PROMPTS 베이스 + 선택된 SKILLS 본문 + AgentState 요약을 합성한다 (단층).
 
@@ -1150,6 +1221,24 @@ def _compose_system_prompt(
 
     for s in skills:
         parts.append(f"\n# Skill: {s.meta.name}\n{s.body}")
+
+    # 비활성 SKILL 카탈로그 — 의미 기반 activate_skill 호출을 위해 상시 노출.
+    if skill_registry is not None:
+        active_names = {s.meta.name for s in skills}
+        inactive_metas = [
+            m for m in skill_registry.list_meta() if m.name not in active_names
+        ]
+        if inactive_metas:
+            catalog_lines: list[str] = [
+                "\n# 가용 SKILL 카탈로그 (비활성)",
+                "trigger 키워드가 질의에 없어도 의미가 맞으면 `activate_skill(name=...)` 으로 활성화하라.",
+            ]
+            for m in inactive_metas:
+                trigger_hint = (
+                    f"  (예시 트리거: {', '.join(m.trigger[:3])})" if m.trigger else ""
+                )
+                catalog_lines.append(f"- **{m.name}**: {m.description}{trigger_hint}")
+            parts.append("\n".join(catalog_lines))
 
     if len(skills) > 1:
         skill_names = ", ".join(f"`{s.meta.name}`" for s in skills)

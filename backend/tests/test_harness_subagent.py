@@ -39,7 +39,6 @@ def _reload_all_tool_modules() -> None:
     import agent.tools.artifact
     import agent.tools.builtin
     import agent.tools.clarify
-    import agent.tools.demo
     import agent.tools.dispatch
     import agent.tools.planner
     import agent.tools.visualize
@@ -50,7 +49,6 @@ def _reload_all_tool_modules() -> None:
         agent.tools.dispatch,
         agent.tools.planner,
         agent.tools.visualize,
-        agent.tools.demo,
         agent.tools.artifact,
     ):
         importlib.reload(mod)

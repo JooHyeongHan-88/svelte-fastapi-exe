@@ -48,6 +48,7 @@ PLANNER_COMPLETE_TODO = "complete_todo"
 SUB_AGENT_DISPATCH = "call_sub_agent"
 COMPLETE_SUB_AGENT = "complete_subagent"
 ASK_USER = "ask_user"
+ACTIVATE_SKILL = "activate_skill"
 
 
 # ---------------------------------------------------------------------------

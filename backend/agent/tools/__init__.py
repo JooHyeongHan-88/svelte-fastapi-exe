@@ -11,7 +11,6 @@ from agent.tools import (  # noqa: F401 — 등록 부수효과
     artifact,
     builtin,
     clarify,
-    demo,
     dispatch,
     planner,
     runtime,

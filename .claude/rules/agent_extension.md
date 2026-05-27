@@ -127,13 +127,6 @@ priority: 5
 - `tools` 화이트리스트에 `add_todo` / `complete_todo` 를 포함시켜야 서브 에이전트도 자체 Plan 작성 가능.
 - `complete_subagent` 는 `tools` 에 명시하지 않아도 harness가 항상 자동 주입.
 
-### 현재 등록된 서브 에이전트
-
-| 에이전트 | 트리거 스킬 | 역할 |
-|---|---|---|
-| `coding_agent` | `code_review` 등 | 코드 작업 전담 |
-| `report_agent` | `report_agent` 등 | Markdown 리포트 작성·렌더링 전담 |
-
 ---
 
 ## 새 LLM 프로바이더 추가하기

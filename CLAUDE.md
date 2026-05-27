@@ -69,6 +69,35 @@ display_markdown(source="result/<session>/<ts>/report.md")
 
 ---
 
+## Mock 시나리오 전용 파일 (운영 시 삭제 가능)
+
+현재 등록된 SKILLS, AGENTS, 스크립트는 **실제 LLM 없이 Harness/UI를 검증하기 위한 Mock 테스트 목적으로만 작성된 것**이다.
+실제 도메인 기능을 구현할 때 아래 파일들은 삭제하거나 도메인 SKILL/AGENT로 교체할 수 있다.
+
+| 파일 | 용도 |
+|---|---|
+| `SKILLS/time_check.md` | 시나리오 C — now/save_artifact/display_image/display_markdown 4종 검증 |
+| `SKILLS/data_summary.md` | 시나리오 D/E — api_refs + exec_code/call_function/eval_expression 검증 |
+| `SKILLS/report_writer.md` | 시나리오 E — save_artifact/display_markdown 검증 |
+| `AGENTS/analyst_agent.md` | 시나리오 D/E — Case 3 자동 라우팅 + sub-agent 위임 검증 |
+| `AGENTS/writer_agent.md` | 시나리오 E — 2단 sub-agent 체이닝 검증 |
+| `backend/scripts/stats.py` | 시나리오 D/E — scripts 패키지 api_refs 경로 검증 |
+| `docs/mock-scenarios.md` | Mock 시나리오 사용 가이드 |
+
+Mock 시나리오 트리거 (브라우저에서 입력):
+
+| 시나리오 | 트리거 예시 | 검증 대상 |
+|---|---|---|
+| A (echo) | (그 외 모든 입력) | 기본 스트리밍 |
+| B (ask_user) | `추천해줘`, `골라줘` | ReasoningBlock, AskUserCard(both) |
+| C (time_check) | `지금 시간`, `현재 시각` | SkillBadge, ArtifactImage, ArtifactMarkdown |
+| D (data_summary) | `데이터 요약`, `요약 통계` | AgentTrail, TodoProgress, ArtifactChart |
+| E (composite) | `전체 분석 보고서`, `종합 보고서` | 2단 sub-agent, ArtifactChart+ArtifactMarkdown |
+
+`APP_ALLOWED_LIBRARIES=scripts`는 현재 Mock 시나리오를 위해 활성화된 상태다. 운영 시 도메인 라이브러리로 교체하거나 제거한다.
+
+---
+
 ## 주요 명령어
 
 ```powershell
@@ -129,7 +158,7 @@ pwsh packaging/release-dryrun.ps1 -Force
 | `APP_MAX_HISTORY_MESSAGES` | `40` | 클라이언트당 보관 메시지 수 상한 |
 | `APP_SETTINGS_TEST_TIMEOUT` | `10` | 연결 테스트 타임아웃 (초) |
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | Tool 1회 실행 timeout (초) — 도구별 `timeout_seconds` 로 override |
-| `APP_ALLOWED_LIBRARIES` | — | 라이브러리 런타임에 노출할 패키지 루트 CSV (예: `sensordx,my_lib`). `App.spec` 빌드 시 자동으로 `collect_all()` 수행 → `.env` 한 줄만 추가하면 EXE에도 번들링됨. [docs/library-runtime.md](docs/library-runtime.md) |
+| `APP_ALLOWED_LIBRARIES` | `scripts` (Mock용) | 라이브러리 런타임에 노출할 패키지 루트 CSV (예: `sensordx,my_lib`). `App.spec` 빌드 시 자동으로 `collect_all()` 수행 → `.env` 한 줄만 추가하면 EXE에도 번들링됨. 현재 `scripts` 패키지가 활성화되어 있으나 Mock 테스트 전용이므로 운영 시 교체. [docs/library-runtime.md](docs/library-runtime.md) |
 | `APP_NAMESPACE_MEMORY_THRESHOLD` | `10485760` (10MB) | 세션 namespace 변수 in-memory 한계. 초과 시 disk 로 spill |
 | `APP_NAMESPACE_MAX_VARS` | `20` | 세션당 namespace 변수 총 상한. 초과 시 LRU 제거 |
 
