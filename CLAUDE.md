@@ -45,15 +45,64 @@ Svelte(Vite) 정적 자산을 FastAPI가 서빙하고 PyInstaller로 단일 `.ex
 LLM이 파일을 직접 영속화할 수 있는 유일한 경로. `backend/agent/tools/artifact.py`.
 
 ```python
-# 표준 체인 — LLM이 한 턴에서 실행하는 순서
+# 텍스트 산출물
 save_artifact(filename="report.md", content="# ...", kind="markdown")
 # → result/<session>/<ts>/report.md 생성, 반환값에 상대경로 포함
 display_markdown(source="result/<session>/<ts>/report.md")
+
+# parquet 산출물 (DataFrame 직렬화 — 타입 보존, 압축)
+save_artifact(filename="data.parquet", kind="parquet", source="$df_varname")
+# → namespace 의 polars/pandas DataFrame 을 parquet 으로 직렬화
+# content 금지, source 필수 ("$varname" 형식으로 namespace 변수 참조)
 ```
+
+**`kind` 분기:**
+
+| kind | content | source | 허용 확장자 |
+|---|---|---|---|
+| `markdown` | 필수 | 금지 | `.md` |
+| `json` | 필수 | 금지 | `.json` |
+| `text` | 필수 | 금지 | `.txt` |
+| `parquet` | 금지 | 필수 (`$varname`) | `.parquet` |
 
 - **`turn_slot()`** (`core/result_store.py`): 같은 턴 내 `save_artifact` 를 여러 번 호출해도 단일 타임스탬프 폴더를 재사용한다. 새 턴 진입 시 `set_session_context()` 가 캐시를 리셋.
 - filename 에 `/`, `\`, `..`, 절대경로 포함 시 `is_error=True` 반환.
-- `kind` 와 파일 확장자가 불일치해도 `is_error=True` (예: `kind="markdown"`, `filename="data.json"`).
+- `kind` 와 파일 확장자 불일치, `content`/`source` 제약 위반 시 모두 `is_error=True`.
+
+### 차트 파이프라인 (3-레이어 분리)
+
+차트 시각화는 **parquet → spec → rendered** 3단계로 처리된다. 인라인 데이터 포맷은 지원하지 않는다.
+
+```
+1. save_artifact(kind="parquet", ...)   → data.parquet    (타입 보존 데이터)
+2. save_artifact(kind="json", ...)      → charts.spec.json (선언적 ChartSpecV1)
+3. display_chart(source=".../charts.spec.json")
+   └─ chart_renderer.py 가 spec + parquet 읽어 ECharts option 계산
+   └─ charts.json 저장 (프론트엔드가 fetch 하는 실제 페이로드)
+```
+
+**`ChartSpecV1` 스키마** (`backend/agent/runtime/chart_spec.py`):
+
+```json
+{
+  "version": "1",
+  "charts": [{
+    "mark": "bar | line | scatter | box | histogram | heatmap",
+    "title": "차트 제목",
+    "data": {"source": "같은_폴더의.parquet"},
+    "encoding": {
+      "x": {"field": "컬럼명", "type": "quantitative|nominal|temporal", "title": "라벨"},
+      "y": {"field": "컬럼명", "type": "quantitative"},
+      "color": {"field": "그룹컬럼", "type": "nominal"}
+    },
+    "extra_option": {}
+  }]
+}
+```
+
+- `display_chart` 의 `source` 인자는 반드시 `.spec.json` 으로 끝나야 한다 (legacy `.json` 직접 입력 거부).
+- `chart_renderer.py` 는 polars 전용. pandas DataFrame 은 `save_artifact(kind="parquet")` 경계에서 자동 변환된다.
+- 렌더러 모듈: `backend/agent/runtime/chart_renderer.py`, 스키마: `backend/agent/runtime/chart_spec.py`
 
 ### AgentMeta 확장 필드 (`AGENTS/*.md` Front Matter)
 
@@ -81,7 +130,8 @@ display_markdown(source="result/<session>/<ts>/report.md")
 | `SKILLS/report_writer.md` | 시나리오 E — save_artifact/display_markdown 검증 |
 | `AGENTS/analyst_agent.md` | 시나리오 D/E — Case 3 자동 라우팅 + sub-agent 위임 검증 |
 | `AGENTS/writer_agent.md` | 시나리오 E — 2단 sub-agent 체이닝 검증 |
-| `backend/scripts/stats.py` | 시나리오 D/E — scripts 패키지 api_refs 경로 검증 |
+| `backend/scripts/stats.py` | 시나리오 D/E — scripts 패키지 api_refs 경로 검증 (stdlib only) |
+| `backend/scripts/stats_df.py` | 시나리오 D/E — polars 기반 `compute_summary_stats_df` (parquet 파이프라인 검증) |
 | `docs/mock-scenarios.md` | Mock 시나리오 사용 가이드 |
 
 Mock 시나리오 트리거 (브라우저에서 입력):
@@ -91,10 +141,10 @@ Mock 시나리오 트리거 (브라우저에서 입력):
 | A (echo) | (그 외 모든 입력) | 기본 스트리밍 |
 | B (ask_user) | `추천해줘`, `골라줘` | ReasoningBlock, AskUserCard(both) |
 | C (time_check) | `지금 시간`, `현재 시각` | SkillBadge, ArtifactImage(1장), ArtifactMarkdown |
-| D (data_summary) | `데이터 요약`, `요약 통계` | AgentTrail, TodoProgress, ArtifactChart(4개 그리드) |
-| E (composite) | `전체 분석 보고서`, `종합 보고서` | 2단 sub-agent, ArtifactChart(7개·2페이지)+ArtifactMarkdown+ArtifactImage(10장 갤러리) |
+| D (data_summary) | `데이터 요약`, `요약 통계` | AgentTrail, TodoProgress, ArtifactChart(4개 그리드) — parquet 3개 + charts.spec.json + charts.json 생성 |
+| E (composite) | `전체 분석 보고서`, `종합 보고서` | 2단 sub-agent, ArtifactChart(7개·2페이지)+ArtifactMarkdown+ArtifactImage(10장 갤러리) — parquet 4개 + charts.spec.json + charts.json 생성 |
 
-`APP_ALLOWED_LIBRARIES=scripts`는 현재 Mock 시나리오를 위해 활성화된 상태다. 운영 시 도메인 라이브러리로 교체하거나 제거한다.
+`APP_ALLOWED_LIBRARIES=scripts,polars` — `scripts` 는 Mock 스크립트 패키지, `polars` 는 LLM 직접 사용 허용. 운영 시 도메인 라이브러리로 교체하거나 제거한다.
 
 ---
 
@@ -113,8 +163,11 @@ cd frontend; npm install
 uv run ruff format . && uv run ruff check --fix .
 
 # 테스트
-cd backend && uv run python -m pytest tests/ -v
-cd backend && uv run python -m pytest tests/test_subagent_isolation.py -v
+uv run python -m pytest backend/tests/ -v
+uv run python -m pytest backend/tests/test_subagent_isolation.py -v
+uv run python -m pytest backend/tests/test_chart_renderer.py -v      # 차트 렌더러 단위 테스트
+uv run python -m pytest backend/tests/test_artifact_parquet.py -v    # save_artifact kind="parquet"
+uv run python -m pytest backend/tests/test_display_chart_spec.py -v  # display_chart spec 흐름
 
 # 프로덕션 빌드 / 릴리즈
 pwsh packaging/release.ps1
@@ -158,7 +211,7 @@ pwsh packaging/release-dryrun.ps1 -Force
 | `APP_MAX_HISTORY_MESSAGES` | `40` | 클라이언트당 보관 메시지 수 상한 |
 | `APP_SETTINGS_TEST_TIMEOUT` | `10` | 연결 테스트 타임아웃 (초) |
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | Tool 1회 실행 timeout (초) — 도구별 `timeout_seconds` 로 override |
-| `APP_ALLOWED_LIBRARIES` | `scripts` (Mock용) | 라이브러리 런타임에 노출할 패키지 루트 CSV (예: `sensordx,my_lib`). `App.spec` 빌드 시 자동으로 `collect_all()` 수행 → `.env` 한 줄만 추가하면 EXE에도 번들링됨. 현재 `scripts` 패키지가 활성화되어 있으나 Mock 테스트 전용이므로 운영 시 교체. [docs/library-runtime.md](docs/library-runtime.md) |
+| `APP_ALLOWED_LIBRARIES` | `scripts,polars` | 라이브러리 런타임에 노출할 패키지 루트 CSV (예: `sensordx,my_lib`). `App.spec` 빌드 시 자동으로 `collect_all()` 수행 → `.env` 한 줄만 추가하면 EXE에도 번들링됨. `scripts` 는 Mock 스크립트 패키지, `polars` 는 `exec_code`/`call_function` 에서 직접 사용 가능. 운영 시 교체. [docs/library-runtime.md](docs/library-runtime.md) |
 | `APP_NAMESPACE_MEMORY_THRESHOLD` | `10485760` (10MB) | 세션 namespace 변수 in-memory 한계. 초과 시 disk 로 spill |
 | `APP_NAMESPACE_MAX_VARS` | `20` | 세션당 namespace 변수 총 상한. 초과 시 LRU 제거 |
 
@@ -183,7 +236,7 @@ pwsh packaging/release-dryrun.ps1 -Force
 
 | 파일 | 내용 |
 |---|---|
-| `builtin-tools.md` | 내장 도구(save_artifact·display_image·display_chart·display_markdown·add_todo 등) 인자·동작·예시 |
+| `builtin-tools.md` | 내장 도구(save_artifact·display_image·display_chart·display_markdown·add_todo 등) 인자·동작·예시. `save_artifact kind="parquet"` + `display_chart(.spec.json)` 차트 파이프라인 포함 |
 | `library-runtime.md` | 외부 Python 라이브러리를 `api_refs` 로 동적 노출하는 baseline — 8개 메타 도구(`exec_code` 포함), 세션 namespace, 보안 모델 |
 | `mock-scenarios.md` | MockProvider 전체 시나리오(A~E) 트리거·흐름·산출물 경로·신규 시나리오 추가 방법 |
 | `skills.md` | `SKILLS/*.md` Front Matter 필드, 트리거 매칭 원리, 본문 작성 패턴 |
