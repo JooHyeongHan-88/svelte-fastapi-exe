@@ -88,6 +88,9 @@ export async function openSettings() {
     ui.settingsDraft = {
       provider: settings.provider,
       cache,
+      // 사용자 지침 — 비어 있지 않으면 토글이 켜진 상태로 시작한다.
+      user_prompt: settings.user_prompt ?? "",
+      user_prompt_enabled: Boolean(settings.user_prompt),
     };
     ui.settingsOpen = true;
   } catch (e) {
@@ -129,7 +132,13 @@ export async function saveSettings() {
       providers[id] = { model: cfg.model, api_key, base_url: cfg.base_url };
     }
 
-    const patch = { provider, providers };
+    // 토글이 OFF 면 빈 문자열로 저장 — 백엔드가 system prompt 합성에서 자연스럽게 스킵.
+    // ON 이면 입력값을 2000자로 클램프 (백엔드 max_length=2000 과 정확히 일치).
+    const finalUserPrompt = ui.settingsDraft.user_prompt_enabled
+      ? (ui.settingsDraft.user_prompt ?? "").slice(0, 2000)
+      : "";
+
+    const patch = { provider, providers, user_prompt: finalUserPrompt };
     const updated = await updateSettings(patch);
 
     // 저장 후 currentModel/currentProvider 동기화

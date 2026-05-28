@@ -9,6 +9,7 @@ import {
   loadTheme,
   saveTheme,
   loadArtifactWidth,
+  loadArtifactPanelOpen,
   loadSidebarWidth,
 } from "./storage.js";
 import {
@@ -39,6 +40,9 @@ const BROWSER_KEEPALIVE_ID = `bpid-${crypto.randomUUID()}`;
 
 let presenceSource = null;
 let saveTimer = null;
+// 진행 중인 /api/chat 요청을 ESC 로 중지하기 위한 핸들. sendMessage 시작 시 생성되고
+// finally 에서 null 로 리셋된다. stopStreaming() 만이 abort 를 호출한다.
+let currentAbortController = null;
 
 // ---------- 영속화 ----------
 
@@ -447,8 +451,16 @@ export async function sendMessage(text) {
   // LLM 에 전달할 실제 메시지 — 본문이 비어 있으면 skill 이름으로 대체해 의미 있는 컨텍스트 제공.
   const llmContent = displayContent || (forceSkills ? forceSkills.join(", ") : "");
 
+  // 이번 턴 전용 AbortController. stopStreaming() 이 이 핸들을 통해 fetch + reader 를 풀어준다.
+  currentAbortController = new AbortController();
+  const abortSignal = currentAbortController.signal;
+
   try {
-    const response = await chat(session.id, llmContent, { forceSkills, sessionTitle: session.title });
+    const response = await chat(session.id, llmContent, {
+      forceSkills,
+      sessionTitle: session.title,
+      signal: abortSignal,
+    });
     if (!response.ok || !response.body) {
       appendDelta(`[error] HTTP ${response.status}`);
       return;
@@ -516,11 +528,63 @@ export async function sendMessage(text) {
       } else if (ev.type === "agent:progress") {
         handleAgentProgress(ev.agent_id, ev.inner_type, ev.inner_payload ?? {});
       }
-    });
+    }, abortSignal);
   } catch (e) {
-    appendDelta(`\n\n[error] ${String(e)}`);
+    // AbortError 는 stopStreaming() 이 유도한 정상 흐름이므로 에러 텍스트를 메시지에 추가하지 않는다.
+    if (e?.name !== "AbortError" && !abortSignal.aborted) {
+      appendDelta(`\n\n[error] ${String(e)}`);
+    }
   } finally {
     ui.streaming = false;
+    currentAbortController = null;
+    flushSave();
+  }
+}
+
+// 특정 user 메시지 시점으로 대화를 되돌린다. 그 메시지부터 끝까지를 잘라내고,
+// 잘라낸 user 메시지 본문을 composer 에 다시 채워 사용자가 수정 후 재전송하게 한다.
+// artifact 파일은 디스크에 그대로 둔다 (메시지 배열에서만 제거됨).
+export async function rewindToMessage(messageId) {
+  if (ui.streaming) return;
+  const session = activeSession();
+  if (!session) return;
+
+  const index = session.messages.findIndex((m) => m.id === messageId);
+  if (index < 0) return;
+
+  const target = session.messages[index];
+  // assistant 메시지 rewind 는 의미가 모호 — UI 가 user 메시지에서만 버튼을 노출하지만 방어적 가드.
+  if (target.role !== "user") return;
+
+  const capturedContent = target.content ?? "";
+
+  session.messages = session.messages.slice(0, index);
+  session.updatedAt = Date.now();
+  ui.sessions = [...ui.sessions];
+  flushSave();
+
+  // 잘린 이후 메시지에 artifact 칩이 있을 수 있으니 우측 패널을 닫는다.
+  resetArtifactPanelState();
+
+  // 백엔드 history 도 일치시켜 다음 턴 LLM context 가 잘린 시점 기준이 되게 한다.
+  await restoreConversation(session.id, toBackendMessages(session.messages));
+
+  // Composer 가 effect 로 감지해 textarea 에 채운다 — focus 도 같은 effect 에서 처리.
+  ui.composerSeed = capturedContent;
+}
+
+// 진행 중인 응답 스트리밍을 중지한다. ESC 키 핸들러가 호출한다.
+// 마지막 assistant 메시지에 isStopped 플래그를 달아 MessageBubble 가 footer 를 렌더한다.
+export function stopStreaming() {
+  if (!ui.streaming || !currentAbortController) return;
+  currentAbortController.abort();
+
+  const s = activeSession();
+  if (!s) return;
+  const last = s.messages[s.messages.length - 1];
+  if (last?.role === "assistant") {
+    last.isStopped = true;
+    ui.sessions = [...ui.sessions];
     flushSave();
   }
 }
@@ -531,6 +595,7 @@ export async function initApp() {
   ui.theme = loadTheme();
   document.documentElement.setAttribute("data-theme", ui.theme);
   ui.artifactWidth = loadArtifactWidth();
+  ui.artifactPanelOpen = loadArtifactPanelOpen();
   ui.sidebarWidth = loadSidebarWidth();
 
   const sessions = loadSessions();

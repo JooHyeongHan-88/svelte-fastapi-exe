@@ -147,6 +147,7 @@ async def run_turn(
     max_agent_calls: int = 10,
     force_skills: list[str] | None = None,
     session_title: str = "",
+    user_prompt: str = "",
 ) -> AsyncIterator[StreamEvent]:
     """사용자 메시지 1건에 대한 응답 이벤트 스트림을 생성한다.
 
@@ -192,10 +193,21 @@ async def run_turn(
 
         has_agents = agent_registry is not None and len(agent_registry.list_meta()) > 0
 
+        # 사용자가 SettingsModal 에서 작성한 추가 지침은 PROMPTS/ 합성 결과 뒤에 한 번만
+        # 덧붙인다. 합성 순서는 base → safety → tools_guide → orchestrator → 사용자 지침
+        # 이 된다. orchestrator 보다 뒤에 오지만 LLM 은 prompt 전체를 한 번에 학습하므로
+        # 라우팅 규칙이 사용자 지침에 의해 가려지지 않는다.
+        cleaned_user_prompt = user_prompt.strip()
+        user_prompt_section = (
+            f"\n\n# 사용자 지침\n{cleaned_user_prompt}" if cleaned_user_prompt else ""
+        )
+
         # activate_skill 이 호출될 때 새 system prompt 를 동적 재조립하기 위한 클로저.
         # base prompt 와 state 는 이미 이번 턴 시점으로 확정됐으므로 클로저에 캡처해도 안전.
         if has_agents:
-            _base_prompt = prompt_registry.compose(include_orchestrator=True)
+            _base_prompt = (
+                prompt_registry.compose(include_orchestrator=True) + user_prompt_section
+            )
 
             def _recompose(updated_skills: list[Skill]) -> str:
                 return _compose_orchestrator_system_prompt(
@@ -209,7 +221,10 @@ async def run_turn(
             composed_system = _recompose(skills)
         else:
             # 하위호환 — AGENTS 가 없으면 orchestrator.md 제외하고 단층 동작.
-            _base_prompt = prompt_registry.compose(include_orchestrator=False)
+            _base_prompt = (
+                prompt_registry.compose(include_orchestrator=False)
+                + user_prompt_section
+            )
 
             def _recompose(updated_skills: list[Skill]) -> str:  # type: ignore[misc]
                 return _compose_system_prompt(

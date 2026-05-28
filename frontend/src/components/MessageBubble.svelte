@@ -6,6 +6,8 @@
   import SkillCompleteBadge from "./SkillCompleteBadge.svelte";
   import AskUserCard from "./AskUserCard.svelte";
   import { openArtifact } from "../lib/artifactActions.svelte.js";
+  import { rewindToMessage } from "../lib/chatActions.svelte.js";
+  import { formatAbsoluteTime } from "../lib/format.js";
 
   const ARTIFACT_ICON = { image: "🖼️", chart: "📊" };
 
@@ -15,9 +17,19 @@
   let html = $derived(isUser ? "" : renderMarkdown(message.content));
   // 이 메시지가 현재 스트리밍 중인 마지막 assistant 메시지인지 판별한다.
   let isStreaming = $derived(ui.streaming);
+
+  function onRewindClick() {
+    if (ui.streaming) return;
+    // 네이티브 confirm 으로 단순화 — 세션 삭제 (SessionItem) 와 동일한 패턴.
+    const ok = window.confirm(
+      "이 메시지 시점으로 대화를 되돌릴까요?\n이후 대화는 삭제되고, 이 메시지가 입력창에 다시 채워집니다.",
+    );
+    if (ok) rewindToMessage(message.id);
+  }
 </script>
 
 <div class="row" class:user={isUser}>
+  <div class="bubble-wrap">
   <div class="bubble" class:user={isUser}>
     {#if isUser}
       <!-- 슬래시 커맨드로 부착한 skill 을 대화창 안에서도 표시 -->
@@ -132,6 +144,11 @@
         <AskUserCard askUser={message.askUser} />
       {/if}
 
+      <!-- ESC 로 중지된 응답 표시 — stopStreaming() 이 isStopped 플래그를 단다. -->
+      {#if message.isStopped}
+        <div class="stopped-footer" role="status">⏹ 응답이 중지되었습니다</div>
+      {/if}
+
       <!-- 아티팩트 칩 — display_image / display_chart 결과 -->
       {#if message.artifactChips && message.artifactChips.length > 0}
         <div class="artifact-chip-bar">
@@ -160,17 +177,53 @@
       {/if}
     {/if}
   </div>
+
+  <!-- hover 시 나타나는 메타 footer — 작성 시간 + (user 메시지에만) rewind 버튼 -->
+  <div class="msg-footer">
+    <span class="msg-time">{formatAbsoluteTime(message.createdAt)}</span>
+    {#if isUser}
+      <button
+        type="button"
+        class="rewind-btn"
+        onclick={onRewindClick}
+        disabled={ui.streaming}
+        aria-label="이 시점으로 대화 되돌리기"
+        title="이 시점으로 대화 되돌리기"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="1 4 1 10 7 10" />
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+        </svg>
+      </button>
+    {/if}
+  </div>
+  </div>
 </div>
 
 <style>
   .row {
     display: flex;
-    justify-content: flex-start;
+    /* bubble + footer 를 세로로 쌓고, user 는 우측, assistant 는 좌측에 정렬한다. */
+    flex-direction: column;
+    align-items: flex-start;
     margin: 18px 0;
   }
 
   .row.user {
-    justify-content: flex-end;
+    align-items: flex-end;
+  }
+
+  /* bubble-wrap 은 bubble 과 footer 가 같은 너비 트랙에서 정렬을 공유하기 위한 컨테이너.
+     bubble.user 의 max-width 78% 와 동일한 제약을 부모에서 걸어 footer 가 bubble 너비 안에 머문다. */
+  .bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+  }
+
+  .row.user .bubble-wrap {
+    max-width: 78%;
+    align-items: flex-end;
   }
 
   .bubble {
@@ -386,6 +439,59 @@
   .artifact-chip-arrow {
     flex-shrink: 0;
     opacity: 0.7;
+  }
+
+  /* ── 중지 footer ── */
+  .stopped-footer {
+    margin-top: 8px;
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+  }
+
+  /* ── hover 메타 footer (시간 + rewind 버튼) ── */
+  .msg-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--fg-subtle);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    pointer-events: none;
+  }
+
+  .row:hover .msg-footer,
+  .msg-footer:focus-within {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .row.user .msg-footer {
+    justify-content: flex-end;
+  }
+
+  .rewind-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    color: var(--fg-subtle);
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .rewind-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  .rewind-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* ── 도구 상태 ── */

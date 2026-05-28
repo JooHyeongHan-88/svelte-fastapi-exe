@@ -66,6 +66,9 @@ class SettingsStore:
                 self._load()
 
             new_provider: str = patch.get("provider", self._cache.provider)
+            # user_prompt 는 provider/providers 와 직교적 필드 — flat·structured 양쪽
+            # 모두에서 동일한 방식으로 처리한다. 키 미포함 시 기존 값 유지.
+            new_user_prompt: str = patch.get("user_prompt", self._cache.user_prompt)
 
             # providers 전체를 patch 로 교체하는 구조화 형태.
             if "providers" in patch and isinstance(patch["providers"], dict):
@@ -84,6 +87,7 @@ class SettingsStore:
                 self._cache = LLMSettings(
                     provider=new_provider,
                     providers={**self._cache.providers, **new_providers},
+                    user_prompt=new_user_prompt,
                 )
             else:
                 # flat 형태 — 활성 provider 슬롯에만 반영.
@@ -101,6 +105,7 @@ class SettingsStore:
                 self._cache = LLMSettings(
                     provider=new_provider,
                     providers=new_providers,
+                    user_prompt=new_user_prompt,
                 )
 
             self._save()

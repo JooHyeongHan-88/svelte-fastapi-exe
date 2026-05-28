@@ -18,6 +18,9 @@ export async function chat(clientId, message, opts = {}) {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    // AbortController.signal — ESC 로 응답을 강제 중지할 때 fetch 와 SSE reader 를
+    // 동시에 풀어 주는 유일한 진입점.
+    signal: opts.signal,
   });
 }
 

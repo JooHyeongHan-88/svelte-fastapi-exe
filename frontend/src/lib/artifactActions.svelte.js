@@ -5,6 +5,7 @@
 // 세션을 나갔다 다시 들어와도 칩을 클릭하면 동일 산출물이 패널에 다시 표시된다.
 
 import { ui, activeSession } from "./state.svelte.js";
+import { saveArtifactPanelOpen } from "./storage.js";
 
 /**
  * 새 아티팩트 칩 객체를 만든다 (메시지에 직접 임베드할 형태).
@@ -41,25 +42,28 @@ export function openArtifact(id) {
   if (!chip) return;
   ui.activeArtifactId = id;
   ui.artifactPanelOpen = true;
+  saveArtifactPanelOpen(true);
 }
 
 /** 패널 닫기 (칩은 메시지에 그대로 — 다시 클릭하면 열림). */
 export function closeArtifactPanel() {
   ui.artifactPanelOpen = false;
+  saveArtifactPanelOpen(false);
 }
 
 /** 패널 토글. */
 export function toggleArtifactPanel() {
   ui.artifactPanelOpen = !ui.artifactPanelOpen;
+  saveArtifactPanelOpen(ui.artifactPanelOpen);
 }
 
 /**
- * 세션 전환 시 패널 가시성 / 활성 id 만 리셋한다.
+ * 세션 전환 시 활성 칩 id 만 리셋한다 — 새 세션의 칩 목록과 무관하므로 비워둔다.
+ * 패널 가시성(artifactPanelOpen) 은 사용자가 명시적으로 토글하지 않는 한 유지한다 (sticky UX).
  * payload 는 메시지에 영속되므로 비울 게 없다.
  */
 export function resetArtifactPanelState() {
   ui.activeArtifactId = null;
-  ui.artifactPanelOpen = false;
 }
 
 /**

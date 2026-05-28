@@ -50,6 +50,7 @@ async def chat(
                 max_agent_calls=MAX_AGENT_CALLS_PER_TURN,
                 force_skills=req.force_skills,
                 session_title=session_title,
+                user_prompt=settings.user_prompt,
             ):
                 yield f"data: {event.model_dump_json()}\n\n"
         except Exception as exc:

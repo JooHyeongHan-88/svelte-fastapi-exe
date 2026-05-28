@@ -42,6 +42,11 @@ export const ui = $state({
   /** @type {string[]} */
   composerSkills: [],
 
+  // Composer textarea 에 외부에서 텍스트를 주입하기 위한 일회용 슬롯.
+  // rewindToMessage() 가 잘라낸 user 메시지 본문을 여기에 쓰면 Composer 가
+  // $effect 로 감지해 value 에 복사 후 즉시 비워진다.
+  composerSeed: "",
+
   // 아티팩트 패널 — 활성 칩 id 와 패널 가시성만 휘발 상태로 둔다.
   // 산출물 payload 는 메시지 안 (message.artifactChips[].payload) 에 영속.
   activeArtifactId: /** @type {string|null} */ (null),

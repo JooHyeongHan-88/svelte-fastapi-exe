@@ -4,6 +4,7 @@ const KEY_SESSIONS = "chat:sessions:v1";
 const KEY_ACTIVE = "chat:activeSessionId:v1";
 const KEY_THEME = "chat:theme:v1";
 const KEY_ARTIFACT_WIDTH = "chat:artifactWidth:v1";
+const KEY_ARTIFACT_PANEL_OPEN = "chat:artifactPanelOpen:v1";
 const KEY_SIDEBAR_WIDTH = "chat:sidebarWidth:v1";
 
 const ARTIFACT_WIDTH_MIN = 320;
@@ -90,6 +91,22 @@ export const ARTIFACT_WIDTH_BOUNDS = {
   max: ARTIFACT_WIDTH_MAX,
   default: ARTIFACT_WIDTH_DEFAULT,
 };
+
+// 아티팩트 패널 열림 상태를 영속화. TopBar 토글 버튼이 sticky 한 UX 를 제공하려면
+// 새로고침 / 세션 전환 후에도 마지막 상태를 복원할 필요가 있다.
+export function loadArtifactPanelOpen() {
+  try {
+    return localStorage.getItem(KEY_ARTIFACT_PANEL_OPEN) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveArtifactPanelOpen(open) {
+  try {
+    localStorage.setItem(KEY_ARTIFACT_PANEL_OPEN, open ? "1" : "0");
+  } catch {}
+}
 
 export function loadSidebarWidth() {
   try {

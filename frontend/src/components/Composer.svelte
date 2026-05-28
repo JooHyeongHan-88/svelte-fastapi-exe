@@ -1,6 +1,6 @@
 <script>
   import { ui } from "../lib/state.svelte.js";
-  import { sendMessage } from "../lib/chatActions.svelte.js";
+  import { sendMessage, stopStreaming } from "../lib/chatActions.svelte.js";
   import SkillPicker from "./SkillPicker.svelte";
 
   let value = $state("");
@@ -114,7 +114,32 @@
 
   // skill chip 이 붙어 있으면 본문이 없어도 전송 활성화
   let canSend = $derived((value.trim().length > 0 || ui.composerSkills.length > 0) && !ui.streaming);
+
+  // ui.composerSeed 가 외부(rewindToMessage)에서 채워지면 textarea 에 복사 후 즉시 비운다.
+  // 빈 문자열 → 빈 문자열 변경은 Svelte 가 트리거하지 않으므로 무한 루프 위험 없음.
+  $effect(() => {
+    if (ui.composerSeed) {
+      value = ui.composerSeed;
+      ui.composerSeed = "";
+      // autoResize / focus 는 DOM 갱신 직후가 안전 — microtask 로 한 프레임 미룬다.
+      queueMicrotask(() => {
+        autoResize();
+        textareaEl?.focus();
+      });
+    }
+  });
+
+  // 윈도우 레벨 ESC — textarea 가 streaming 중 disabled 라 onKey 가 안 잡힌다.
+  // 입력란 외 어디서든 ESC 를 눌러 스트리밍을 중지할 수 있어야 한다.
+  function onWindowKey(e) {
+    if (e.key !== "Escape" || !ui.streaming) return;
+    // 슬래시 패널 닫기와 충돌하지 않게: streaming 중에는 picker 가 안 뜬다 (입력 비활성).
+    e.preventDefault();
+    stopStreaming();
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="composer-wrap">
   <!-- 슬래시 커맨드 패널 — 입력창 위에 부유 -->
@@ -154,7 +179,7 @@
       oninput={onInput}
       onkeydown={onKey}
       placeholder={ui.streaming
-        ? "응답을 기다리는 중…"
+        ? "응답 중…  ·  ESC 로 중지"
         : ui.composerSkills.length > 0
           ? "본문을 입력하세요 (Backspace 로 스킬 제거)"
           : "메시지를 입력하세요  ·  / 로 스킬 호출"}

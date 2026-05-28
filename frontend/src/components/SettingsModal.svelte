@@ -164,6 +164,39 @@
           {/if}
         </section>
 
+        <!-- 사용자 지침 섹션 — 시스템 프롬프트 뒤에 합성될 추가 지침. -->
+        <section class="section">
+          <div class="section-label">사용자 지침</div>
+
+          <label class="toggle-row">
+            <input
+              type="checkbox"
+              bind:checked={ui.settingsDraft.user_prompt_enabled}
+              disabled={ui.settingsSaving}
+            />
+            <span>시스템 프롬프트에 사용자 지침을 추가</span>
+          </label>
+
+          {#if ui.settingsDraft.user_prompt_enabled}
+            <div class="field user-prompt-field">
+              <textarea
+                class="textarea"
+                bind:value={ui.settingsDraft.user_prompt}
+                maxlength="2000"
+                rows="5"
+                placeholder="예: 모든 코드 예시는 TypeScript로 작성하고, 응답 마지막에 한 줄 요약을 붙여주세요"
+                disabled={ui.settingsSaving}
+              ></textarea>
+              <div
+                class="char-count"
+                class:warn={(ui.settingsDraft.user_prompt?.length ?? 0) > 1500}
+              >
+                {ui.settingsDraft.user_prompt?.length ?? 0} / 2000
+              </div>
+            </div>
+          {/if}
+        </section>
+
       </div>
 
       <!-- ── 푸터 ── -->
@@ -384,6 +417,62 @@
   .select {
     cursor: pointer;
     appearance: auto;
+  }
+
+  /* ── 사용자 지침 ── */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--fg);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .toggle-row input[type="checkbox"] {
+    cursor: pointer;
+  }
+
+  .user-prompt-field {
+    margin-top: 10px;
+  }
+
+  .textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 100px;
+    outline: none;
+    transition: border-color 0.12s;
+  }
+
+  .textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+
+  .textarea:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .char-count {
+    text-align: right;
+    font-size: 11px;
+    color: var(--fg-subtle);
+    margin-top: 4px;
+  }
+
+  .char-count.warn {
+    color: var(--danger);
   }
 
   .docs-link {

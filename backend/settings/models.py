@@ -25,6 +25,9 @@ class LLMSettings(BaseModel):
 
     provider: Literal["mock", "openai_compatible", "dtgpt"] = "mock"
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    # 사용자가 SettingsModal 에서 작성한 추가 지침. 비어 있지 않으면 매 턴 system prompt
+    # 베이스 뒤에 "# 사용자 지침" 섹션으로 합성된다. 2000자 상한은 토큰 예산 보호용.
+    user_prompt: str = Field(default="", max_length=2000)
 
     def active(self) -> ProviderConfig:
         """활성 provider 의 접속 정보를 반환한다. 없으면 빈 ProviderConfig 생성."""

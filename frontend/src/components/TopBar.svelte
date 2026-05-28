@@ -1,6 +1,7 @@
 <script>
   import { ui, activeSession } from "../lib/state.svelte.js";
   import { toggleSidebar, renameSession } from "../lib/chatActions.svelte.js";
+  import { toggleArtifactPanel } from "../lib/artifactActions.svelte.js";
 
   let session = $derived(activeSession());
   let title = $derived(session?.title ?? "새 대화");
@@ -61,6 +62,22 @@
       </button>
     {/if}
   </div>
+
+  <!-- 우측: 아티팩트 패널 토글 — 패널이 열려 있을 때 active 상태로 시각 피드백. -->
+  <button
+    type="button"
+    class="panel-toggle"
+    class:active={ui.artifactPanelOpen}
+    onclick={toggleArtifactPanel}
+    aria-label={ui.artifactPanelOpen ? "아티팩트 패널 닫기" : "아티팩트 패널 열기"}
+    aria-pressed={ui.artifactPanelOpen}
+    title="아티팩트 패널"
+  >
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4 L 15 20" />
+    </svg>
+  </button>
 </header>
 
 <style>
@@ -110,6 +127,34 @@
 
   .title-btn:hover:not(:disabled) {
     background: var(--bg-hover);
+  }
+
+  /* 아티팩트 패널 토글 — .menu 와 같은 32x32 톤. active 시 accent 음각으로 상태 표시. */
+  .panel-toggle {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    color: var(--fg-muted);
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .panel-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  .panel-toggle.active {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+  }
+
+  .panel-toggle.active:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
   }
 
   .title-input {
