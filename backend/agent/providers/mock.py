@@ -517,7 +517,7 @@ async def _scenario_D_analyst_sub(
                 id=f"mock-D-sub-eval-{uuid.uuid4().hex[:8]}",
                 name="eval_expression",
                 arguments={
-                    "expression": "stats_df.filter(pl.col('metric')=='mean')['value'][0]",
+                    "expression": "stats_df.filter(stats_df['metric'] == 'mean')['value'][0]",
                     "store_as": "avg",
                 },
             )

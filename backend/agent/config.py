@@ -54,12 +54,17 @@ _max_tok_raw: str | None = os.environ.get("APP_LLM_MAX_TOKENS")
 LLM_MAX_TOKENS: int | None = int(_max_tok_raw) if _max_tok_raw else None
 
 # Agent harness 한 턴에서 허용하는 provider→tool→provider 반복 횟수 상한.
-MAX_AGENT_ITERATIONS: int = int(os.environ.get("APP_MAX_AGENT_ITERATIONS", "5"))
+# parquet→spec→chart 3-레이어 파이프라인을 쓰는 에이전트(예: 복합 시나리오 E 의
+# 오케스트레이터)는 단일 턴에서 6회 반복이 필요하다. 5 는 여유가 0 이라 한 번만
+# 라운드트립이 추가돼도 [max_iterations] 로 중단됐다 — headroom 확보를 위해 8.
+MAX_AGENT_ITERATIONS: int = int(os.environ.get("APP_MAX_AGENT_ITERATIONS", "8"))
 
 # 한 사용자 turn 에서 오케스트레이터 + 모든 (재귀) 서브 에이전트 합산 provider 호출 상한.
 # 무한 위임 루프와 자원 과다 소모를 차단하기 위한 budget.
+# 2단 위임 복합 작업(오케스트레이터 6 + analyst 5 + writer 3 ≈ 14)을 수용하려면
+# 10 으로는 부족하다. loop-guard·depth-guard 가 별도로 무한루프를 막으므로 20 으로 상향.
 MAX_AGENT_CALLS_PER_TURN: int = int(
-    os.environ.get("APP_MAX_AGENT_CALLS_PER_TURN", "10")
+    os.environ.get("APP_MAX_AGENT_CALLS_PER_TURN", "20")
 )
 
 # 서브 에이전트 호출 깊이 상한. 0=orchestrator, 1=sub-agent. 2 이상은 거부.

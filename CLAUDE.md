@@ -205,8 +205,8 @@ pwsh packaging/release-dryrun.ps1 -Force
 | `APP_SYSTEM_PROMPT` | (내장 한국어 프롬프트) | LLM 시스템 프롬프트 |
 | `APP_LLM_TEMPERATURE` | `0.7` | 생성 temperature |
 | `APP_LLM_MAX_TOKENS` | — | 미설정 시 provider 기본값 |
-| `APP_MAX_AGENT_ITERATIONS` | `5` | 한 턴당 provider→tool 반복 상한 |
-| `APP_MAX_AGENT_CALLS_PER_TURN` | `10` | 오케스트레이터+서브 에이전트 합산 provider 호출 상한 (TurnBudget) |
+| `APP_MAX_AGENT_ITERATIONS` | `8` | 한 턴당 provider→tool 반복 상한 (복합 시나리오 오케스트레이터가 6회 필요) |
+| `APP_MAX_AGENT_CALLS_PER_TURN` | `20` | 오케스트레이터+서브 에이전트 합산 provider 호출 상한 (TurnBudget). 2단 위임 복합 작업 ≈14회 |
 | `APP_MAX_AGENT_DEPTH` | `1` | 서브 에이전트 호출 깊이 상한 (1 이상 변경 시 경고) |
 | `APP_MAX_HISTORY_MESSAGES` | `40` | 클라이언트당 보관 메시지 수 상한 |
 | `APP_SETTINGS_TEST_TIMEOUT` | `10` | 연결 테스트 타임아웃 (초) |
