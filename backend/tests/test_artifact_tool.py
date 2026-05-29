@@ -21,7 +21,7 @@ def _setup() -> None:
     result_store.set_session_context("artifacttest1234", "산출물도구테스트")
 
 
-def _save(filename: str, content: str, kind: str = "markdown"):
+def _save(filename: str, content, kind: str = "markdown"):
     """save_artifact 비동기 호출을 동기적으로 실행한다."""
     return asyncio.run(
         artifact_module.save_artifact(filename=filename, content=content, kind=kind)
@@ -80,6 +80,38 @@ def test_accepts_valid_json_for_json_kind() -> None:
     result = _save("data.json", json.dumps(payload), kind="json")
     assert result.is_error is False
     assert result.data["kind"] == "json"
+
+
+def test_accepts_dict_object_for_json_kind() -> None:
+    # LLM 이 차트 spec 등을 JSON 문자열이 아닌 dict 객체로 넘기는 흔한 케이스.
+    # 슬롯 가드가 "저장할 본문 텍스트를 주세요" 로 오인하던 회귀 방지.
+    _setup()
+    spec = {"title": "요약", "series": [1, 2, 3], "한글": "값"}
+    result = _save("charts.spec.json", spec, kind="json")
+
+    assert result.is_error is False, result.content
+    assert result.data["kind"] == "json"
+
+    abs_path = (result_store.turn_slot() / "charts.spec.json").resolve()
+    assert json.loads(abs_path.read_text(encoding="utf-8")) == spec
+
+
+def test_accepts_list_object_for_json_kind() -> None:
+    _setup()
+    payload = [{"a": 1}, {"a": 2}]
+    result = _save("rows.json", payload, kind="json")
+
+    assert result.is_error is False, result.content
+    abs_path = (result_store.turn_slot() / "rows.json").resolve()
+    assert json.loads(abs_path.read_text(encoding="utf-8")) == payload
+
+
+def test_rejects_dict_object_for_markdown_kind() -> None:
+    # markdown/text 는 평문 문자열만 — 객체가 오면 명확한 오류로 self-correct 유도.
+    _setup()
+    result = _save("note.md", {"not": "text"}, kind="markdown")
+    assert result.is_error is True
+    assert "문자열" in result.content
 
 
 def test_turn_slot_reused_across_multiple_saves() -> None:

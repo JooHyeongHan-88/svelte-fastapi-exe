@@ -98,14 +98,19 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
    └─ _run_agent_turn(depth=0) — 공통 provider→tool 루프
         ├─ delta           → yield 그대로 전달
         ├─ tool_call 분기
+        │    ├─ MALFORMED_TOOL_ARGS_KEY   → ToolResultEvent(is_error) → LLM self-correct
         │    ├─ add_todo / complete_todo  → AgentState 직접 갱신 + TodoUpdateEvent
         │    ├─ call_sub_agent            → _dispatch_sub_agent (순차 실행)
         │    │    └─ AgentSwitch → AgentProgress×N → AgentReturn
-        │    ├─ 슬롯 가드 실패            → AskUserEvent + 안전 종료
+        │    ├─ 슬롯 가드(validate_tool_args)
+        │    │    ├─ invalid_message      → ToolResultEvent(is_error) → LLM self-correct
+        │    │    └─ missing 슬롯         → AskUserEvent + 안전 종료
         │    └─ 정상 도구               → _execute_tool + ToolResultEvent
         └─ done → break
    │
-   └─ store.append + state_store.set + DoneEvent
+   ├─ AskUser 없이 완료 → pending_tool/missing_slots/pending_sub_agent 자동 클리어
+   └─ store.append(turn_messages) + state_store.set + DoneEvent
+        └─ turn_messages 의 tool 메시지는 800자 truncation 후 히스토리 저장
 ```
 
 ### AgentRegistry — 서브 에이전트 카탈로그 (`AGENTS/`)
@@ -146,7 +151,7 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
 새 사내 API 를 도구로 노출하려면 `backend/agent/tools/` 에 새 `.py` 파일을 만들고 `@register_tool` 데코레이터를 붙인 async 함수를 작성하면 끝. 부팅 시 `agent/tools/__init__.py` 가 모든 서브모듈을 import 해 데코레이터의 부수효과로 `_REGISTRY` 가 채워진다.
 
 - **시그니처에서 자동 스키마 생성**: 각 파라미터의 `Annotated[T, "설명"]` 을 Pydantic `create_model` 로 묶어 JSON Schema (LLM 노출) + `TypeAdapter` (입력 검증) 를 1회 생성. 매 turn 재생성 없음.
-- **타입·형식 가드 통합**: `date_from="오늘"` 처럼 형식이 깨진 경우도 `MissingSlot` 으로 변환되어 동일한 `AskUserEvent` 흐름으로 사용자에게 친근한 한국어 재질문.
+- **오류 책임자별 분기 가드**: `validate_tool_args` 가 두 경로로 나눈다 — (1) `type=="missing"`(값 부재) → `MissingSlot`→`AskUserEvent` 로 사용자에게 재질문, (2) 그 외 형식/타입/enum 위반(`date_from="오늘"`, 문자열 자리 dict 등 값은 줬는데 모양이 틀림) → `SlotCheckResult.invalid_message` 로 LLM 에 도구 에러를 회신해 같은 루프 안에서 self-correct 유도(사용자 미개입). 둘이 동시면 invalid 경로가 누락 항목까지 함께 안내. 동일 잘못된 호출 반복은 `history_calls` loop-guard 가 차단.
 - **중첩 Pydantic 모델 인자**: `_execute_tool` 이 `model_validate` 후 `{name: getattr(parsed, name) for name in type(parsed).model_fields}` 로 kwargs 를 추출한다. `model_dump()` 를 쓰면 `list[ImageItem]` 같은 중첩 모델이 `list[dict]` 로 직렬화돼 도구 함수의 타입 기대와 불일치한다 — **절대 `model_dump()` 로 바꾸지 말 것**.
 - **`ToolResult` 구조화 응답**: 함수는 `str` 또는 `ToolResult(content, data, is_error)` 반환. LLM 컨텍스트엔 `content` 만, 프론트엔드엔 `data` 까지 노출.
 - **Timeout 일등시민**: 데코레이터의 `timeout_seconds` 가 매 호출 `asyncio.wait_for` 로 강제. 기본값은 `APP_TOOL_DEFAULT_TIMEOUT` (30s). 초과 시 `ToolResult(is_error=True, content="[timeout] ...")` 자동 반환.

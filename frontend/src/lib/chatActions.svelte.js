@@ -351,11 +351,13 @@ export async function sendMessage(text) {
           ui.sessions = [...ui.sessions];
         } else if (ev.type === "error") {
           if (ev.is_fallback) {
-            msg.isFallback = true;
-            // 마지막 text 세그먼트에 fallback 마킹 (Segment.svelte 가 스타일 분기)
+            // is_recovered: 반복 예산 소진이지만 모든 todo 완료 → 중립(완료) 스타일
+            // !is_recovered: 작업 미완 → 경고(danger) 스타일
+            msg.isFallback = !ev.is_recovered;
             for (let i = msg.segments.length - 1; i >= 0; i--) {
               if (msg.segments[i].kind === "text") {
-                msg.segments[i].isFallback = true;
+                msg.segments[i].isFallback = !ev.is_recovered;
+                msg.segments[i].isRecovered = !!ev.is_recovered;
                 break;
               }
             }

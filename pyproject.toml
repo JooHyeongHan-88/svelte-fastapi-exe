@@ -1,6 +1,6 @@
 [project]
 name = "senpia"
-version = "0.0.5"
+version = "0.0.6"
 description = "Vite/Svelte로 만든 AI Agent 채팅 UI를 FastAPI가 서빙하고, PyInstaller로 단일 `.exe`로 패키징하는 사내 배포용 데스크톱 앱"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,3 +24,9 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.14",
 ]
+
+[tool.pytest.ini_options]
+# `async def test_*` 를 마커 없이 자동 실행 (test_harness_timeout.py 등).
+# 미설정 시 "async def functions are not natively supported" 로 collect 단계에서
+# 6개 harness 테스트가 조용히 실패해 핵심 로직이 미검증 상태로 남았다.
+asyncio_mode = "auto"

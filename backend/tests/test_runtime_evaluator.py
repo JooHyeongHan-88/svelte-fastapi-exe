@@ -264,5 +264,53 @@ def test_exec_exec_inside_blocked() -> None:
     assert raised
 
 
+# ---------------------------------------------------------------------------
+# safe_exec / safe_eval — nested 스코프(genexpr/def)에서 top-level 변수 참조
+# globals/locals 분리 시 NameError 가 나던 회귀 방지.
+# ---------------------------------------------------------------------------
+
+
+def test_exec_generator_expression_sees_top_level_var() -> None:
+    # 분산/표준편차 계산의 정석: sum((x-mean)**2 for x in values)
+    ns: dict = {}
+    evaluator.safe_exec(
+        "values = [1.0, 2.0, 3.0, 4.0]\n"
+        "mean = sum(values) / len(values)\n"
+        "variance = sum((x - mean) ** 2 for x in values) / len(values)",
+        ns,
+    )
+    assert ns["mean"] == 2.5
+    assert ns["variance"] == 1.25
+
+
+def test_exec_nested_def_sees_top_level_var() -> None:
+    ns: dict = {}
+    evaluator.safe_exec(
+        "values = [1.0, 2.0, 3.0, 4.0]\n"
+        "mean = sum(values) / len(values)\n"
+        "def variance():\n"
+        "    return sum((x - mean) ** 2 for x in values) / len(values)\n"
+        "var = variance()",
+        ns,
+    )
+    assert ns["var"] == 1.25
+
+
+def test_exec_does_not_leak_builtins_into_namespace() -> None:
+    # __builtins__ 주입 후 원상복구되어 namespace 에 남지 않아야 한다.
+    ns: dict = {}
+    evaluator.safe_exec("x = 1", ns)
+    assert "__builtins__" not in ns
+    assert ns["x"] == 1
+
+
+def test_eval_generator_expression_sees_namespace_var() -> None:
+    result = evaluator.safe_eval(
+        "sum((x - mean) ** 2 for x in values)",
+        {"values": [1.0, 2.0, 3.0, 4.0], "mean": 2.5},
+    )
+    assert result == 5.0
+
+
 if __name__ == "__main__":
     run_tests(globals())

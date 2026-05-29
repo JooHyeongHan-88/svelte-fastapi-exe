@@ -165,8 +165,8 @@ def _format_variable_summary(value: Any, *, max_rows: int = 5) -> str:
 async def inspect_callable(
     qualified_name: Annotated[
         str,
-        "조회할 dotted path. 예: 'sensordx.utils.load_df' "
-        "(허용 라이브러리에 속해야 함).",
+        "조회할 dotted path (허용 라이브러리에 속해야 함). 형식: '<pkg>.<module>.<name>'. "
+        "system prompt 의 'Available Library APIs' 섹션에 나온 실제 이름을 사용하세요.",
     ],
 ) -> ToolResult:
     """단일 객체의 시그니처/docstring 텍스트를 반환한다."""
@@ -198,7 +198,12 @@ async def inspect_callable(
     timeout_seconds=5,
 )
 async def list_module_members(
-    module_path: Annotated[str, "조회할 모듈 dotted path. 예: 'sensordx.utils'."],
+    module_path: Annotated[
+        str,
+        "조회할 모듈 dotted path (허용 라이브러리에 속해야 함). "
+        "임의의 이름을 추측하지 말고 system prompt 의 'Available Library APIs' "
+        "섹션 또는 APP_ALLOWED_LIBRARIES 에 실제 노출된 모듈만 사용하세요.",
+    ],
 ) -> ToolResult:
     """모듈 멤버 목록을 가볍게 펼친 형태로 반환한다."""
     try:
@@ -267,7 +272,7 @@ async def list_module_members(
     slot_prompts={
         "qualified_name": (
             "어떤 함수를 호출할지 dotted path 로 알려주세요 "
-            "(예: sensordx.utils.load_df)."
+            "(허용 라이브러리의 실제 함수 이름)."
         ),
         "kwargs": "함수에 전달할 키워드 인자를 JSON 객체로 알려주세요.",
         "store_as": "결과를 저장할 변수 이름을 정해 주세요 (예: 'df').",
@@ -276,7 +281,9 @@ async def list_module_members(
 )
 async def call_function(
     qualified_name: Annotated[
-        str, "실행할 함수의 dotted path. 예: 'sensordx.utils.load_df'."
+        str,
+        "실행할 함수의 dotted path (허용 라이브러리의 실제 함수). "
+        "'Available Library APIs' 섹션에 나온 이름을 사용하고 임의로 추측하지 마세요.",
     ],
     kwargs: Annotated[
         dict[str, Any],

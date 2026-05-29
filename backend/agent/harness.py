@@ -35,6 +35,7 @@ from typing import Any, ClassVar
 from agent.config import MAX_AGENT_DEPTH
 from agent.guard import validate_tool_args
 from agent.models import (
+    MALFORMED_TOOL_ARGS_KEY,
     AgentProgressEvent,
     AgentReturnEvent,
     AgentState,
@@ -78,6 +79,14 @@ logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_ID = "orchestrator"
 TASK_SUMMARY_HEADER = "Task Summary:"
+
+# 동일 (name, args) 호출이 반복될 때 LLM 에 회신하는 루프 차단 메시지.
+# 정상 실행 경로(history_calls)와 형식오류 self-correct 경로 양쪽에서 재사용한다.
+_LOOP_GUARD_MESSAGE = (
+    "[System] 동일한 인자로 이 도구를 연속해서 호출했습니다. 루프가 감지되었습니다. "
+    "이전 실행 결과를 바탕으로 원인을 분석(Root Cause Analysis)하고 완전히 다른 "
+    "접근 방식을 시도하세요."
+)
 
 # todo 가 더 이상 진행되지 않는 최종 상태.
 _TERMINAL_STATUSES: frozenset[TodoStatus] = frozenset(
@@ -266,6 +275,7 @@ async def run_turn(
 
         active_skills = list(skills)  # turn-local mutable copy for activate_skill
 
+        ask_user_occurred = False
         async for ev in _run_agent_turn(
             agent_id=ORCHESTRATOR_ID,
             messages=messages,
@@ -283,7 +293,18 @@ async def run_turn(
             active_skills=active_skills,
             recompose_system=_recompose,
         ):
+            if isinstance(ev, AskUserEvent):
+                ask_user_occurred = True
             yield ev
+
+        # F11: AskUser 없이 턴이 완료됐으면 pending_tool/missing_slots 는 사용되지 않은
+        # 잔재다 — 다음 턴으로 넘기지 않고 클리어해 오염을 방지한다.
+        if not ask_user_occurred:
+            state.pending_tool = None
+            state.pending_args = {}
+            state.missing_slots = {}
+            state.pending_sub_agent = None
+            state.pending_sub_task = None
 
         store.append(client_id, *turn_messages)
         state_store.set(client_id, state)
@@ -291,7 +312,9 @@ async def run_turn(
 
     except Exception as exc:  # noqa: BLE001 — 사용자에게 에러 이벤트로 변환해 전달
         logger.exception("harness run_turn failed")
-        yield ErrorEvent(message=str(exc))
+        # F12: str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 타입만 전달.
+        safe = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
+        yield ErrorEvent(message=safe)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +433,26 @@ async def _run_agent_turn(
 
         interrupted = False
         for call in pending_tool_calls:
+            # F3: provider 가 tool_call 인자 JSON 파싱에 실패한 경우 — 사용자에게 묻지
+            # 않고 LLM 에 재전송을 요구한다 (빈 인자로 오인 → 슬롯 누락 질문 방지).
+            if MALFORMED_TOOL_ARGS_KEY in (call.arguments or {}):
+                if _record_invalid_call(call, history_calls):
+                    result_content = _LOOP_GUARD_MESSAGE
+                else:
+                    result_content = (
+                        f"[arg-error] '{call.name}' 도구의 인자가 유효한 JSON 이 "
+                        "아닙니다 (스트리밍 중 잘렸거나 형식이 깨졌습니다). 인자를 더 "
+                        "짧고 정확한 JSON 으로 같은 도구를 다시 호출하세요."
+                    )
+                _append_tool_result(messages, turn_messages, call, result_content)
+                yield ToolResultEvent(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    result=result_content,
+                    is_error=True,
+                )
+                continue
+
             # activate_skill — SKILL 카탈로그 의미 기반 활성화. turn-local active_skills 갱신.
             if call.name == ACTIVATE_SKILL and active_skills is not None:
                 skill_name = (call.arguments or {}).get("name", "").strip()
@@ -508,6 +551,20 @@ async def _run_agent_turn(
             # 서브 에이전트 디스패치 — async generator nesting 으로 통과.
             if call.name == SUB_AGENT_DISPATCH and agent_registry is not None:
                 guard = validate_tool_args(call.arguments, registry.get(call.name))
+                if guard.invalid_message:
+                    # call_sub_agent 인자 형식 오류 — 사용자 미개입, LLM self-correct.
+                    if _record_invalid_call(call, history_calls):
+                        result_content = _LOOP_GUARD_MESSAGE
+                    else:
+                        result_content = guard.invalid_message
+                    _append_tool_result(messages, turn_messages, call, result_content)
+                    yield ToolResultEvent(
+                        tool_call_id=call.id,
+                        name=call.name,
+                        result=result_content,
+                        is_error=True,
+                    )
+                    continue
                 if not guard.ok:
                     first = guard.missing[0]
                     if state is not None:
@@ -576,6 +633,20 @@ async def _run_agent_turn(
 
             tool = registry.get(call.name)
             guard = validate_tool_args(call.arguments, tool)
+            if guard.invalid_message:
+                # 형식 오류 — 사용자에게 묻지 않고 LLM 에 도구 에러로 회신해 self-correct.
+                if _record_invalid_call(call, history_calls):
+                    result_content = _LOOP_GUARD_MESSAGE
+                else:
+                    result_content = guard.invalid_message
+                _append_tool_result(messages, turn_messages, call, result_content)
+                yield ToolResultEvent(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    result=result_content,
+                    is_error=True,
+                )
+                continue
             if not guard.ok:
                 first = guard.missing[0]
                 if state is not None:
@@ -603,7 +674,7 @@ async def _run_agent_turn(
             )
             call_sig = (call.name, args_str)
             if call_sig in history_calls:
-                result_content = "[System] 동일한 인자로 이 도구를 연속해서 호출했습니다. 루프가 감지되었습니다. 이전 실행 결과를 바탕으로 원인을 분석(Root Cause Analysis)하고 완전히 다른 접근 방식을 시도하세요."
+                result_content = _LOOP_GUARD_MESSAGE
                 _append_tool_result(messages, turn_messages, call, result_content)
                 yield ToolResultEvent(
                     tool_call_id=call.id,
@@ -644,16 +715,30 @@ async def _run_agent_turn(
                     state.missing_slots = {}
 
         if interrupted:
+            # 배치 도구 호출 중간에 중단되면 뒤따르는 tool_call 이 응답 없이 남는다.
+            # 모든 tool_call 에 placeholder 응답을 채워 메시지 정합성(OpenAI 규약)을 지킨다.
+            _balance_unresolved_tool_calls(messages, turn_messages, assistant_msg)
             return
     else:
-        msg = (
-            f"[max_iterations] {agent_id}: {max_iterations}회 반복 상한에 도달했습니다. "
-            "작업이 완전히 완료되지 않았을 수 있습니다."
+        # 모든 todo 가 terminal 상태면 작업은 완료됐으나 예산만 소진된 것 — "복구"로 판정.
+        is_recovered = (
+            state is not None and bool(state.todo_list) and _all_todos_terminal(state)
         )
+        if is_recovered:
+            msg = (
+                f"[max_iterations] {agent_id}: 반복 상한({max_iterations}회)에 도달했으나 "
+                "모든 작업이 완료 상태입니다."
+            )
+        else:
+            msg = (
+                f"[max_iterations] {agent_id}: {max_iterations}회 반복 상한에 도달했습니다. "
+                "작업이 완전히 완료되지 않았을 수 있습니다."
+            )
         logger.warning(
-            "agent harness reached max_iterations=%d (agent=%s)",
+            "agent harness reached max_iterations=%d (agent=%s, recovered=%s)",
             max_iterations,
             agent_id,
+            is_recovered,
         )
         fallback_msg = Message(
             role="user",
@@ -677,7 +762,7 @@ async def _run_agent_turn(
                 turn_messages.append(fallback_response)
             # 자연어 응답이 생성됐으므로 ErrorEvent 는 프론트에 노출하지 않는다.
             # is_fallback=True 플래그만 보내 UI 가 마지막 메시지를 스타일링하도록 신호.
-            yield ErrorEvent(message=msg, is_fallback=True)
+            yield ErrorEvent(message=msg, is_fallback=True, is_recovered=is_recovered)
         else:
             # fallback LLM 호출 자체가 실패한 경우 — 일반 에러로 노출.
             yield ErrorEvent(message=msg)
@@ -1378,6 +1463,54 @@ def _mark_running_todo_done(
 # ---------------------------------------------------------------------------
 # 메시지 누적 / 도구 실행 헬퍼
 # ---------------------------------------------------------------------------
+
+
+def _balance_unresolved_tool_calls(
+    messages: list[Message],
+    turn_messages: list[Message] | None,
+    assistant_msg: Message,
+) -> None:
+    """중단으로 처리되지 못한 tool_call 에 placeholder tool 응답을 채운다.
+
+    OpenAI 와이어 규약상 assistant 의 모든 tool_call 은 매칭되는 tool 메시지가
+    있어야 한다. 배치 도구 호출 도중 AskUser 등으로 턴이 끊기면 뒤따르는 호출이
+    응답 없이 남아, 이 메시지가 히스토리에 영속되면 다음 턴 요청이 400 으로
+    거부된다. 미해결 tool_call 마다 placeholder 응답을 추가해 쌍을 맞춘다.
+
+    Args:
+        messages: LLM 컨텍스트 (in-place 보정).
+        turn_messages: 영속화 버퍼. 서브 에이전트는 None.
+        assistant_msg: 이번 iteration 의 assistant 메시지 (tool_calls 보유).
+    """
+    if not assistant_msg.tool_calls:
+        return
+    resolved = {m.tool_call_id for m in messages if m.role == "tool" and m.tool_call_id}
+    for tc in assistant_msg.tool_calls:
+        if tc.id in resolved:
+            continue
+        placeholder = "[중단됨] 사용자 입력 대기로 이 도구 호출은 실행되지 않았습니다."
+        tool_msg = Message(role="tool", content=placeholder, tool_call_id=tc.id)
+        messages.append(tool_msg)
+        if turn_messages is not None:
+            turn_messages.append(tool_msg)
+
+
+def _record_invalid_call(call: ToolCall, history_calls: set[tuple[str, str]]) -> bool:
+    """형식오류 호출 시그니처를 history_calls 에 기록한다.
+
+    같은 (name, args) 형식오류 호출이 반복되면(=self-correct 실패) True 를 반환해
+    호출자가 루프 차단 메시지로 전환하도록 한다. 정상 실행 경로의 dedup 과 동일한
+    history_calls 집합을 공유하므로 형식오류↔정상 호출 간 루프도 함께 감지된다.
+
+    Returns:
+        True: 이미 본 동일 호출(반복). False: 최초 기록.
+    """
+    args_str = json.dumps(call.arguments, sort_keys=True) if call.arguments else ""
+    sig = (call.name, args_str)
+    if sig in history_calls:
+        return True
+    history_calls.add(sig)
+    return False
 
 
 def _append_tool_result(

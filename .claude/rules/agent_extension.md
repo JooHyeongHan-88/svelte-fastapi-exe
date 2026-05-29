@@ -67,9 +67,9 @@ async def fetch_sales(
 - 함수는 반드시 `async`. 동기 함수는 등록 시 `TypeError`.
 - 각 파라미터에 `Annotated[T, "설명"]` 로 의미 부착 — JSON Schema description 으로 LLM에 노출.
 - 반환값은 `str` 또는 `ToolResult`. dict 등 임의 객체는 `str(...)` 로 폴백 변환.
-- 인자 검증은 Pydantic이 자동. 형식 오류 (e.g. `date_from="오늘"`) 도 `AskUserEvent` 로 자연스러운 재질문.
+- 인자 검증은 Pydantic이 자동. **필수 슬롯 누락**(값 부재)만 `AskUserEvent` 로 사용자에게 재질문하고, **형식·타입 오류**(값은 줬는데 모양이 틀림, e.g. `date_from="오늘"`·문자열 자리 dict)는 `invalid_message` 로 LLM 에 도구 에러를 회신해 self-correct 시킨다 (사용자 미개입). 분기 로직은 `guard._split_errors`.
 - `sentinel=True` 는 harness가 분기 처리하는 도구 (`add_todo` 등) 전용. 함부로 쓰지 말 것.
-- `slot_prompts` 딕셔너리는 파라미터 이름 → 사용자에게 보여줄 질문 문구. 지정하지 않으면 Pydantic 에러 메시지 그대로 사용.
+- `slot_prompts` 딕셔너리는 파라미터 이름 → 사용자에게 보여줄 질문 문구 (**missing 슬롯에만** 적용; 형식 오류는 LLM 에 회신되므로 미사용). 지정하지 않으면 Pydantic 에러 메시지 그대로 사용.
 - `timeout_seconds` 미지정 시 `APP_TOOL_DEFAULT_TIMEOUT` (30s) 적용.
 
 ### 도구 반환값 구조

@@ -153,9 +153,14 @@ SAFE_BUILTINS: dict[str, Any] = _build_safe_builtins()
 def safe_eval(expression: str, namespace: dict[str, Any]) -> Any:
     """제한된 builtins 환경에서 expression 한 줄을 평가한다.
 
+    namespace 와 builtins 를 **하나의 globals dict 로 병합**해 module 스코프로
+    평가한다. globals/locals 를 분리하면 식 안의 generator expression·comprehension
+    이 free 변수를 locals 가 아닌 globals 에서만 찾아, namespace 변수를 참조하는
+    ``sum(x for x in values)`` 같은 식이 NameError 로 깨진다 (safe_exec 와 동일 함정).
+
     Args:
         expression: 평가할 Python 식. assignment / statement 는 :class:`SyntaxError`.
-        namespace: 평가 환경에 노출할 변수 dict (local scope 로 사용).
+        namespace: 평가 환경에 노출할 변수 dict. 평가 중 변형되지 않는다 (복사본 사용).
 
     Returns:
         평가 결과.
@@ -166,10 +171,10 @@ def safe_eval(expression: str, namespace: dict[str, Any]) -> Any:
         ImportError: import 허용 목록 외 패키지.
         그 외 평가 중 발생한 예외 (TypeError, ValueError 등) 그대로 전파.
     """
+    eval_globals = {**namespace, "__builtins__": SAFE_BUILTINS}
     return eval(  # noqa: S307 — 의도된 safe-eval, builtins 제한됨
         expression,
-        {"__builtins__": SAFE_BUILTINS},
-        namespace,
+        eval_globals,
     )
 
 
@@ -191,12 +196,30 @@ def safe_exec(code: str, namespace: dict[str, Any]) -> str:
         SyntaxError: 코드 파싱 실패.
         ImportError: 허용 외 패키지 import 시도.
         그 외 실행 중 예외 (NameError, AttributeError 등) 그대로 전파.
+
+    Note:
+        ``exec`` 에 globals/locals 를 분리해 넘기면 코드가 class-body 스코프로
+        실행돼, 내부에서 정의한 함수·제너레이터·comprehension 이 free 변수를
+        locals(=namespace) 가 아닌 globals 에서만 찾는다. 그 결과 상단에서 만든
+        변수(``mean`` 등)를 ``sum((x-mean)**2 for x in values)`` 같은 nested
+        스코프가 못 봐 ``NameError`` 가 난다. namespace 를 **단일 dict 로** 넘겨
+        module 스코프로 실행하면 해결된다.
     """
+    # __builtins__ 를 잠시 주입하되, 실행 후 원상복구해 namespace 오염을 막는다.
+    had_builtins = "__builtins__" in namespace
+    saved_builtins = namespace.get("__builtins__")
+    namespace["__builtins__"] = SAFE_BUILTINS
+
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        exec(  # noqa: S102 — 의도된 safe-exec, builtins 제한됨
-            code,
-            {"__builtins__": SAFE_BUILTINS},
-            namespace,
-        )
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(  # noqa: S102 — 의도된 safe-exec, builtins 제한됨
+                code,
+                namespace,  # globals == locals → module 스코프
+            )
+    finally:
+        if had_builtins:
+            namespace["__builtins__"] = saved_builtins
+        else:
+            namespace.pop("__builtins__", None)
     return buf.getvalue()

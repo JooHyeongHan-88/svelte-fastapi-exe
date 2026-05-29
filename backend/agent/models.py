@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 
 Role = Literal["system", "user", "assistant", "tool"]
 
+# provider 가 tool_call 인자 JSON 파싱에 실패했을 때(스트리밍 잘림·이스케이프 깨짐 등)
+# 빈 dict 대신 원본 문자열을 이 키에 담아 ToolCall.arguments 로 전달한다. harness 가
+# 이를 감지해 "missing 슬롯" 으로 오인하지 않고 LLM 에 재전송을 요구한다 (사용자 미개입).
+MALFORMED_TOOL_ARGS_KEY = "__malformed_arguments__"
+
 
 class ToolCall(BaseModel):
     """LLM 이 요청한 도구 호출 한 건."""
@@ -96,6 +101,10 @@ class ErrorEvent(BaseModel):
     type: Literal["error"] = "error"
     message: str
     is_fallback: bool = False
+    # fallback 이면서 모든 todo 가 terminal 상태(completed/failed/skipped)인 경우.
+    # 반복 예산이 소진됐지만 작업 자체는 완료됐음을 뜻하며, UI 가 빨강 대신
+    # 중립(완료) 스타일로 표시할 수 있도록 신호를 전달한다.
+    is_recovered: bool = False
 
 
 # ---------------------------------------------------------------------------

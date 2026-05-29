@@ -27,7 +27,11 @@
 
 {#if seg.kind === "text"}
   {#if seg.content}
-    <div class="text-seg" class:fallback={seg.isFallback}>{@html html}</div>
+    <div
+      class="text-seg"
+      class:fallback={seg.isFallback}
+      class:recovered={seg.isRecovered}
+    >{@html html}</div>
   {/if}
 
 {:else if seg.kind === "reasoning"}
@@ -49,10 +53,19 @@
     /* marked + hljs 가 인라인 스타일을 생성하므로 별도 규칙 최소화 */
   }
 
-  /* fallback: max_iterations 도달 후 자연어 응답 */
+  /* fallback: 반복 예산 소진 + 작업 미완 — 경고(빨강) */
   .text-seg.fallback {
     background-color: color-mix(in srgb, var(--danger) 5%, transparent);
     border: 1px dashed var(--danger);
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 8px;
+  }
+
+  /* recovered: 반복 예산 소진이지만 모든 todo 완료 — 중립(초록) */
+  .text-seg.recovered {
+    background-color: color-mix(in srgb, var(--color-success) 8%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--color-success) 50%, transparent);
     padding: 12px;
     border-radius: 8px;
     margin-top: 8px;

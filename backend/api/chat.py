@@ -1,5 +1,6 @@
 """채팅 SSE + 대화 히스토리 (restore/reset 포함) 라우터."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Query
@@ -53,11 +54,21 @@ async def chat(
                 user_prompt=settings.user_prompt,
             ):
                 yield f"data: {event.model_dump_json()}\n\n"
+        except asyncio.CancelledError:
+            # 클라이언트가 SSE 연결을 닫았거나 사용자가 ESC 로 취소 — 정상 종료.
+            # Exception 으로 로깅하면 운영 로그에 노이즈가 쌓이므로 debug 레벨로만 기록.
+            logger.debug(
+                "chat SSE cancelled for client_id=%s (client disconnect or ESC)",
+                client_id,
+            )
+            raise  # Starlette/uvicorn 이 연결 정리를 완료할 수 있도록 재전파.
         except Exception as exc:
-            logger.exception("chat event_source error")
+            logger.exception("chat event_source error for client_id=%s", client_id)
             from agent.models import ErrorEvent
 
-            yield f"data: {ErrorEvent(message=str(exc)).model_dump_json()}\n\n"
+            # str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 type 만 전달.
+            safe_msg = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
+            yield f"data: {ErrorEvent(message=safe_msg).model_dump_json()}\n\n"
 
     return StreamingResponse(
         event_source(),

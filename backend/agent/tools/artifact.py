@@ -9,7 +9,10 @@ LLM 이 작성한 리포트·분석 데이터를 사용자에게 영속적으로
 타임스탬프 폴더에 모이도록 설계되어 있다.
 
 kind 별 입력:
-    - markdown / json / text : ``content`` 에 텍스트 직접 입력
+    - markdown / text        : ``content`` 에 텍스트 직접 입력
+    - json                   : ``content`` 에 JSON 문자열 또는 구조화된 객체
+                               (dict/list) 모두 허용 — 객체는 자동 직렬화된다.
+                               (display_chart spec 처럼 객체 형태가 자연스러운 경우 대응)
     - parquet                : ``source`` 에 namespace 변수 참조 (``"$varname"``)
                                지원 타입: polars.DataFrame, pandas.DataFrame
 """
@@ -91,7 +94,7 @@ def _validate_kind_extension(filename: str, kind: str) -> str | None:
 
 def _validate_kind_arguments(
     kind: str,
-    content: str | None,
+    content: str | dict | list | None,
     source: str | None,
 ) -> str | None:
     """kind 별 입력 인자 (content/source) 상호 배타성 검증."""
@@ -234,8 +237,9 @@ async def save_artifact(
         "산출물 종류 — markdown(.md), json(.json), text(.txt), parquet(.parquet).",
     ] = "markdown",
     content: Annotated[
-        str | None,
-        "본문 텍스트. markdown/json/text 일 때 필수, parquet 일 때 금지. kind=json 은 유효한 JSON 문자열.",
+        str | dict | list | None,
+        "본문. markdown/text 는 문자열, json 은 유효한 JSON 문자열 또는 구조화된 객체"
+        "(dict/list) 모두 허용(객체는 자동 직렬화). markdown/json/text 일 때 필수, parquet 일 때 금지.",
     ] = None,
     source: Annotated[
         str | None,
@@ -286,7 +290,8 @@ async def save_artifact(
     if kind == "parquet":
         return _save_parquet(target, source or "", filename)
 
-    return _save_text(target, kind, content or "", filename)
+    # _validate_kind_arguments 가 content is None 을 이미 걸렀으므로 여기선 비-None 보장.
+    return _save_text(target, kind, content, filename)
 
 
 # ---------------------------------------------------------------------------
@@ -294,22 +299,61 @@ async def save_artifact(
 # ---------------------------------------------------------------------------
 
 
-def _save_text(target: Path, kind: str, content: str, filename: str) -> ToolResult:
-    """markdown / json / text 텍스트 저장."""
+def _prepare_text_content(
+    kind: str, content: str | dict | list | None
+) -> tuple[str, str | None]:
+    """kind 별 content 를 디스크에 쓸 최종 문자열로 변환·검증한다.
+
+    LLM 은 kind='json' 산출물(차트 spec 등)을 문자열이 아닌 구조화된 객체로
+    넘기는 경우가 잦다. 도구 docstring 도 ``content=<ChartSpecV1>`` 처럼 객체를
+    유도하므로, 여기서 dict/list 를 받아 직접 직렬화해 타입 불일치를 흡수한다.
+
+    Args:
+        kind: 산출물 종류 (markdown/json/text).
+        content: 원본 본문 (문자열 또는 json 일 때 dict/list).
+
+    Returns:
+        (직렬화된 문자열, None) 성공 / ("", 오류 메시지) 실패.
+    """
     if kind == "json":
-        try:
-            json.loads(content)
-        except json.JSONDecodeError as exc:
-            return ToolResult(
-                content=(
-                    f"[save_artifact 오류] kind='json' 이지만 content 가 유효한 JSON 이 아닙니다: "
+        if isinstance(content, (dict, list)):
+            return json.dumps(content, ensure_ascii=False, indent=2), None
+        if isinstance(content, str):
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as exc:
+                return "", (
+                    f"kind='json' 이지만 content 가 유효한 JSON 이 아닙니다: "
                     f"{exc.msg} (line {exc.lineno}, col {exc.colno}). "
                     "JSON 형식을 수정해 다시 호출하세요."
-                ),
-                is_error=True,
-            )
+                )
+            return content, None
+        return "", (
+            f"kind='json' 의 content 타입이 올바르지 않습니다: {type(content).__name__}. "
+            "JSON 문자열 또는 객체(dict/list)를 전달하세요."
+        )
 
-    encoded = content.encode("utf-8")
+    # markdown / text 는 평문 문자열만 허용.
+    if not isinstance(content, str):
+        return "", (
+            f"kind={kind!r} 의 content 는 문자열이어야 합니다 (받은 타입: {type(content).__name__}). "
+            "텍스트 본문을 문자열로 전달하세요."
+        )
+    return content, None
+
+
+def _save_text(
+    target: Path, kind: str, content: str | dict | list | None, filename: str
+) -> ToolResult:
+    """markdown / json / text 텍스트 저장."""
+    text, prepare_error = _prepare_text_content(kind, content)
+    if prepare_error:
+        return ToolResult(
+            content=f"[save_artifact 오류] {prepare_error}",
+            is_error=True,
+        )
+
+    encoded = text.encode("utf-8")
     target.write_bytes(encoded)
 
     rel_path = _to_relative_path(target)
