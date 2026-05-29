@@ -3,9 +3,8 @@ import threading
 import time
 import webbrowser
 
+from core import config
 from core.config import (
-    HOST,
-    PORT,
     PRESENCE_RECONNECT_GRACE,
     SHUTDOWN_GRACE,
     STARTUP_GRACE,
@@ -124,7 +123,9 @@ def get_shutdown_event() -> asyncio.Event | None:
 
 def open_browser() -> None:
     time.sleep(1)
-    webbrowser.open(f"http://{HOST}:{PORT}")
+    # PORT 는 frozen 에서 런타임에 동적 할당되므로 import 스냅샷이 아닌 config 모듈을
+    # 통해 실제 바인딩된 값을 읽는다.
+    webbrowser.open(f"http://{config.HOST}:{config.PORT}")
 
 
 def request_shutdown() -> None:

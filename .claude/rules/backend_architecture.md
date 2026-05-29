@@ -60,7 +60,9 @@
 `backend/api/deps.py`의 `require_local_origin` 의존성이 router 레벨에 적용된다.
 
 - **frozen(EXE)** 에서만 활성. dev는 Vite proxy 때문에 origin이 달라 자동 패스.
-- `Origin` 헤더 있으면 `ALLOWED_ORIGIN`(`http://127.0.0.1:8765`)과 일치 확인
+- `Origin` 헤더 있으면 `ALLOWED_ORIGIN`(`http://{HOST}:{실제 바인딩 포트}`)과 일치 확인.
+  포트는 기동 시 OS 가 동적 할당하므로(`create_server_socket` → `set_runtime_port`),
+  `deps.py` 는 import 스냅샷이 아니라 `config.ALLOWED_ORIGIN` 을 매 요청 참조한다.
 - 없으면 `sec-fetch-site`가 `same-origin` / `none` 이어야 통과
 
 ---

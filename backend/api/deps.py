@@ -14,7 +14,7 @@ from agent.config import (
 )
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
-from core.config import ALLOWED_ORIGIN
+from core import config
 from settings.config import SETTINGS_FILE_PATH
 from settings.store import SettingsStore
 
@@ -31,7 +31,8 @@ def require_local_origin(
     # - Origin 헤더가 있으면 ALLOWED_ORIGIN 과 일치해야 함.
     # - Origin 헤더가 없는 same-origin GET 같은 경우는 sec-fetch-site 가 same-origin/none 이어야 함.
     if origin is not None:
-        if origin != ALLOWED_ORIGIN:
+        # ALLOWED_ORIGIN 은 frozen 에서 런타임 바인딩된 포트로 갱신되므로 모듈을 통해 읽는다.
+        if origin != config.ALLOWED_ORIGIN:
             raise HTTPException(status_code=403, detail="origin not allowed")
         return
 

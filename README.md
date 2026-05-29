@@ -26,7 +26,7 @@ Vite/Svelte로 만든 AI Agent 채팅 UI를 FastAPI가 서빙하고, PyInstaller
 
 ```
 svelte-fastapi-exe/
-├── .env                   # 전체 환경 변수 레퍼런스 (dev only) — SSOT for APP_NAME, Nexus 설정
+├── .env                   # 전체 환경 변수 레퍼런스 (dev only) — SSOT for APP_NAME, 저장소 설정
 ├── PROMPTS/               # base.md + safety.md + orchestrator.md — system prompt 합성
 ├── SKILLS/                # 작업별 가이드 (Front Matter trigger 라우팅, lazy load)
 ├── AGENTS/                # 서브 에이전트 페르소나 (Front Matter: name/description/skills/tools)
@@ -229,11 +229,12 @@ result/{세션제목}-{id[:8]}/{YYYYMMDD-HHmmss}/파일
 
 ```
 App.exe 실행
-  ├─ uvicorn.Server 생성 → browser.server 에 보관
+  ├─ create_server_socket(): OS 가 빈 포트를 동적 할당 (사용자 PC 포트 점유와 충돌 없음)
+  ├─ uvicorn.Server 생성 (소켓 직접 전달) → browser.server 에 보관
   ├─ watchdog 스레드: presence 연결 감시, 모두 사라지면 서버 종료
-  └─ open_browser 스레드: 1초 후 브라우저 자동 오픈
+  └─ open_browser 스레드: 1초 후 실제 바인딩된 포트로 브라우저 자동 오픈
 
-브라우저 → http://127.0.0.1:8765
+브라우저 → http://127.0.0.1:{동적 포트}   (frontend 는 상대 경로만 쓰므로 포트를 몰라도 됨)
   ├─ initApp(): localStorage 에서 세션 복원 → /api/presence SSE 오픈
   ├─ /api/conversation/restore: localStorage 히스토리 → 백엔드 LLM context 주입
   └─ /api/update/check: Nexus latest.json 비교 (5분 캐시)
@@ -287,37 +288,37 @@ App.exe 실행
 version = "0.2.0"
 ```
 
-### 2. (선택) 앱 이름 / Nexus URL 변경
+### 2. (선택) 앱 이름 / 저장소 URL 변경
 
 `.env` 파일을 수정한다. 이 파일이 빌드 파이프라인의 단일 진실 공급원이다.
 
 ```dotenv
 APP_NAME=MyAgent                         # EXE 파일명, settings.json 경로
-APP_NEXUS_BASE_URL=https://nexus.internal/repository/myapp
-APP_NEXUS_USER=nexus_admin               # 선택 — 없으면 실행 시 프롬프트
-APP_NEXUS_PASSWORD=secret                # 선택 — 없으면 실행 시 프롬프트
+APP_REPO_BASE_URL=https://nexus.internal/repository/myapp   # 원격 raw repo (현재 Nexus)
+APP_REPO_USER=repo_admin                 # 선택 — 없으면 실행 시 프롬프트
+APP_REPO_PASSWORD=secret                 # 선택 — 없으면 실행 시 프롬프트
 ```
 
 ### 3. 릴리즈 스크립트 실행
 
 ```powershell
-# 빌드 + sha256 + latest.json 생성 + Nexus 업로드
-# Nexus 자격증명은 .env 에서 자동 로드, 없으면 대화형 프롬프트
+# 빌드 + sha256 + latest.json 생성 + 원격 저장소 업로드
+# 저장소 자격증명은 .env 에서 자동 로드, 없으면 대화형 프롬프트
 pwsh packaging/release.ps1 -Upload -Notes "변경사항 요약"
 
-# git dirty 상태이거나 Nexus에 동일 버전이 이미 있을 때 강제 진행
+# git dirty 상태이거나 저장소에 동일 버전이 이미 있을 때 강제 진행
 pwsh packaging/release.ps1 -Upload -Force -Notes "핫픽스"
 ```
 
 스크립트 수행 작업:
 
-1. **사전 점검**: git dirty 상태·Nexus 버전 중복 확인 (`-Force`로 우회 가능)
+1. **사전 점검**: git dirty 상태·저장소 버전 중복 확인 (`-Force`로 우회 가능)
 2. `pyproject.toml` 버전 → `backend/_version.py` 동기화
 3. `npm run build` (Svelte → `build/web/`)
 4. `pyinstaller packaging/Updater.spec` → `build/updater/Updater.exe`
 5. `pyinstaller packaging/App.spec` → `release/{AppName}.exe`
 6. sha256 계산 + `release/latest.json` 생성
-7. Nexus에 EXE 업로드 후 `latest.json` 업로드 (순서 보장, 3회 자동 재시도)
+7. 원격 저장소에 EXE 업로드 후 `latest.json` 업로드 (순서 보장, 3회 자동 재시도)
 
 ### 4. Dry-run (업로드 없이 로컬 검증)
 
@@ -355,7 +356,7 @@ pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
 
 ## 보안 가드레일
 
-- **Origin 가드**: EXE 환경에서 `http://127.0.0.1:8765` 이외의 origin에서 오는 `/api/*` 요청을 403으로 차단
+- **Origin 가드**: EXE 환경에서 실제 바인딩된 origin(`http://127.0.0.1:{동적 포트}`) 이외에서 오는 `/api/*` 요청을 403으로 차단
 - **sha256 무결성 검증**: 다운로드 후 latest.json의 sha256과 불일치하면 임시 파일 삭제, 현재 EXE 보존
 - **API 키 보안**: settings.json에만 저장, 응답 시 항상 마스킹, localStorage에 저장 안 함
 - **latest.json 나중 업로드**: EXE 업로드 완료 후 latest.json 업로드 — 404 EXE 경쟁 조건 방지

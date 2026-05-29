@@ -1,6 +1,6 @@
 """자동 업데이트.
 
-Nexus raw repository 의 latest.json 을 조회하고, 새 버전이 있으면
+원격 raw repository(현재 Nexus) 의 latest.json 을 조회하고, 새 버전이 있으면
 sha256 검증 후 번들된 updater.exe 로 self-replace 를 트리거한다.
 """
 
@@ -22,7 +22,7 @@ from _version import __version__
 from core import browser
 from core.config import (
     LATEST_JSON_URL,
-    NEXUS_BASE_URL,
+    REPO_BASE_URL,
     UPDATE_CHECK_CACHE_TTL,
     UPDATE_CHECK_TIMEOUT,
     UPDATE_DOWNLOAD_TIMEOUT,
@@ -82,8 +82,8 @@ def _validate_meta(meta: dict) -> Optional[str]:
             return f"missing or invalid field: {key}"
 
     url = meta["url"]
-    if not url.startswith(NEXUS_BASE_URL + "/"):
-        return f"url not under NEXUS_BASE_URL: {url}"
+    if not url.startswith(REPO_BASE_URL + "/"):
+        return f"url not under REPO_BASE_URL: {url}"
 
     sha = meta["sha256"]
     if len(sha) != 64 or any(c not in "0123456789abcdefABCDEF" for c in sha):

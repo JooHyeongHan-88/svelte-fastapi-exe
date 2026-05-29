@@ -3,7 +3,7 @@
 ## 자동 업데이트 — 4단계 흐름
 
 ```
-① check_latest()    NEXUS_BASE_URL/latest.json GET, 5분 캐시
+① check_latest()    REPO_BASE_URL/latest.json GET, 5분 캐시
                     URL prefix·sha256 hex(64자) 검증 → 실패 시 silently update_available=False
 ② apply_update()    스트리밍 다운로드 → sha256 검증 → {stem}.new.exe staging
                     → DETACHED Updater.exe Popen(pid, new, current) → 1s 후 server.should_exit
@@ -26,4 +26,4 @@
 - JSON·`_version.py`는 **BOM 없는 UTF-8** — `[System.IO.File]::WriteAllText(path, content, (New-Object System.Text.UTF8Encoding $false))` 사용  
   (`Set-Content -Encoding utf8`은 BOM 붙어 `Invoke-RestMethod` 파싱 실패)
 - `Write-Host` 한글 깨짐 → 스크립트 출력은 영어 유지
-- Nexus 업로드 순서: **EXE 먼저 → latest.json 마지막** (클라이언트가 404 EXE 보지 않도록)
+- 저장소 업로드 순서: **EXE 먼저 → latest.json 마지막** (클라이언트가 404 EXE 보지 않도록)

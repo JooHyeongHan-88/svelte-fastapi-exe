@@ -1,4 +1,4 @@
-"""사내 Nexus raw repository 에 릴리스 산출물을 업로드한다.
+"""사내 원격 raw repository(현재 Nexus) 에 릴리스 산출물을 업로드한다.
 
 release.ps1 의 -Upload 플래그로 호출된다.
 업로드 대상 (순서 준수):
@@ -40,9 +40,9 @@ def _upload_file(
 
 
 def main() -> None:
-    base_url = _require_env("APP_NEXUS_BASE_URL").rstrip("/")
-    username = _require_env("APP_NEXUS_USER")
-    password = _require_env("APP_NEXUS_PASSWORD")
+    base_url = _require_env("APP_REPO_BASE_URL").rstrip("/")
+    username = _require_env("APP_REPO_USER")
+    password = _require_env("APP_REPO_PASSWORD")
     app_name = os.getenv("APP_NAME", "MyAgent")
 
     release_dir = _root / "release"

@@ -6,20 +6,20 @@
 #   3. Updater.exe build                 -> build/updater/Updater.exe
 #   4. App EXE build                     -> release/{AppName}.exe
 #   5. Compute sha256 + generate          release/latest.json
-#   6. Upload to Nexus raw repo (requires -Upload flag)
+#   6. Upload to remote raw repo (currently Nexus; requires -Upload flag)
 #
 # App name is read automatically from the name= field in packaging/App.spec.
 # To rename the output EXE, change name='...' in packaging/App.spec — no other edits needed.
 #
 # Output layout:
 #   build/    intermediate artifacts (bundled into the EXE, never uploaded)
-#   release/  final artifacts (uploaded to Nexus)
+#   release/  final artifacts (uploaded to the remote repo)
 #
 # Usage:
 #   pwsh packaging/release.ps1
 #   pwsh packaging/release.ps1 -Upload -Notes "변경사항 요약"
 #
-# Nexus URL/자격증명은 .env(APP_NEXUS_BASE_URL, APP_NEXUS_USER, APP_NEXUS_PASSWORD)에서 읽는다.
+# 저장소 URL/자격증명은 .env(APP_REPO_BASE_URL, APP_REPO_USER, APP_REPO_PASSWORD)에서 읽는다.
 # 업로드 실행은 packaging/upload.py 에 위임된다.
 
 param(
@@ -123,13 +123,13 @@ $versionedName = "$AppName-$version.exe"
 $versionedPath = "release/$versionedName"
 Copy-Item $exePath $versionedPath -Force
 
-$_nexusBase = $env:APP_NEXUS_BASE_URL
-if (-not $_nexusBase) { $_nexusBase = "https://nexus.internal/repository/$($AppName.ToLower())" }
-$_nexusBase = $_nexusBase.TrimEnd('/')
+$_repoBase = $env:APP_REPO_BASE_URL
+if (-not $_repoBase) { $_repoBase = "https://nexus.internal/repository/$($AppName.ToLower())" }
+$_repoBase = $_repoBase.TrimEnd('/')
 
 $latest = [ordered]@{
     version               = $version
-    url                   = "$_nexusBase/$AppName.exe"
+    url                   = "$_repoBase/$AppName.exe"
     sha256                = $sha256
     size                  = $size
     released_at           = $releasedAt
@@ -160,5 +160,5 @@ if ($Upload) {
     if ($LASTEXITCODE -ne 0) { throw "upload failed (packaging/upload.py exited $LASTEXITCODE)" }
 } else {
     Write-Host ""
-    Write-Host "Skipping upload. Add -Upload flag to push to Nexus."
+    Write-Host "Skipping upload. Add -Upload flag to push to the remote repo."
 }

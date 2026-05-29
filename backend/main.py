@@ -14,7 +14,13 @@ from api import router as api_router
 from api.deps import state_store
 from core import browser
 from core.browser import open_browser, watchdog
-from core.config import ASSETS_DIR, HOST, PORT, RESULT_DIR, WEB_DIR, WORKSPACE_DIR
+from core.config import (
+    ASSETS_DIR,
+    RESULT_DIR,
+    WEB_DIR,
+    WORKSPACE_DIR,
+    create_server_socket,
+)
 
 # Windows Python 환경에 따라 mimetypes 레지스트리가 누락된 확장자를 보정한다.
 mimetypes.add_type("application/javascript", ".js")
@@ -91,7 +97,11 @@ if WEB_DIR.exists():
 
 
 if __name__ == "__main__":
-    config = uvicorn.Config(app, host=HOST, port=PORT, timeout_graceful_shutdown=5)
+    # 포트를 직접 바인딩한 소켓을 uvicorn 에 넘긴다 (frozen 은 OS 할당 빈 포트).
+    # 실제 포트는 create_server_socket() 안에서 set_runtime_port() 로 전역에 반영되므로
+    # open_browser / Origin 가드가 동일 포트를 참조한다.
+    sock = create_server_socket()
+    config = uvicorn.Config(app, timeout_graceful_shutdown=5)
     server = uvicorn.Server(config)
     browser.server = server
 
@@ -101,4 +111,4 @@ if __name__ == "__main__":
         threading.Thread(target=watchdog, daemon=True).start()
         threading.Thread(target=open_browser, daemon=True).start()
 
-    server.run()
+    server.run(sockets=[sock])
