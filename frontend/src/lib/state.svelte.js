@@ -5,6 +5,8 @@ export const ui = $state({
   sessions: [],
   activeSessionId: null,
   streaming: false,
+  // 생성 중일 때만 1초마다 갱신되는 reactive 클럭 (ms). TurnStatus 컴포넌트가 경과 시간 계산에 사용.
+  nowTick: 0,
   theme: "light",
   sidebarOpen: false,
   appName: "MyAgent",

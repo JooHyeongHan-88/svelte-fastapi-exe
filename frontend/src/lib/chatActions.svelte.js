@@ -24,6 +24,24 @@ import {
 import { getAppInfo } from "./settingsApi.js";
 import { parseSseStream } from "./sse.js";
 import { autoTitle } from "./format.js";
+
+// ── 스트림 클럭 ──────────────────────────────────────────────────────────────
+// 생성 중에만 1초 간격으로 ui.nowTick 을 갱신해 TurnStatus 의 경과 시간을 reactive 하게 만든다.
+let _streamClockTimer = null;
+
+function startStreamClock() {
+  ui.nowTick = Date.now();
+  _streamClockTimer = setInterval(() => {
+    ui.nowTick = Date.now();
+  }, 1000);
+}
+
+function stopStreamClock() {
+  if (_streamClockTimer) {
+    clearInterval(_streamClockTimer);
+    _streamClockTimer = null;
+  }
+}
 import {
   makeArtifactChip,
   resetArtifactPanelState,
@@ -241,6 +259,11 @@ export async function sendMessage(text) {
     isStopped: false,
     isFallback: false,
     createdAt: now,
+    // ── 진행 상태 타이밍 필드 ──
+    streaming: true,      // 이 메시지가 현재 생성 중인지 (per-message 플래그)
+    startedAt: now,       // 생성 시작 시각 (ms)
+    finishedAt: null,     // 생성 종료 시각 (ms)
+    durationMs: null,     // finishedAt - startedAt (완료 후 확정)
   };
 
   session.messages = [...session.messages, userMsg, assistantMsg];
@@ -252,6 +275,7 @@ export async function sendMessage(text) {
 
   ui.sessions = [...ui.sessions];
   ui.streaming = true;
+  startStreamClock();
   flushSave();
 
   // 백엔드로 보낼 force_skills 를 미리 캡처 후, 다음 입력에 잔여물이 남지 않도록 즉시 리셋.
@@ -418,8 +442,21 @@ export async function sendMessage(text) {
       }
     }
   } finally {
+    // 타이밍 확정 — 정상 완료·에러·ESC 중단 모두 동일 경로.
+    // assistantMsg 는 plain object 이므로 Svelte 5 reactive proxy 를 통해 수정해야
+    // 반응성이 트리거된다. stopStreaming() 과 동일하게 세션에서 직접 조회한다.
+    const finishedAt = Date.now();
+    const s = activeSession();
+    const msg = s?.messages.at(-1);
+    if (msg?.role === "assistant") {
+      msg.streaming = false;
+      msg.finishedAt = finishedAt;
+      msg.durationMs = finishedAt - (msg.startedAt ?? finishedAt);
+    }
     ui.streaming = false;
+    stopStreamClock();
     currentAbortController = null;
+    ui.sessions = [...ui.sessions];
     flushSave();
   }
 }
@@ -475,6 +512,16 @@ export async function initApp() {
   ui.sidebarWidth = loadSidebarWidth();
 
   const sessions = loadSessions();
+  // 앱이 생성 도중 강제 종료되면 localStorage 에 streaming:true 가 잔류할 수 있다.
+  // 재기동 시 모든 메시지의 streaming 플래그를 false 로 강제 확정한다.
+  for (const s of sessions) {
+    for (const m of s.messages ?? []) {
+      if (m.streaming) {
+        m.streaming = false;
+        // finishedAt/durationMs 가 없으면 hover 소요시간은 생략된다 (그대로 둠).
+      }
+    }
+  }
   ui.sessions = sessions.sort((a, b) => b.updatedAt - a.updatedAt);
 
   const storedActive = loadActiveId();

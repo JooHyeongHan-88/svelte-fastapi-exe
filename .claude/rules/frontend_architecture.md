@@ -14,19 +14,20 @@ lib/
   sse.js                parseSseStream(body, onEvent) — SSE 파싱
   storage.js            localStorage CRUD (세션, activeId, 테마)
   markdown.js           renderMarkdown(text) — marked + DOMPurify + hljs
-  format.js             autoTitle, relativeTimeBucket
+  format.js             autoTitle, relativeTimeBucket, formatElapsed, formatDuration
 
 components/
   Sidebar.svelte        세션 목록 + 새 대화 버튼 + 테마 토글 + 설정 아이콘 + ModelPicker
   SessionItem.svelte    세션 행 (클릭=선택, 더블클릭=인라인 rename, hover=삭제)
   ChatArea.svelte       메시지 스크롤 영역, 하단 자동 스크롤
-  MessageBubble.svelte  user(plain text) / assistant(markdown) 버블
+  MessageBubble.svelte  user(plain text) / assistant(markdown) 버블 + 완료 표식
   Composer.svelte       auto-resize textarea, Enter=전송 / Shift+Enter=줄바꿈
   TopBar.svelte         현재 세션 제목, 모바일 사이드바 토글
   ModelPicker.svelte    사이드바 하단 프로바이더/모델 표시 + 빠른 모델 전환 드롭업
   SettingsModal.svelte  LLM 설정 모달 (프로바이더·모델·API키·Base URL)
   UpdateBanner.svelte   업데이트 알림 배너
   UpdateModal.svelte    업데이트 진행 모달
+  TurnStatus.svelte     생성 중 진행 표식 — 펄스 점 + 상황별 문구 + 경과 시간
   ArtifactPanel.svelte  우측 아티팩트 패널 — 탭 바(칩) + 활성 칩 콘텐츠 렌더링
   ArtifactImage.svelte  이미지 갤러리 — payload.items[] 기반, IntersectionObserver lazy load
   ArtifactChart.svelte  ECharts 그리드 — 페이지당 6개 페이지네이션, {#key page} remount
@@ -44,6 +45,7 @@ import { ui } from "$lib/state.svelte.js";
 ui.sessions;          // Session[]
 ui.activeSessionId;
 ui.streaming;         // 전송 중 여부 (입력 비활성 가드)
+ui.nowTick;           // 생성 중 1초마다 갱신되는 클럭(ms) — TurnStatus 경과 시간 계산용
 ui.theme;
 
 // 현재 활성 프로바이더/모델 (ModelPicker 표시용)
@@ -105,8 +107,19 @@ type Session = {
     id: string;
     role: "user" | "assistant";
     content: string;
-    toolStatus: string | null;
     createdAt: number;
+    // assistant 메시지 전용
+    segments: Segment[] | undefined;   // undefined = 구 형식(legacy)
+    activeSkills: string[] | null;
+    askUser: { question, slot_key, options, input_type, answered } | null;
+    artifactChips: ArtifactChip[];
+    isStopped: boolean;
+    isFallback: boolean;
+    // 진행 상태 타이밍 (assistant 신규 형식)
+    streaming: boolean;      // 생성 중 true, 완료/중단 후 false
+    startedAt: number;       // 생성 시작 ms
+    finishedAt: number | null;
+    durationMs: number | null;
   }>;
 };
 ```
@@ -153,6 +166,40 @@ type Session = {
 - assistant 메시지만 마크다운. user 메시지는 `white-space: pre-wrap` plain text.
 - `marked` + `DOMPurify` (XSS 방어) + `highlight.js` (코드 펜스)
 - 테마 전환 시 `:root` / `[data-theme="dark"]` CSS 변수로 hljs 스타일 분기
+
+## 생성 진행 상태 (TurnStatus)
+
+`TurnStatus.svelte`는 assistant 메시지 버블 안, 세그먼트 타임라인 바로 뒤에 렌더된다.
+`message.streaming === true` 인 동안만 표시되며, 세그먼트가 쌓인 후에도 계속 표시된다(기존 thinking dots와 다른 점).
+
+- **펄스 점**: `var(--accent)` 색상, `pulse` 애니메이션
+- **상황별 문구**: `message.segments` 트리를 검사해 동적으로 선택
+  - running 상태 `tool` 세그먼트(서브에이전트 내부 포함) → `"도구 실행 중…"`
+  - running 상태 `subagent` 세그먼트 → `"에이전트 작업 중…"`
+  - 마지막 세그먼트가 `reasoning` → `"추론 중…"`
+  - 그 외 → `"응답 생성 중…"`
+- **경과 시간**: `elapsed = ui.nowTick - message.startedAt` — `ui.nowTick`이 1초마다 갱신되므로 `$derived`가 자동 재계산.
+
+완료 후 `MessageBubble`은 `done-marker`(7px 회색 점)를 버블 상단에 표시하고, hover footer에 `formatDuration(message.durationMs)` 소요시간을 표시한다. ESC 중단 메시지는 `isStopped=true` 이므로 `done-marker` 표시 안 함.
+
+### Svelte 5 reactive proxy 주의 (핵심)
+
+`$state` 안의 객체는 Svelte가 reactive proxy로 래핑한다. `sendMessage()` 에서 `assistantMsg`를 plain object로 만들어 `session.messages`에 push한 뒤, `finally` 블록에서 `assistantMsg.streaming = false`로 직접 수정하면 **proxy를 우회**해 반응성이 트리거되지 않는다.
+
+```js
+// ❌ 잘못된 패턴 — plain object를 직접 수정 (reactive 아님)
+const assistantMsg = { streaming: true, ... };
+session.messages = [...session.messages, assistantMsg];
+// ...나중에...
+assistantMsg.streaming = false;  // proxy 우회, 화면 갱신 안 됨
+
+// ✅ 올바른 패턴 — reactive proxy를 통해 수정 (stopStreaming과 동일)
+const s = activeSession();
+const msg = s?.messages.at(-1);
+if (msg?.role === "assistant") msg.streaming = false;
+```
+
+`stopStreaming()`, `finally` 블록 등 streaming 관련 상태를 후속 설정할 때는 항상 `activeSession().messages.at(-1)` 경로를 사용한다.
 
 ## 테마 시스템
 

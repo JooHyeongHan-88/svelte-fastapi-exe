@@ -35,6 +35,20 @@ export function formatAbsoluteTime(ms) {
   return `${d.getMonth() + 1}월 ${d.getDate()}일 ${hm}`;
 }
 
+// 라이브 경과 시간 포맷: "3초", "1분 5초", "1분" (초가 0이면 생략)
+export function formatElapsed(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 60) return `${totalSec}초`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s === 0 ? `${m}분` : `${m}분 ${s}초`;
+}
+
+// 완료 소요시간 (hover footer 용): "12초 소요", "1분 5초 소요"
+export function formatDuration(ms) {
+  return `${formatElapsed(ms)} 소요`;
+}
+
 export function autoTitle(firstUserMessage) {
   const cleaned = (firstUserMessage ?? "").trim().replace(/\s+/g, " ");
   if (!cleaned) return "새 대화";

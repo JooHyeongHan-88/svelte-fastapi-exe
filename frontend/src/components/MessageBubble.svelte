@@ -8,7 +8,8 @@
   import AskUserCard from "./AskUserCard.svelte";
   import { openArtifact } from "../lib/artifactActions.svelte.js";
   import { rewindToMessage } from "../lib/chatActions.svelte.js";
-  import { formatAbsoluteTime } from "../lib/format.js";
+  import { formatAbsoluteTime, formatDuration } from "../lib/format.js";
+  import TurnStatus from "./TurnStatus.svelte";
 
   const ARTIFACT_ICON = { image: "🖼️", chart: "📊" };
 
@@ -17,6 +18,7 @@
   let isUser = $derived(message.role === "user");
   // 구 메시지(segments 없음) 전용 마크다운 렌더링
   let legacyHtml = $derived(isUser ? "" : renderMarkdown(message.content ?? ""));
+  // isStreaming: Segment 컴포넌트에 전달하기 위해 전역 ui.streaming 유지
   let isStreaming = $derived(ui.streaming);
 
   // 신규 메시지 여부: assistantMsg 가 segments: [] 로 초기화되므로 Array 이면 새 형식.
@@ -26,8 +28,13 @@
   // 신규 segments 타임라인 사용 여부
   let hasSegments = $derived(isNewStyle && message.segments.length > 0);
 
-  // thinking dots — 새 형식 메시지이고 아직 첫 세그먼트가 도착하지 않은 동안만 표시
-  let showThinking = $derived(isNewStyle && !hasSegments && isStreaming);
+  // per-message 생성 중 여부 (TurnStatus 에 사용; thinking dots 대체)
+  let isThisMsgStreaming = $derived(!!message.streaming);
+
+  // 완료 표식: 신규 형식 assistant 메시지이고 생성이 끝난 경우
+  let showDoneMarker = $derived(
+    !isUser && isNewStyle && !isThisMsgStreaming && !message.isStopped,
+  );
 
   // legacy 표시 — 구 메시지 (segments 필드 없음)
   let showLegacy = $derived(!isNewStyle);
@@ -61,6 +68,11 @@
       {/if}
 
     {:else}
+      <!-- ── 완료 표식 (정적) — 생성이 끝난 신규 형식 메시지에만 표시 ── -->
+      {#if showDoneMarker}
+        <div class="done-marker" aria-label="응답 완료" title="응답 완료"></div>
+      {/if}
+
       <!-- ── 활성 스킬 뱃지 (message 레벨, 상단 고정) ── -->
       {#if message.activeSkills && message.activeSkills.length > 0}
         <div class="skill-bar">
@@ -78,15 +90,15 @@
         {#each message.segments as seg (seg.id)}
           <Segment {seg} {isStreaming} />
         {/each}
+      {/if}
 
-      <!-- ── thinking dots — 첫 세그먼트 도착 전 ── -->
-      {:else if showThinking}
-        <div class="thinking" aria-label="응답 생성 중">
-          <span></span><span></span><span></span>
-        </div>
+      <!-- ── TurnStatus — 생성 중 내내 표시 (세그먼트 유무 무관) ── -->
+      {#if isThisMsgStreaming}
+        <TurnStatus {message} />
+      {/if}
 
       <!-- ══ legacy fallback — segments 없는 구 메시지 ══ -->
-      {:else if showLegacy}
+      {#if showLegacy}
         {#if message.reasoning}
           <ReasoningBlock
             text={message.reasoning}
@@ -167,6 +179,9 @@
   <!-- hover 시 나타나는 메타 footer -->
   <div class="msg-footer">
     <span class="msg-time">{formatAbsoluteTime(message.createdAt)}</span>
+    {#if !isUser && message.durationMs != null}
+      <span class="msg-duration">{formatDuration(message.durationMs)}</span>
+    {/if}
     {#if isUser}
       <button
         type="button"
@@ -366,27 +381,20 @@
     cursor: not-allowed;
   }
 
-  /* ── thinking dots ── */
-  .thinking {
-    display: inline-flex;
-    gap: 4px;
-    padding: 6px 0;
-  }
-
-  .thinking span {
-    width: 6px;
-    height: 6px;
+  /* ── 완료 정적 표식 ── */
+  .done-marker {
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: var(--fg-muted);
-    animation: blink 1.2s infinite ease-in-out both;
+    background: var(--fg-subtle, var(--fg-muted));
+    opacity: 0.45;
+    margin-bottom: 8px;
+    flex-shrink: 0;
   }
 
-  .thinking span:nth-child(2) { animation-delay: 0.15s; }
-  .thinking span:nth-child(3) { animation-delay: 0.3s; }
-
-  @keyframes blink {
-    0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
-    40%           { opacity: 1;    transform: scale(1); }
+  /* ── hover footer 소요시간 ── */
+  .msg-duration {
+    font-variant-numeric: tabular-nums;
   }
 
   /* ── legacy fallback 전용 스타일 ── */
