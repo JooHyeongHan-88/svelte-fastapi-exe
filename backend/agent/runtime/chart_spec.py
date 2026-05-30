@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 EncodingType = Literal["quantitative", "nominal", "temporal"]
-MarkType = Literal["bar", "line", "scatter", "box", "histogram", "heatmap"]
+MarkType = Literal["bar", "line", "scatter", "box", "histogram", "heatmap", "ecdf"]
 AggregateFn = Literal["count", "mean", "sum", "min", "max"]
 
 
@@ -59,7 +59,7 @@ class DataRef(BaseModel):
 class ChartV1(BaseModel):
     """단일 차트 정의 — mark + data + encoding + 선택적 ECharts override."""
 
-    mark: Annotated[MarkType, "차트 유형 — bar/line/scatter/box/histogram/heatmap"]
+    mark: Annotated[MarkType, "차트 유형 — bar/line/scatter/box/histogram/heatmap/ecdf"]
     title: Annotated[str, "차트 제목"] = ""
     data: DataRef
     encoding: Encoding

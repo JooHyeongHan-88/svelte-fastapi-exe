@@ -35,6 +35,14 @@ export default defineConfig(() => {
           target: `http://${host}:${port}`,
           changeOrigin: true,
         },
+        "/result": {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+        },
+        "/workspace": {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+        },
       },
     },
 

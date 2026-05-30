@@ -6,7 +6,7 @@
   // ArtifactChart 가 each 로 여러 셀을 마운트/해제할 때 Svelte 가 자동으로
   // onMount/onDestroy 를 호출해주므로 dispose 누락 위험이 없다.
 
-  let { item, onclick = null, embedded = true } = $props();
+  let { item, onclick = null, onchart = null, embedded = true } = $props();
 
   let container = $state(null);
   let chart = null;
@@ -16,6 +16,16 @@
 
   function isDark() {
     return document.documentElement.getAttribute("data-theme") === "dark";
+  }
+
+  // embedded(그리드) 셀은 클릭 시 라이트박스로 확대만 시키므로 ECharts 자체의
+  // toolbox/brush/dataZoom 컨트롤은 노출하지 않는다. 컨트롤이 보이면 클릭이
+  // 라이트박스 열기와 충돌해 사용자가 혼란스럽다.
+  function optionForRender(raw) {
+    if (!raw) return raw;
+    if (!embedded) return raw;
+    const { toolbox, brush, dataZoom, ...rest } = raw;
+    return rest;
   }
 
   function initChart() {
@@ -29,7 +39,10 @@
       chart = echarts.init(container, isDark() ? "dark" : null, {
         renderer: "canvas",
       });
-      chart.setOption(item.option);
+      chart.setOption(optionForRender(item.option));
+      // standalone(lightbox) 에서만 ECharts 인스턴스를 노출한다.
+      // 그리드 셀은 클릭=라이트박스 열기라 onchart 를 전달하지 않는다.
+      if (typeof onchart === "function") onchart(chart);
     } catch (err) {
       chart?.dispose();
       chart = null;
@@ -56,12 +69,13 @@
     chart = null;
   });
 
-  // option 이 바뀌면 차트 갱신 (페이지 내 같은 셀이 재사용될 때).
+  // option 이 바뀌면 차트 갱신 (필터 결과 반영 / 페이지 내 같은 셀 재사용).
   $effect(() => {
     if (chart && item?.option) {
       try {
-        chart.setOption(item.option, { notMerge: true });
+        chart.setOption(optionForRender(item.option), { notMerge: true });
         renderError = null;
+        if (typeof onchart === "function") onchart(chart);
       } catch (err) {
         chart.dispose();
         chart = null;
@@ -73,6 +87,8 @@
   function handleClick() {
     if (typeof onclick === "function") onclick();
   }
+
+  let clickable = $derived(typeof onclick === "function");
 </script>
 
 <div class="chart-cell" class:embedded class:standalone={!embedded}>
@@ -86,16 +102,20 @@
       <span>차트를 그릴 수 없습니다.</span>
       <small>{renderError}</small>
     </div>
-  {:else}
+  {:else if clickable}
     <button
       type="button"
       class="cell-btn"
       onclick={handleClick}
-      disabled={!onclick}
       aria-label={item?.title || "차트 확대"}
     >
       <div class="chart-container" bind:this={container}></div>
     </button>
+  {:else}
+    <!-- standalone(lightbox)에서는 button 으로 감싸면 disabled 스타일로 인해
+         canvas 가 흐려지고 pointer 이벤트가 차단돼 ECharts 컨트롤이 죽는다.
+         컨테이너만 단독 렌더링한다. -->
+    <div class="chart-container" bind:this={container}></div>
   {/if}
 </div>
 

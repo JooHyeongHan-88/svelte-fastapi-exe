@@ -74,3 +74,39 @@ export async function getUpdateStatus() {
   const r = await fetch("/api/update/status");
   return r.ok ? r.json() : null;
 }
+
+/**
+ * 차트 인터랙티브 필터 액션(exclude/undo/redo/reset)을 백엔드에 요청한다.
+ * 응답: { items, can_undo, can_redo }
+ *
+ * @param {{ spec: string, action: string, scope?: string, chart_index?: number, row_ids?: number[] }} body
+ */
+export async function postChartFilter(body) {
+  const r = await fetch("/api/chart/filter", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const detail = await r.text().catch(() => "");
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+/**
+ * 라이트박스 오픈 시 undo/redo 초기 상태를 조회한다 (재렌더 없음).
+ *
+ * @param {string} spec  charts.spec.json 경로 (result/...)
+ * @returns {Promise<{ can_undo: boolean, can_redo: boolean }>}
+ */
+export async function getChartFilterState(spec) {
+  try {
+    const r = await fetch(
+      `/api/chart/filter-state?spec=${encodeURIComponent(spec)}`,
+    );
+    return r.ok ? r.json() : { can_undo: false, can_redo: false };
+  } catch {
+    return { can_undo: false, can_redo: false };
+  }
+}

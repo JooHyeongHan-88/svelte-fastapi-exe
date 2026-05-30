@@ -116,6 +116,43 @@ def _resolve_image_item(item: ImageItem) -> tuple[dict[str, Any] | None, str | N
     )
 
 
+def resolve_spec_path(source: str) -> tuple[Path | None, str | None]:
+    """display_chart source ('result/...charts.spec.json') → 검증된 절대 Path.
+
+    경로 escape·접두사·확장자·존재 여부를 모두 검사한다. 인터랙티브 필터
+    엔드포인트(api/chart.py)도 동일 검증을 재사용하므로 여기서 한 곳에 모은다.
+
+    Args:
+        source: save_artifact 가 반환한 'result/...' 형식 spec 파일 경로.
+
+    Returns:
+        (spec_path, None) 성공 / (None, 에러 메시지) 실패.
+    """
+    resolved_url, resolve_error = _resolve_image_source(source)
+    if resolve_error:
+        return None, resolve_error
+
+    if not resolved_url.startswith("/result/"):
+        return None, (
+            f"source 는 'result/...' 경로만 허용됩니다: {source!r}. "
+            "save_artifact 가 반환한 spec 경로를 그대로 전달하세요."
+        )
+
+    rel = resolved_url[len("/result/") :]
+    spec_path = RESULT_DIR / rel
+
+    if not spec_path.name.endswith(".spec.json"):
+        return None, (
+            f"source 파일명은 '.spec.json' 으로 끝나야 합니다: {source!r}. "
+            "save_artifact(kind='json', filename='charts.spec.json', content=...) 흐름을 사용하세요."
+        )
+
+    if not spec_path.exists():
+        return None, f"spec 파일을 찾을 수 없습니다: {source!r}"
+
+    return spec_path, None
+
+
 # ---------------------------------------------------------------------------
 # 도구 등록
 # ---------------------------------------------------------------------------
@@ -179,7 +216,8 @@ async def display_image(
         "ChartSpecV1 스키마: "
         "{version:'1', charts:[{mark, title, data:{source:'<parquet 파일명>'}, "
         "encoding:{x:{field,type},y:{field,type},color?:{field,type}}, extra_option?}]}. "
-        "mark: bar | line | scatter | box | histogram | heatmap. "
+        "mark: bar | line | scatter | box | histogram | heatmap | ecdf "
+        "(ecdf=경험적 누적분포: quantitative x 만 필요, y 는 자동 누적비율, color 로 그룹별 곡선). "
         "encoding.type: quantitative (수치축) | nominal (범주축) | temporal (시간축). "
         "data.source 는 같은 폴더의 parquet 파일명 (상대). "
         "When NOT to use: 데이터가 텍스트/표 형태일 때(그 경우 save_artifact + display_markdown)."
@@ -201,37 +239,10 @@ async def display_chart(
     spec 파일은 보존하고, 같은 폴더에 렌더된 ``charts.json`` 을 생성한다.
     프론트엔드는 ``charts.json`` 만 fetch 한다.
     """
-    resolved_url, resolve_error = _resolve_image_source(source)
-    if resolve_error:
+    spec_path, resolve_error = resolve_spec_path(source)
+    if resolve_error or spec_path is None:
         return ToolResult(
             content=f"[display_chart 오류] {resolve_error}",
-            is_error=True,
-        )
-
-    if not resolved_url.startswith("/result/"):
-        return ToolResult(
-            content=(
-                f"[display_chart 오류] source 는 'result/...' 경로만 허용됩니다: {source!r}. "
-                "save_artifact 가 반환한 spec 경로를 그대로 전달하세요."
-            ),
-            is_error=True,
-        )
-
-    rel = resolved_url[len("/result/") :]
-    spec_path: Path = RESULT_DIR / rel
-
-    if not spec_path.name.endswith(".spec.json"):
-        return ToolResult(
-            content=(
-                f"[display_chart 오류] source 파일명은 '.spec.json' 으로 끝나야 합니다: {source!r}. "
-                "save_artifact(kind='json', filename='charts.spec.json', content=...) 흐름을 사용하세요."
-            ),
-            is_error=True,
-        )
-
-    if not spec_path.exists():
-        return ToolResult(
-            content=f"[display_chart 오류] spec 파일을 찾을 수 없습니다: {source!r}",
             is_error=True,
         )
 
@@ -279,11 +290,19 @@ async def display_chart(
     rendered_url = "/result/" + str(rendered_path.relative_to(RESULT_DIR)).replace(
         "\\", "/"
     )
+    # 인터랙티브 필터(api/chart.py)가 재렌더할 때 참조할 spec 경로. 프론트 칩 payload
+    # 는 이 data 통째라 spec 이 localStorage 에 영속 → 재진입 후에도 필터 가능.
+    spec_rel = "result/" + str(spec_path.relative_to(RESULT_DIR)).replace("\\", "/")
     logger.info("display_chart rendered %d charts -> %s", len(rendered), rendered_path)
 
     return ToolResult(
         content=f"{len(rendered)}개 차트를 아티팩트 패널에 표시했습니다.",
-        data={"kind": "chart", "src": rendered_url, "title": title},
+        data={
+            "kind": "chart",
+            "src": rendered_url,
+            "spec": spec_rel,
+            "title": title,
+        },
     )
 
 

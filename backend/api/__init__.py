@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from api.chart import router as chart_router
 from api.chat import router as chat_router
 from api.presence import router as presence_router
 from api.settings import router as settings_router
@@ -15,5 +16,6 @@ router.include_router(presence_router)
 router.include_router(settings_router)
 router.include_router(skills_router)
 router.include_router(update_router)
+router.include_router(chart_router)
 
 __all__ = ["router"]

@@ -86,6 +86,7 @@ def test_happy_path_writes_rendered_json() -> None:
     assert result.is_error is False, result.content
     assert result.data["kind"] == "chart"
     assert result.data["src"].endswith("/charts.json")
+    assert result.data["spec"].endswith("/charts.spec.json")
     assert result.data["title"] == "요약"
 
     # spec 보존 + rendered 생성

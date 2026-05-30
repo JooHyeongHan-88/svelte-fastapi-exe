@@ -1,53 +1,47 @@
 <script>
   import ChartCell from "./ChartCell.svelte";
-  import { openLightbox } from "../lib/artifactActions.svelte.js";
+  import { ui } from "../lib/state.svelte.js";
+  import { loadChartCache, openChartLightbox } from "../lib/artifactActions.svelte.js";
 
   const PAGE_SIZE = 6;
 
   let { payload } = $props();
 
-  /** @type {"loading"|"ok"|"error"} */
-  let status = $state("loading");
-  let items = $state([]);
-  let errorMessage = $state("");
-
-  // payload.src が変わるたびに (タブ切り替えなど) ファイルを再フェッチ。
+  // payload が変わるたびに (タブ切り替えなど) キャッシュをロードする。
   // 旧形式 (payload.items) もフォールバックとして対応。
   $effect(() => {
     const src = payload?.src;
     const inlineItems = payload?.items;
 
     if (Array.isArray(inlineItems) && inlineItems.length > 0) {
-      items = inlineItems;
-      status = "ok";
+      // 인라인 items: 캐시에 직접 기록 (fetch 불필요)
+      if (src && !ui.chartCache[src]) {
+        ui.chartCache[src] = {
+          items: inlineItems,
+          status: "ok",
+          error: "",
+          canUndo: false,
+          canRedo: false,
+        };
+      }
       return;
     }
 
-    if (!src) {
-      status = "error";
-      errorMessage = "차트 파일 경로가 없습니다.";
-      items = [];
-      return;
+    if (src) {
+      loadChartCache(payload);
     }
-
-    status = "loading";
-    items = [];
-    errorMessage = "";
-
-    fetch(src, { cache: "no-cache" })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        items = Array.isArray(data) ? data : [];
-        status = "ok";
-      })
-      .catch((err) => {
-        errorMessage = String(err?.message ?? err);
-        status = "error";
-      });
   });
+
+  // 현재 캐시 항목을 $derived 로 읽는다.
+  let cacheEntry = $derived(
+    payload?.src ? (ui.chartCache[payload.src] ?? null) : null,
+  );
+  let status = $derived(cacheEntry?.status ?? (payload?.items ? "ok" : "loading"));
+  let items = $derived(
+    cacheEntry?.items ??
+      (Array.isArray(payload?.items) ? payload.items : []),
+  );
+  let errorMessage = $derived(cacheEntry?.error ?? "");
 
   let total = $derived(items.length);
   let totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
@@ -79,7 +73,7 @@
   }
 
   function openCellInLightbox(globalIndex) {
-    openLightbox("chart", items, globalIndex);
+    openChartLightbox(payload, globalIndex);
   }
 </script>
 

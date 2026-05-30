@@ -1,5 +1,6 @@
 import mimetypes
 import threading
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -27,12 +28,14 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
-app = FastAPI()
 
-
-@app.on_event("startup")
-async def _init_shutdown_event() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     browser.init_shutdown_event()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 # PROMPTS / SKILLS 베이스 메타데이터는 1회 캐시. dev 모드 핫리로드는 각 registry 가

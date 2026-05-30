@@ -346,3 +346,289 @@ def test_pandas_written_parquet_loads(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result[0]["option"]["series"][0]["data"] == [1.0, 2.0, 3.0]
+
+
+# ---------------------------------------------------------------------------
+# 인터랙티브 필터 — source / row_ids 제공 + exclude_by_chart 재집계
+# ---------------------------------------------------------------------------
+
+_SCATTER_SPEC = {
+    "version": "1",
+    "charts": [
+        {
+            "mark": "scatter",
+            "data": {"source": "samples.parquet"},
+            "encoding": {
+                "x": {"field": "value", "type": "quantitative"},
+                "y": {"field": "anomaly_score", "type": "quantitative"},
+            },
+        }
+    ],
+}
+
+
+def test_render_exposes_source_and_row_ids(base_dir: Path) -> None:
+    item = _render(_SCATTER_SPEC, base_dir)[0]
+    # samples.parquet 5 행이 원본 순서대로 단일 시리즈에 매핑된다.
+    assert item["source"] == "samples.parquet"
+    assert item["row_ids"] == [[0, 1, 2, 3, 4]]
+    assert len(item["option"]["series"][0]["data"]) == 5
+
+
+def test_aggregated_charts_have_no_row_ids(base_dir: Path) -> None:
+    # bar(category) / histogram / box / heatmap 은 점이 행 집계라 row_ids=None.
+    bar = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "bar",
+                    "data": {"source": "stats.parquet"},
+                    "encoding": {
+                        "x": {"field": "metric", "type": "nominal"},
+                        "y": {"field": "value", "type": "quantitative"},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )[0]
+    assert bar["row_ids"] is None
+
+    hist = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "samples.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )[0]
+    assert hist["row_ids"] is None
+
+
+def test_exclude_by_chart_drops_scatter_points(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_SCATTER_SPEC)
+    # 행 3 = value 15.0, anomaly 0.9 (이상치) 제외.
+    filtered = render_spec_to_echarts(spec, base_dir, exclude_by_chart={0: [3]})[0]
+    data = filtered["option"]["series"][0]["data"]
+    assert len(data) == 4
+    assert [15.0, 0.9] not in data
+    assert filtered["row_ids"] == [[0, 1, 2, 4]]
+
+
+def test_exclude_by_chart_reaggregates_histogram(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "samples.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                    },
+                }
+            ],
+        }
+    )
+    full = render_spec_to_echarts(spec, base_dir)[0]
+    assert sum(full["option"]["series"][0]["data"]) == 5
+    # 행 3, 4 제외 → 집계 카운트가 3 으로 줄어든다 (재집계 확인).
+    filtered = render_spec_to_echarts(spec, base_dir, exclude_by_chart={0: [3, 4]})[0]
+    assert sum(filtered["option"]["series"][0]["data"]) == 3
+
+
+def test_exclude_str_keyed_index_supported(base_dir: Path) -> None:
+    # JSON 라운드트립으로 키가 str 이 되어도 동작해야 한다.
+    spec = ChartSpecV1.model_validate(_SCATTER_SPEC)
+    filtered = render_spec_to_echarts(spec, base_dir, exclude_by_chart={"0": [0, 1]})[0]
+    assert filtered["row_ids"] == [[2, 3, 4]]
+
+
+# ---------------------------------------------------------------------------
+# line brush overlay — ECharts brush 가 line 점을 못 잡으므로 투명 scatter 트윈 추가
+# ---------------------------------------------------------------------------
+
+_LINE_SPEC = {
+    "version": "1",
+    "charts": [
+        {
+            "mark": "line",
+            "data": {"source": "samples.parquet"},
+            "encoding": {
+                "x": {"field": "idx", "type": "quantitative"},
+                "y": {"field": "value", "type": "quantitative"},
+            },
+        }
+    ],
+}
+
+
+def test_line_gets_invisible_scatter_brush_overlay(base_dir: Path) -> None:
+    item = _render(_LINE_SPEC, base_dir)[0]
+    series = item["option"]["series"]
+    # line 본체 + 투명 scatter overlay 2개.
+    assert [s["type"] for s in series] == ["line", "scatter"]
+    overlay = series[1]
+    assert overlay["itemStyle"]["opacity"] == 0  # 보이지 않음
+    assert overlay["data"] == series[0]["data"]  # 같은 좌표
+    # 선택은 overlay 가 담당: line=None, overlay=원본 행 인덱스.
+    assert item["row_ids"] == [None, [0, 1, 2, 3, 4]]
+    # 레전드는 overlay 중복 없이 단일 항목 (title 없으면 field 명).
+    assert item["option"]["legend"]["data"] == ["value"]
+
+
+def test_line_overlay_respects_exclude_filter(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_LINE_SPEC)
+    # 행 1, 3 제외 → line·overlay 모두 3 점으로 줄고 overlay row_ids 도 갱신.
+    filtered = render_spec_to_echarts(spec, base_dir, exclude_by_chart={0: [1, 3]})[0]
+    series = filtered["option"]["series"]
+    assert len(series[0]["data"]) == 3
+    assert len(series[1]["data"]) == 3
+    assert filtered["row_ids"] == [None, [0, 2, 4]]
+
+
+def test_line_color_groups_each_get_overlay(base_dir: Path) -> None:
+    # color 그룹 line 은 그룹마다 line+overlay 쌍을 갖는다.
+    item = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "line",
+                    "data": {"source": "grouped.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative"},
+                        "y": {"field": "value", "type": "quantitative"},
+                        "color": {"field": "group", "type": "nominal"},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )[0]
+    types = [s["type"] for s in item["option"]["series"]]
+    # A,B,C 각 그룹 → line, scatter 교대.
+    assert types == ["line", "scatter", "line", "scatter", "line", "scatter"]
+    # row_ids: line 항목은 None, overlay 항목만 행 인덱스.
+    assert [r is None for r in item["row_ids"]] == [
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+    ]
+    # 레전드는 그룹명만 (overlay 중복 제거).
+    assert item["option"]["legend"]["data"] == ["A", "B", "C"]
+
+
+# ---------------------------------------------------------------------------
+# ecdf — 정렬 후 누적분포 계단선 + brush overlay
+# ---------------------------------------------------------------------------
+
+_ECDF_SPEC = {
+    "version": "1",
+    "charts": [
+        {
+            "mark": "ecdf",
+            "data": {"source": "samples.parquet"},
+            "encoding": {
+                "x": {"field": "value", "type": "quantitative"},
+            },
+        }
+    ],
+}
+
+
+def test_ecdf_cumulative_step_line(base_dir: Path) -> None:
+    item = _render(_ECDF_SPEC, base_dir)[0]
+    assert item["chart_type"] == "ecdf"
+    series = item["option"]["series"]
+    # 계단선 본체 + 투명 scatter overlay.
+    assert [s["type"] for s in series] == ["line", "scatter"]
+    ecdf = series[0]
+    assert ecdf["step"] == "end"
+    assert ecdf["showSymbol"] is False
+    # value [10,12,9.5,15,11] 오름차순 → [9.5,10,11,12,15], y=i/5.
+    assert ecdf["data"] == [
+        [9.5, 0.2],
+        [10.0, 0.4],
+        [11.0, 0.6],
+        [12.0, 0.8],
+        [15.0, 1.0],
+    ]
+    # y 축은 0~1 비율 고정.
+    assert item["option"]["yAxis"]["min"] == 0
+    assert item["option"]["yAxis"]["max"] == 1
+    # 정렬 순서의 원본 행 인덱스가 overlay row_ids 로 노출 (선택→제외용).
+    assert item["row_ids"] == [None, [2, 0, 4, 1, 3]]
+
+
+def test_ecdf_reaggregates_on_exclude(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_ECDF_SPEC)
+    # 최댓값 행 3(value 15) 제외 → n=4 로 줄고 누적 비율이 1/4 단위로 재계산.
+    filtered = render_spec_to_echarts(spec, base_dir, exclude_by_chart={0: [3]})[0]
+    ecdf = filtered["option"]["series"][0]
+    assert ecdf["data"] == [
+        [9.5, 0.25],
+        [10.0, 0.5],
+        [11.0, 0.75],
+        [12.0, 1.0],
+    ]
+    assert filtered["row_ids"] == [None, [2, 0, 4, 1]]
+
+
+def test_ecdf_color_groups_each_get_curve(base_dir: Path) -> None:
+    item = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "ecdf",
+                    "data": {"source": "grouped.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative"},
+                        "color": {"field": "group", "type": "nominal"},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )[0]
+    # A,B,C 각 그룹마다 ecdf line + overlay scatter.
+    assert [s["type"] for s in item["option"]["series"]] == [
+        "line",
+        "scatter",
+        "line",
+        "scatter",
+        "line",
+        "scatter",
+    ]
+    assert item["option"]["legend"]["data"] == ["A", "B", "C"]
+
+
+def test_ecdf_requires_quantitative_x(base_dir: Path) -> None:
+    with pytest.raises(ValueError, match="quantitative"):
+        _render(
+            {
+                "version": "1",
+                "charts": [
+                    {
+                        "mark": "ecdf",
+                        "data": {"source": "stats.parquet"},
+                        "encoding": {
+                            "x": {"field": "metric", "type": "nominal"},
+                        },
+                    }
+                ],
+            },
+            base_dir,
+        )

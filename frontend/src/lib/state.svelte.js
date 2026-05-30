@@ -62,14 +62,23 @@ export const ui = $state({
   sidebarWidth: 264,
 
   // 아티팩트 라이트박스 — 이미지·차트 셀 클릭 시 리사이즈 가능한 모달로 확대 표시.
-  // items 는 활성 칩의 payload.items 를 그대로 참조하며 index 로 현재 보고 있는 항목을 가리킨다.
-  /** @type {{ open: boolean, kind: "image"|"chart"|null, items: any[], index: number }} */
+  // items 는 이미지 전용. 차트는 chartCache 를 통해 읽어 필터 반영을 단일 소스로 관리.
+  /** @type {{ open: boolean, kind: "image"|"chart"|null, items: any[], index: number, chartKey: string|null, specPath: string|null }} */
   lightbox: {
     open: false,
     kind: null,
-    items: [],
+    items: [],   // 이미지 전용
     index: 0,
+    chartKey: null,   // 차트 전용 — ui.chartCache 의 키 (payload.src)
+    specPath: null,   // 차트 전용 — 필터 API 에 전달할 spec 경로 (payload.spec)
   },
+
+  // 차트 인터랙티브 필터 캐시.
+  // ArtifactChart 가 fetch 해 채우고, 필터 액션이 항목을 갱신한다.
+  // ArtifactChart(그리드)와 ArtifactLightbox(모달)가 동일 항목을 참조해
+  // 필터 결과가 양쪽에 동시 반영된다.
+  /** @type {Record<string, { items: any[], status: "loading"|"ok"|"error", error: string, canUndo: boolean, canRedo: boolean }>} */
+  chartCache: {},
 });
 
 export function activeSession() {

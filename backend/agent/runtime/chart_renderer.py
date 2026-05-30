@@ -12,6 +12,7 @@ polars 로 parquet 을 읽어 encoding 채널에 따라 ECharts option JSON 을 
     box       : y(quantitative) [+ x(nominal) for grouped boxplot] + color optional
     histogram : x(quantitative, bin=True) → bin count
     heatmap   : x(nominal) + y(nominal) + color(quantitative)
+    ecdf      : x(quantitative) [+ color(nominal) for grouped curves] → 누적분포 계단선
 
 aggregate 지원: count·mean·sum·min·max. groupby 키는 색/x 채널 조합으로 결정.
 """
@@ -53,21 +54,35 @@ _ENCODING_TO_AXIS_TYPE: dict[EncodingType, str] = {
     "temporal": "time",
 }
 
+# 인터랙티브 brush 필터링용 내부 행 식별자. _load_data_frame 직후 with_row_index 로
+# 원본 parquet 순서의 행 번호를 부여해, 렌더된 점(scatter/line)을 원본 행으로 역추적한다.
+# encoding field 와 절대 충돌하지 않도록 dunder 접두/접미를 쓴다.
+_ROW_ID_COL = "__row_id__"
+
 
 # ---------------------------------------------------------------------------
 # 공개 API
 # ---------------------------------------------------------------------------
 
 
-def render_spec_to_echarts(spec: ChartSpecV1, base_dir: Path) -> list[dict[str, Any]]:
+def render_spec_to_echarts(
+    spec: ChartSpecV1,
+    base_dir: Path,
+    exclude_by_chart: dict[Any, list[int]] | None = None,
+) -> list[dict[str, Any]]:
     """spec 의 각 차트를 ECharts option dict 로 변환해 리스트로 반환한다.
 
     Args:
         spec: 검증된 ChartSpecV1 인스턴스.
         base_dir: parquet 파일을 찾을 디렉터리 (spec 파일이 위치한 폴더).
+        exclude_by_chart: 차트 인덱스(int 또는 str) → 제외할 원본 행 인덱스 리스트.
+            인터랙티브 brush 필터링 상태. None 이면 무필터 (최초 렌더와 동일).
 
     Returns:
-        ``[{chart_type, title, option}, ...]`` — 프론트엔드가 직접 소비하는 형태.
+        ``[{chart_type, title, option, source, row_ids}, ...]`` — 프론트엔드가
+        직접 소비하는 형태. ``source`` 는 차트의 parquet 파일명(Filter All 의 동일
+        데이터 그룹 판정용), ``row_ids`` 는 점 기반 차트의 시리즈별 원본 행 인덱스
+        평행 배열(brush 선택 → 행 역추적용). 집계 차트는 ``row_ids=None``.
 
     Raises:
         FileNotFoundError: data.source 가 가리키는 parquet 파일이 없을 때.
@@ -77,7 +92,12 @@ def render_spec_to_echarts(spec: ChartSpecV1, base_dir: Path) -> list[dict[str, 
     for idx, chart in enumerate(spec.charts):
         try:
             df = _load_data_frame(chart.data.source, base_dir)
-            option = _render_chart(chart, df)
+            # 원본 순서의 행 식별자 부여 후, 필터 상태가 있으면 제외 행을 떨군다.
+            df = df.with_row_index(_ROW_ID_COL)
+            excluded = _excluded_for_chart(exclude_by_chart, idx)
+            if excluded:
+                df = df.filter(~pl.col(_ROW_ID_COL).is_in(excluded))
+            option, row_ids = _render_chart(chart, df)
         except (FileNotFoundError, ValueError) as exc:
             raise type(exc)(
                 f"charts[{idx}] ({chart.mark}, {chart.title!r}): {exc}"
@@ -91,9 +111,28 @@ def render_spec_to_echarts(spec: ChartSpecV1, base_dir: Path) -> list[dict[str, 
                 "chart_type": chart.mark,
                 "title": chart.title,
                 "option": option,
+                "source": chart.data.source,
+                "row_ids": row_ids,
             }
         )
     return rendered
+
+
+def _excluded_for_chart(
+    exclude_by_chart: dict[Any, list[int]] | None, idx: int
+) -> list[int] | None:
+    """차트 인덱스의 제외 행 리스트를 정규화해 반환한다 (없으면 None).
+
+    JSON 라운드트립으로 키가 str 로 바뀔 수 있어 int/str 양쪽을 조회한다.
+    """
+    if not exclude_by_chart:
+        return None
+    raw = exclude_by_chart.get(idx)
+    if raw is None:
+        raw = exclude_by_chart.get(str(idx))
+    if not raw:
+        return None
+    return [int(v) for v in raw]
 
 
 # ---------------------------------------------------------------------------
@@ -121,20 +160,29 @@ def _load_data_frame(source: str, base_dir: Path) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _render_chart(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
-    """mark 별 렌더러 분기."""
+def _render_chart(
+    chart: ChartV1, df: pl.DataFrame
+) -> tuple[dict[str, Any], list[list[int]] | None]:
+    """mark 별 렌더러 분기. ``(option, row_ids)`` 반환.
+
+    ``row_ids`` 는 점 기반 차트(비집계 scatter/line)에서만 시리즈별 원본 행
+    인덱스 배열로 채워지고, 집계 차트(bar/box/histogram/heatmap, category 축)는
+    개별 점을 단일 행으로 역추적할 수 없어 None 이다.
+    """
     if chart.mark == "bar":
         return _render_standard(chart, df, echarts_type="bar")
     if chart.mark == "line":
         return _render_standard(chart, df, echarts_type="line")
     if chart.mark == "scatter":
         return _render_standard(chart, df, echarts_type="scatter")
+    if chart.mark == "ecdf":
+        return _render_ecdf(chart, df)
     if chart.mark == "box":
-        return _render_box(chart, df)
+        return _render_box(chart, df), None
     if chart.mark == "histogram":
-        return _render_histogram(chart, df)
+        return _render_histogram(chart, df), None
     if chart.mark == "heatmap":
-        return _render_heatmap(chart, df)
+        return _render_heatmap(chart, df), None
     raise ValueError(f"미지원 mark: {chart.mark!r}")
 
 
@@ -143,7 +191,7 @@ def _render_standard(
     df: pl.DataFrame,
     *,
     echarts_type: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[list[int]] | None]:
     """bar / line / scatter 공용 렌더러.
 
     encoding.color 가 있으면 color field 로 groupby 해 여러 시리즈를 만든다.
@@ -160,11 +208,19 @@ def _render_standard(
     y_axis_type = _ENCODING_TO_AXIS_TYPE[enc.y.type]
 
     # bar 차트는 보통 category x. type 이 quantitative 여도 사용자가 명시했으면 존중.
-    series, x_categories = _build_series(df, enc, echarts_type)
+    series, x_categories, row_ids = _build_series(df, enc, echarts_type)
+
+    # line 은 ECharts brush 가 점을 선택하지 못하므로(scatter/bar/candlestick 만 지원)
+    # 보이지 않는 scatter 트윈을 덧씌워 brush 선택을 가능케 한다.
+    if echarts_type == "line" and row_ids is not None:
+        series, row_ids = _with_brush_overlay(series, row_ids)
+
+    # 레전드는 원본 시리즈 이름만 (overlay 는 같은 이름을 공유하므로 dedupe).
+    legend_names = list(dict.fromkeys(s["name"] for s in series))
 
     option: dict[str, Any] = {
         "tooltip": {"trigger": "axis" if echarts_type != "scatter" else "item"},
-        "legend": {"data": [s["name"] for s in series]},
+        "legend": {"data": legend_names},
         "toolbox": {"feature": _TOOLBOX_FEATURE},
         "brush": {},
         "dataZoom": [{"type": "inside"}, {"type": "slider"}],
@@ -172,9 +228,142 @@ def _render_standard(
         "yAxis": _axis_definition(enc.y, y_axis_type, None),
         "series": series,
     }
-    if chart.title:
-        option["title"] = {"text": chart.title}
-    return option
+    return option, row_ids
+
+
+# brush overlay scatter 의 점 크기 — 충분히 커야 드래그 선택이 쉽다.
+_BRUSH_OVERLAY_SYMBOL_SIZE = 12
+
+
+def _with_brush_overlay(
+    series: list[dict[str, Any]],
+    row_ids: list[list[int] | None],
+) -> tuple[list[dict[str, Any]], list[list[int] | None]]:
+    """line 시리즈마다 동일 좌표의 투명 scatter 트윈을 추가한다.
+
+    ECharts brush 의 ``brushSelector`` 는 scatter/bar/candlestick 만 구현돼 있어
+    line 시리즈의 점은 brush 로 선택되지 않는다(apache/echarts#18155). 선은 그대로
+    렌더하되, 같은 데이터의 보이지 않는 scatter 를 위에 깔아 brush 가 점을 잡게 하고,
+    그 scatter 의 dataIndex 를 원본 행으로 역추적한다.
+
+    Args:
+        series: ``_build_series`` 가 만든 line 시리즈 리스트.
+        row_ids: 시리즈별 원본 행 인덱스 평행 배열 (같은 길이).
+
+    Returns:
+        ``(확장된 series, 확장된 row_ids)``. 원본 line 시리즈의 row_ids 항목은
+        ``None`` 으로 바꿔 brush 매핑에서 제외하고(선택은 overlay 담당), 새로 추가한
+        overlay scatter 항목이 실제 행 인덱스를 갖는다.
+    """
+    new_series: list[dict[str, Any]] = []
+    new_row_ids: list[list[int] | None] = []
+    for line_series, ids in zip(series, row_ids):
+        new_series.append(line_series)
+        new_row_ids.append(None)  # 선택은 overlay 가 담당
+        overlay = {
+            "name": line_series["name"],
+            "type": "scatter",
+            "data": line_series["data"],
+            "symbolSize": _BRUSH_OVERLAY_SYMBOL_SIZE,
+            "itemStyle": {"opacity": 0},  # 보이지 않지만 brush hit-test 는 유효
+            "emphasis": {"disabled": True},  # hover 시 점이 드러나지 않게
+            "tooltip": {"show": False},  # axis tooltip 중복 방지
+            "silent": True,  # hover/클릭 이벤트는 line 에 맡김 (brush 는 영향 없음)
+            "z": 5,
+        }
+        new_series.append(overlay)
+        new_row_ids.append(ids)
+    return new_series, new_row_ids
+
+
+def _render_ecdf(
+    chart: ChartV1, df: pl.DataFrame
+) -> tuple[dict[str, Any], list[list[int] | None] | None]:
+    """ECDF(경험적 누적분포함수) 렌더러 — quantitative x 를 정렬해 누적 비율 계단선.
+
+    각 점의 y 는 F(x) = (x 이하 표본 수)/n 으로, x 오름차순 i 번째(1-base) 점에서
+    ``i/n`` 이다. color 채널이 있으면 그룹별로 별도 ECDF 곡선을 그린다.
+
+    line 과 마찬가지로 ECharts brush 가 계단선의 점을 못 잡으므로 투명 scatter
+    트윈을 덧씌워 brush 선택·필터를 가능케 한다. 정렬 순서의 ``__row_id__`` 가 곧
+    점별 원본 행 인덱스라, 점을 제외하면 백엔드 재렌더에서 n 이 줄며 곡선이 다시
+    계산된다.
+
+    Args:
+        chart: ecdf mark 차트 정의.
+        df: ``__row_id__`` 가 부여된(그리고 필터가 적용된) DataFrame.
+
+    Returns:
+        ``(option, row_ids)`` — row_ids 는 line overlay 규약을 따라 본체 시리즈는
+        None, overlay scatter 시리즈가 정렬된 원본 행 인덱스를 갖는다.
+
+    Raises:
+        ValueError: x encoding 이 없거나 quantitative 가 아닐 때.
+    """
+    enc = chart.encoding
+    if enc.x is None:
+        raise ValueError("ecdf 차트는 x encoding 이 필요하다")
+    if enc.x.type != "quantitative":
+        raise ValueError("ecdf 의 x.type 은 quantitative 여야 한다")
+
+    _ensure_columns(df, [enc.x.field] + ([enc.color.field] if enc.color else []))
+
+    series: list[dict[str, Any]] = []
+    row_ids: list[list[int] | None] = []
+
+    if enc.color is not None:
+        groups = df[enc.color.field].unique(maintain_order=True).to_list()
+        for group_value in groups:
+            subset = df.filter(pl.col(enc.color.field) == group_value)
+            points, ids = _ecdf_points(subset, enc.x.field)
+            series.append(_ecdf_series(str(group_value), points))
+            row_ids.append(ids)
+    else:
+        points, ids = _ecdf_points(df, enc.x.field)
+        series.append(_ecdf_series(enc.x.title or enc.x.field, points))
+        row_ids.append(ids)
+
+    # 계단선도 line 이라 brush 가 점을 못 잡는다 → 투명 scatter overlay 추가.
+    series, row_ids = _with_brush_overlay(series, row_ids)
+    legend_names = list(dict.fromkeys(s["name"] for s in series))
+
+    option: dict[str, Any] = {
+        "tooltip": {"trigger": "axis"},
+        "legend": {"data": legend_names},
+        "toolbox": {"feature": _TOOLBOX_FEATURE},
+        "brush": {},
+        "dataZoom": [{"type": "inside"}, {"type": "slider"}],
+        "xAxis": {"type": "value", "name": enc.x.title or enc.x.field},
+        "yAxis": {"type": "value", "name": "누적 비율", "min": 0, "max": 1},
+        "series": series,
+    }
+    return option, row_ids
+
+
+def _ecdf_points(df: pl.DataFrame, field: str) -> tuple[list[list[Any]], list[int]]:
+    """x 컬럼을 오름차순 정렬해 ``[[x, i/n], ...]`` 누적 비율 점과 원본 행 인덱스 반환.
+
+    null 은 분포 계산에서 제외한다(통상적인 ECDF 관례).
+    """
+    ordered = df.filter(pl.col(field).is_not_null()).sort(field)
+    n = ordered.height
+    if n == 0:
+        return [], []
+    xs = ordered[field].to_list()
+    ids = [int(v) for v in ordered[_ROW_ID_COL].to_list()]
+    points = [[_to_jsonable(xs[i]), (i + 1) / n] for i in range(n)]
+    return points, ids
+
+
+def _ecdf_series(name: str, data: list[list[Any]]) -> dict[str, Any]:
+    """ECDF 계단선 시리즈 — step='end' 로 우측 계단, 본체 심볼은 숨김."""
+    return {
+        "name": name,
+        "type": "line",
+        "step": "end",
+        "showSymbol": False,
+        "data": data,
+    }
 
 
 def _render_box(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
@@ -236,8 +425,6 @@ def _render_box(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
         "yAxis": _axis_definition(enc.y, _ENCODING_TO_AXIS_TYPE[enc.y.type], None),
         "series": series_data,
     }
-    if chart.title:
-        option["title"] = {"text": chart.title}
     return option
 
 
@@ -284,8 +471,6 @@ def _render_histogram(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
             }
         ],
     }
-    if chart.title:
-        option["title"] = {"text": chart.title}
     return option
 
 
@@ -342,8 +527,6 @@ def _render_heatmap(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
             }
         ],
     }
-    if chart.title:
-        option["title"] = {"text": chart.title}
     return option
 
 
@@ -356,11 +539,15 @@ def _build_series(
     df: pl.DataFrame,
     enc: Encoding,
     echarts_type: str,
-) -> tuple[list[dict[str, Any]], list[str] | None]:
-    """encoding 에 따라 시리즈 리스트와 (필요 시) 카테고리 축 라벨 생성.
+) -> tuple[list[dict[str, Any]], list[str] | None, list[list[int]] | None]:
+    """encoding 에 따라 시리즈 리스트와 (필요 시) 카테고리 축 라벨·행 인덱스 생성.
 
     color 가 있으면 그룹별로 시리즈를 분리한다. aggregate 가 있으면 groupby 집계.
     bar 차트는 x 축이 category 이면 카테고리 리스트도 반환.
+
+    세 번째 반환값 ``row_ids`` 는 점이 원본 행과 1:1 대응하는 경우(비category 의
+    pair data 경로)에만 시리즈별 원본 행 인덱스 배열로 채워진다. category 축
+    (bar·nominal x)은 점이 행 집계 슬롯이라 None.
     """
     assert enc.x is not None and enc.y is not None
 
@@ -378,6 +565,7 @@ def _build_series(
             ]
 
         series_list: list[dict[str, Any]] = []
+        row_ids_list: list[list[int]] | None = None if needs_categories else []
         for group_value in groups:
             subset = df.filter(pl.col(group_field) == group_value)
             subset = _maybe_aggregate(
@@ -391,7 +579,9 @@ def _build_series(
                     **({"symbolSize": 8} if echarts_type == "scatter" else {}),
                 }
             )
-        return series_list, x_categories
+            if row_ids_list is not None:
+                row_ids_list.append(_row_ids_of(subset))
+        return series_list, x_categories, row_ids_list
 
     # 단일 시리즈
     aggregated = _maybe_aggregate(
@@ -406,7 +596,17 @@ def _build_series(
         "data": _rows_to_pairs(aggregated, enc, x_categories),
         **({"symbolSize": 8} if echarts_type == "scatter" else {}),
     }
-    return [series_one], x_categories
+    row_ids = None if needs_categories else [_row_ids_of(aggregated)]
+    return [series_one], x_categories, row_ids
+
+
+def _row_ids_of(df: pl.DataFrame) -> list[int]:
+    """pair data 경로의 시리즈에 대응하는 원본 행 인덱스 리스트.
+
+    _rows_to_pairs 의 비category 분기가 df 행을 순서대로 점으로 방출하므로,
+    같은 순서의 _ROW_ID_COL 값이 곧 점별 원본 행 인덱스가 된다.
+    """
+    return [int(v) for v in df[_ROW_ID_COL].to_list()]
 
 
 def _maybe_aggregate(

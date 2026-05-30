@@ -6,6 +6,7 @@
 
 import { ui, activeSession } from "./state.svelte.js";
 import { saveArtifactPanelOpen } from "./storage.js";
+import { postChartFilter, getChartFilterState } from "./api.js";
 
 /**
  * 새 아티팩트 칩 객체를 만든다 (메시지에 직접 임베드할 형태).
@@ -158,16 +159,147 @@ export function closeLightbox() {
   ui.lightbox.open = false;
 }
 
+export function lightboxPrev() {
+  if (!ui.lightbox.open) return;
+  const total = _lightboxTotal();
+  if (total <= 1) return;
+  ui.lightbox.index = (ui.lightbox.index - 1 + total) % total;
+}
+
 export function lightboxNext() {
   if (!ui.lightbox.open) return;
-  const total = ui.lightbox.items.length;
+  const total = _lightboxTotal();
   if (total <= 1) return;
   ui.lightbox.index = (ui.lightbox.index + 1) % total;
 }
 
-export function lightboxPrev() {
-  if (!ui.lightbox.open) return;
-  const total = ui.lightbox.items.length;
-  if (total <= 1) return;
-  ui.lightbox.index = (ui.lightbox.index - 1 + total) % total;
+function _lightboxTotal() {
+  if (ui.lightbox.kind === "chart" && ui.lightbox.chartKey) {
+    return ui.chartCache[ui.lightbox.chartKey]?.items?.length ?? 0;
+  }
+  return ui.lightbox.items.length;
+}
+
+// ---------------------------------------------------------------------------
+// 차트 인터랙티브 필터
+// ---------------------------------------------------------------------------
+
+/**
+ * ArtifactChart 가 마운트되거나 payload 가 바뀔 때 호출해 chartCache 를 채운다.
+ * 이미 캐시에 있으면 no-op.
+ *
+ * @param {{ src: string, spec?: string }} payload
+ */
+export async function loadChartCache(payload) {
+  const key = payload?.src;
+  if (!key) return;
+  if (ui.chartCache[key]) return;
+
+  ui.chartCache[key] = { items: [], status: "loading", error: "", canUndo: false, canRedo: false };
+
+  try {
+    const r = await fetch(key, { cache: "no-cache" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const items = Array.isArray(data) ? data : [];
+
+    // 필터 상태 초기값 (spec 이 있을 때만 조회)
+    let canUndo = false;
+    let canRedo = false;
+    if (payload.spec) {
+      const fs = await getChartFilterState(payload.spec);
+      canUndo = fs.can_undo ?? false;
+      canRedo = fs.can_redo ?? false;
+    }
+
+    ui.chartCache[key] = { items, status: "ok", error: "", canUndo, canRedo };
+  } catch (err) {
+    ui.chartCache[key] = {
+      items: [],
+      status: "error",
+      error: String(err?.message ?? err),
+      canUndo: false,
+      canRedo: false,
+    };
+  }
+}
+
+/**
+ * 차트 라이트박스를 연다. chartKey 와 specPath 를 기록해 필터 동기화에 사용한다.
+ *
+ * @param {{ src: string, spec?: string }} payload
+ * @param {number} index
+ */
+export function openChartLightbox(payload, index = 0) {
+  const key = payload?.src;
+  if (!key) return;
+  const items = ui.chartCache[key]?.items ?? [];
+  const safeIndex = Math.min(Math.max(0, index), Math.max(0, items.length - 1));
+
+  ui.lightbox.kind = "chart";
+  ui.lightbox.chartKey = key;
+  ui.lightbox.specPath = payload.spec ?? null;
+  ui.lightbox.index = safeIndex;
+  // items 는 이미지 전용 — 차트는 chartCache 경유이므로 비운다.
+  ui.lightbox.items = [];
+  ui.lightbox.open = true;
+}
+
+/**
+ * 공통 필터 액션 실행 헬퍼.
+ *
+ * @param {object} body  postChartFilter 에 전달할 요청 본문
+ */
+async function _applyChartFilter(body) {
+  const key = ui.lightbox.chartKey;
+  const spec = ui.lightbox.specPath;
+  if (!key || !spec) return;
+
+  const entry = ui.chartCache[key];
+  if (!entry) return;
+
+  try {
+    const result = await postChartFilter({ spec, ...body });
+    // 응답으로 캐시 갱신 → ArtifactChart(그리드) + Lightbox(모달) 동시 재렌더
+    ui.chartCache[key] = {
+      items: result.items ?? [],
+      status: "ok",
+      error: "",
+      canUndo: result.can_undo ?? false,
+      canRedo: result.can_redo ?? false,
+    };
+  } catch (err) {
+    console.error("chart filter failed:", err);
+  }
+}
+
+/**
+ * 현재 라이트박스에서 brush 로 선택한 타점을 제외 필터링한다.
+ *
+ * @param {"single"|"all"} scope
+ * @param {number} chartIndex  brush 가 일어난 차트의 인덱스
+ * @param {number[]} rowIds  제외할 원본 parquet 행 인덱스
+ */
+export async function filterChartSelection(scope, chartIndex, rowIds) {
+  await _applyChartFilter({
+    action: "exclude",
+    scope,
+    chart_index: chartIndex,
+    row_ids: rowIds,
+  });
+}
+
+/** 1단계 이전 필터 상태로 되돌린다. */
+export async function undoChartFilter() {
+  await _applyChartFilter({ action: "undo" });
+}
+
+/** 되돌린 상태에서 1단계 앞으로 다시 실행한다. */
+export async function redoChartFilter() {
+  await _applyChartFilter({ action: "redo" });
+}
+
+/** 모든 필터를 초기화한다 (undo 로 복구 가능). */
+export async function resetChartFilter() {
+  await _applyChartFilter({ action: "reset" });
 }
