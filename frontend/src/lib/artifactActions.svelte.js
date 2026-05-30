@@ -303,3 +303,45 @@ export async function redoChartFilter() {
 export async function resetChartFilter() {
   await _applyChartFilter({ action: "reset" });
 }
+
+// ---------------------------------------------------------------------------
+// 레전드 컨트롤 (순서·색상·Hide·Filter)
+// ---------------------------------------------------------------------------
+
+/**
+ * 선택한 레전드(시리즈) 그룹의 원본 행을 데이터에서 제외한다.
+ * 백엔드가 color.field 값으로 행을 환원해 기존 exclude 메커니즘으로 처리하므로
+ * Undo/Reset/Filter All 이 brush 필터와 동일하게 동작한다.
+ *
+ * @param {"single"|"all"} scope
+ * @param {number} chartIndex  현재 차트 인덱스
+ * @param {string[]} values  제외할 레전드 이름 배열
+ */
+export async function excludeLegend(scope, chartIndex, values) {
+  if (!Array.isArray(values) || values.length === 0) return;
+  await _applyChartFilter({
+    action: "exclude_legend",
+    scope,
+    chart_index: chartIndex,
+    legend_values: values,
+  });
+}
+
+/**
+ * 레전드 순서·색상·Hide 오버라이드를 설정한다 (시각적, 재집계 없음).
+ * order/hidden 은 통째 교체, colors 는 제공 키만 병합된다 (백엔드 규약).
+ *
+ * @param {number} chartIndex  현재 차트 인덱스
+ * @param {{ order?: string[], colors?: Record<string,string>, hidden?: string[] }} patch
+ * @param {"single"|"all"} [scope="single"]
+ */
+export async function setChartLegend(chartIndex, patch, scope = "single") {
+  await _applyChartFilter({
+    action: "set_legend",
+    scope,
+    chart_index: chartIndex,
+    order: patch.order ?? null,
+    colors: patch.colors ?? null,
+    hidden: patch.hidden ?? null,
+  });
+}

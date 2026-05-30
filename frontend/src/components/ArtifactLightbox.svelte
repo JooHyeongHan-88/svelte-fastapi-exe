@@ -9,8 +9,16 @@
     undoChartFilter,
     redoChartFilter,
     resetChartFilter,
+    excludeLegend,
+    setChartLegend,
   } from "../lib/artifactActions.svelte.js";
   import ChartCell from "./ChartCell.svelte";
+
+  // ECharts 기본 팔레트 — 색상 오버라이드 전 스와치 표시용(시리즈에 명시 색이 없을 때).
+  const ECHARTS_PALETTE = [
+    "#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de",
+    "#3ba272", "#fc8452", "#9a60b4", "#ea7ccc",
+  ];
 
   const MIN_WIDTH = 320;
   const MIN_HEIGHT = 240;
@@ -177,23 +185,117 @@
     });
   }
 
-  // 인덱스/모달 오픈 시 brush 상태 초기화
+  // ── 레전드 컨트롤 상태 ───────────────────────────────────────────
+  let legendPanelOpen = $state(false);
+  let selectedLegend = $state([]);   // Filter 대상으로 체크한 레전드 이름
+  let dragIndex = $state(-1);        // 순서 변경 드래그 중인 행 인덱스
+
+  // 현재 차트의 레전드 항목·색상·숨김 상태를 렌더된 option 단일 소스에서 파생한다.
+  let legendNames = $derived(current?.option?.legend?.data ?? []);
+  let legendEnabled = $derived(
+    ui.lightbox.kind === "chart" && Array.isArray(legendNames) && legendNames.length > 1,
+  );
+  let legendColors = $derived.by(() => {
+    const opt = current?.option;
+    const names = opt?.legend?.data ?? [];
+    const series = opt?.series ?? [];
+    const map = {};
+    names.forEach((name, i) => {
+      const s = series.find((x) => x.name === name && x.itemStyle?.color);
+      map[name] = s?.itemStyle?.color ?? ECHARTS_PALETTE[i % ECHARTS_PALETTE.length];
+    });
+    return map;
+  });
+  let hiddenSet = $derived.by(() => {
+    const sel = current?.option?.legend?.selected ?? {};
+    return new Set(Object.keys(sel).filter((k) => sel[k] === false));
+  });
+
+  // 인덱스/모달 오픈 시 brush·레전드 선택 상태 초기화
   $effect(() => {
     ui.lightbox.index;
     ui.lightbox.open;
     selectedRowIds = [];
+    selectedLegend = [];
+    dragIndex = -1;
     chartInstance = null;
   });
 
-  // ── 필터 버튼 핸들러 ─────────────────────────────────────────────
+  // 레전드가 없는 차트로 이동하면 편집 패널을 닫는다.
+  $effect(() => {
+    if (!legendEnabled) legendPanelOpen = false;
+  });
+
+  // ── 필터 버튼 핸들러 (brush 행 / 레전드 그룹 분기) ────────────────
   async function handleFilter(scope) {
-    if (filterBusy || !selectedRowIds.length) return;
+    if (filterBusy) return;
+    const useLegend = selectedLegend.length > 0;
+    const useBrush = selectedRowIds.length > 0 && currentHasRowIds;
+    if (!useLegend && !useBrush) return;
     filterBusy = true;
     try {
-      await filterChartSelection(scope, ui.lightbox.index, selectedRowIds);
+      if (useLegend) {
+        await excludeLegend(scope, ui.lightbox.index, selectedLegend);
+        selectedLegend = [];
+      } else {
+        await filterChartSelection(scope, ui.lightbox.index, selectedRowIds);
+      }
       selectedRowIds = [];
       // 필터 후 brush 클리어
       chartInstance?.dispatchAction({ type: "brush", areas: [] });
+    } finally {
+      filterBusy = false;
+    }
+  }
+
+  // ── 레전드 편집 핸들러 ───────────────────────────────────────────
+  function toggleLegendPanel() {
+    if (!legendEnabled) return;
+    legendPanelOpen = !legendPanelOpen;
+  }
+
+  function toggleSelectLegend(name) {
+    selectedLegend = selectedLegend.includes(name)
+      ? selectedLegend.filter((n) => n !== name)
+      : [...selectedLegend, name];
+  }
+
+  async function toggleHide(name) {
+    if (filterBusy) return;
+    const next = new Set(hiddenSet);
+    next.has(name) ? next.delete(name) : next.add(name);
+    filterBusy = true;
+    try {
+      await setChartLegend(ui.lightbox.index, { hidden: [...next] });
+    } finally {
+      filterBusy = false;
+    }
+  }
+
+  async function changeColor(name, hex) {
+    if (filterBusy) return;
+    filterBusy = true;
+    try {
+      await setChartLegend(ui.lightbox.index, { colors: { [name]: hex } });
+    } finally {
+      filterBusy = false;
+    }
+  }
+
+  function onRowDragStart(i) {
+    dragIndex = i;
+  }
+
+  async function onRowDrop(i) {
+    const from = dragIndex;
+    dragIndex = -1;
+    if (from < 0 || from === i || filterBusy) return;
+    const names = [...legendNames];
+    const [moved] = names.splice(from, 1);
+    names.splice(i, 0, moved);
+    filterBusy = true;
+    try {
+      await setChartLegend(ui.lightbox.index, { order: names });
     } finally {
       filterBusy = false;
     }
@@ -218,6 +320,9 @@
   }
 
   let hasSelection = $derived(selectedRowIds.length > 0);
+  let hasLegendSelection = $derived(selectedLegend.length > 0);
+  // Filter / Filter All 활성 조건: brush 점 선택(점 기반 차트) 또는 레전드 그룹 선택.
+  let canFilter = $derived((hasSelection && currentHasRowIds) || hasLegendSelection);
   let specPresent = $derived(!!ui.lightbox.specPath);
 </script>
 
@@ -268,14 +373,18 @@
       <!-- 차트 필터 컨트롤 툴바 (차트 전용) -->
       {#if ui.lightbox.kind === "chart" && specPresent}
         <div class="filter-toolbar">
-          <!-- Filter / Filter All (선택이 있고 점 기반 차트일 때만 활성) -->
+          <!-- Filter / Filter All (brush 점 선택 또는 레전드 그룹 선택 시 활성) -->
           <button
             type="button"
             class="filter-btn"
-            class:active={hasSelection && currentHasRowIds}
-            disabled={!hasSelection || !currentHasRowIds || filterBusy}
+            class:active={canFilter}
+            disabled={!canFilter || filterBusy}
             onclick={() => handleFilter("single")}
-            title={currentHasRowIds ? "선택한 데이터 제외" : "집계 차트는 필터 불가"}
+            title={hasLegendSelection
+              ? "선택한 레전드 그룹 제외"
+              : currentHasRowIds
+                ? "선택한 데이터 제외"
+                : "선택(brush/레전드)이 없습니다"}
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none"
               stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
@@ -287,10 +396,12 @@
           <button
             type="button"
             class="filter-btn"
-            class:active={hasSelection && currentHasRowIds}
-            disabled={!hasSelection || !currentHasRowIds || filterBusy}
+            class:active={canFilter}
+            disabled={!canFilter || filterBusy}
             onclick={() => handleFilter("all")}
-            title={currentHasRowIds ? "같은 데이터의 모든 차트에 필터 적용" : "집계 차트는 필터 불가"}
+            title={hasLegendSelection
+              ? "선택한 레전드 그룹을 같은 데이터의 모든 차트에서 제외"
+              : "같은 데이터의 모든 차트에 필터 적용"}
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none"
               stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
@@ -299,6 +410,28 @@
               <circle cx="13" cy="13" r="3" fill="currentColor" stroke="none" />
             </svg>
             Filter All
+          </button>
+
+          <span class="toolbar-sep"></span>
+
+          <!-- Legend 편집 토글 (레전드 항목 2개 이상일 때만 활성) -->
+          <button
+            type="button"
+            class="filter-btn"
+            class:active={legendPanelOpen}
+            disabled={!legendEnabled}
+            onclick={toggleLegendPanel}
+            title={legendEnabled ? "레전드 순서·색상·표시 편집" : "레전드가 없는 차트입니다"}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+              stroke-linejoin="round" aria-hidden="true">
+              <circle cx="4" cy="4" r="2" fill="currentColor" stroke="none" />
+              <path d="M8 4h7" />
+              <circle cx="4" cy="11" r="2" fill="currentColor" stroke="none" />
+              <path d="M8 11h7" />
+            </svg>
+            Legend
           </button>
 
           <span class="toolbar-sep"></span>
@@ -341,42 +474,115 @@
         </div>
       {/if}
 
-      <div class="lightbox-body">
-        {#if ui.lightbox.kind === "image"}
-          {#key ui.lightbox.index}
-            <img
-              src={current.src}
-              alt={current.alt || ""}
-              class="lightbox-image"
-            />
-          {/key}
-        {:else if ui.lightbox.kind === "chart"}
-          {#key ui.lightbox.index}
-            <div class="lightbox-chart">
-              <ChartCell item={current} embedded={false} onchart={onChartReady} />
-            </div>
-          {/key}
-        {/if}
+      <!-- 본문 + 우측 레전드 편집 패널 (가로 배치) -->
+      <div class="lightbox-main">
+        <div class="lightbox-body">
+          {#if ui.lightbox.kind === "image"}
+            {#key ui.lightbox.index}
+              <img
+                src={current.src}
+                alt={current.alt || ""}
+                class="lightbox-image"
+              />
+            {/key}
+          {:else if ui.lightbox.kind === "chart"}
+            {#key ui.lightbox.index}
+              <div class="lightbox-chart">
+                <ChartCell item={current} embedded={false} onchart={onChartReady} />
+              </div>
+            {/key}
+          {/if}
 
-        {#if hasMultiple}
-          <button
-            type="button"
-            class="nav-btn nav-prev"
-            onclick={lightboxPrev}
-            aria-label="이전 항목"
-            title="이전 (←)"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            class="nav-btn nav-next"
-            onclick={lightboxNext}
-            aria-label="다음 항목"
-            title="다음 (→)"
-          >
-            ›
-          </button>
+          {#if hasMultiple}
+            <button
+              type="button"
+              class="nav-btn nav-prev"
+              onclick={lightboxPrev}
+              aria-label="이전 항목"
+              title="이전 (←)"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              class="nav-btn nav-next"
+              onclick={lightboxNext}
+              aria-label="다음 항목"
+              title="다음 (→)"
+            >
+              ›
+            </button>
+          {/if}
+        </div>
+
+        <!-- 레전드 편집 패널 (순서 드래그 · 색상 · Hide · Filter 선택) -->
+        {#if ui.lightbox.kind === "chart" && specPresent && legendPanelOpen && legendEnabled}
+          <aside class="legend-panel">
+            <div class="legend-panel-header">레전드</div>
+            <div class="legend-hint">
+              드래그로 순서 변경 · 색상 클릭 변경 · 눈으로 표시/숨김 ·
+              체크 후 툴바의 Filter 로 데이터 제외
+            </div>
+            <ul class="legend-list">
+              {#each legendNames as name, i (name)}
+                <li
+                  class="legend-row"
+                  class:dragging={dragIndex === i}
+                  draggable="true"
+                  ondragstart={() => onRowDragStart(i)}
+                  ondragover={(e) => e.preventDefault()}
+                  ondrop={() => onRowDrop(i)}
+                  ondragend={() => (dragIndex = -1)}
+                >
+                  <span class="drag-handle" aria-hidden="true">
+                    <span class="material-symbols-outlined">drag_indicator</span>
+                  </span>
+
+                  <label class="legend-check" title="Filter 대상으로 선택">
+                    <input
+                      type="checkbox"
+                      checked={selectedLegend.includes(name)}
+                      onchange={() => toggleSelectLegend(name)}
+                    />
+                  </label>
+
+                  <label class="color-swatch" title="색상 변경">
+                    <span
+                      class="swatch-dot"
+                      style="background: {legendColors[name]}"
+                    ></span>
+                    <input
+                      type="color"
+                      value={legendColors[name]}
+                      disabled={filterBusy}
+                      onchange={(e) => changeColor(name, e.currentTarget.value)}
+                    />
+                  </label>
+
+                  <span
+                    class="legend-name"
+                    class:hidden-name={hiddenSet.has(name)}
+                    title={name}
+                  >
+                    {name}
+                  </span>
+
+                  <button
+                    type="button"
+                    class="eye-btn"
+                    disabled={filterBusy}
+                    onclick={() => toggleHide(name)}
+                    title={hiddenSet.has(name) ? "표시" : "숨김"}
+                    aria-label={hiddenSet.has(name) ? "표시" : "숨김"}
+                  >
+                    <span class="material-symbols-outlined">
+                      {hiddenSet.has(name) ? "visibility_off" : "visibility"}
+                    </span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          </aside>
         {/if}
       </div>
 
@@ -528,6 +734,161 @@
     flex-shrink: 0;
   }
 
+  /* ── 본문 + 우측 레전드 패널 가로 배치 ── */
+  .lightbox-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+  }
+
+  /* ── 레전드 편집 패널 (모달 우측) ── */
+  .legend-panel {
+    width: 240px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--bg-elevated);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .legend-panel-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+    padding: 8px 12px 6px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .legend-hint {
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    padding: 8px 12px 6px;
+    line-height: 1.4;
+  }
+
+  .legend-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 6px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: grab;
+  }
+
+  .legend-row:hover {
+    background: var(--bg-hover);
+  }
+
+  .legend-row.dragging {
+    opacity: 0.5;
+    border-color: var(--accent);
+  }
+
+  .drag-handle {
+    display: inline-flex;
+    align-items: center;
+    color: var(--fg-muted);
+    cursor: grab;
+  }
+
+  .drag-handle .material-symbols-outlined {
+    font-size: 16px;
+  }
+
+  .legend-check {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .legend-check input {
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .color-swatch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .swatch-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: inline-block;
+  }
+
+  /* 네이티브 color input 은 스와치 점 뒤에 겹쳐 클릭 영역만 제공 (투명) */
+  .color-swatch input[type="color"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .legend-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .legend-name.hidden-name {
+    color: var(--fg-muted);
+    text-decoration: line-through;
+  }
+
+  .eye-btn {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .eye-btn:hover:not(:disabled) {
+    background: var(--bg);
+    color: var(--fg);
+  }
+
+  .eye-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .eye-btn .material-symbols-outlined {
+    font-size: 16px;
+  }
+
   /* 기존 icon-btn 재사용 (헤더의 닫기 버튼과 동일 토큰) */
   .icon-btn {
     width: 26px;
@@ -560,6 +921,7 @@
     position: relative;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
     align-items: center;
     justify-content: center;

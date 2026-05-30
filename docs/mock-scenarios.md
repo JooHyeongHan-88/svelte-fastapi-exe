@@ -35,7 +35,7 @@ EXE 모드: 설정 UI 에서 Provider 드롭다운을 `mock` 으로 변경.
 | **A** | (그 외 모든 입력) | — | DeltaEvent, MessageBubble markdown |
 | **B** | `추천해줘`, `골라줘`, `help me decide` | — (오케스트레이터 직접) | `ReasoningBlock`, `AskUserCard(input_type=both)` |
 | **C** | `지금 시간`, `현재 시각`, `몇 시야`, `what time` | 직접 실행 (소속 에이전트 없는 standalone SKILL) | `SkillBadge`, `ArtifactMarkdown` |
-| **D** | `데이터 요약`, `요약 통계`, `summary stats` | Case 3 (data_summary → analyst_agent) | `AgentTrail`, `AgentProgress`, sub 내 `TodoProgress(3)`, sub 내 `ReasoningBlock`, `ArtifactChart`(차트 4개 그리드), `SkillCompleteBadge` |
+| **D** | `데이터 요약`, `요약 통계`, `summary stats` | Case 3 (data_summary → analyst_agent) | `AgentTrail`, `AgentProgress`, sub 내 `TodoProgress(3)`, sub 내 `ReasoningBlock`, `ArtifactChart`(차트 6개 그리드 — 그룹 scatter/ecdf 로 레전드 컨트롤), `SkillCompleteBadge` |
 | **E** | `전체 분석 보고서`, `종합 보고서` | Case 3 × 2단 체이닝 | 오케스트레이터 `TodoProgress(2)`, `AgentTrail` 칩 2개, sub 내 위젯들, `ArtifactChart`(차트 7개 페이지네이션) + `ArtifactMarkdown` + `ArtifactImage`(이미지 10장 갤러리) |
 
 ---
@@ -76,7 +76,7 @@ analyst_agent (sub-agent context)
   턴 3  → ToolCallEvent(call_function, scripts.stats.compute_summary_stats,
                         kwargs={data: $samples}, store_as=stats) → complete_todo(2)
   턴 4  → ToolCallEvent(eval_expression, "stats['mean']", store_as=avg)
-          ToolCallEvent(display_chart, charts=[bar/line/scatter/box 4개])
+          ToolCallEvent(display_chart, charts=[bar/line/scatter/box + 그룹 scatter/ecdf 6개])
           complete_todo(3)
   턴 5  → ToolCallEvent(complete_subagent, summary="...")
 
@@ -88,8 +88,10 @@ analyst_agent (sub-agent context)
 namespace 에 저장된다. Mock 은 그 값을 모르므로 차트 series 에는 데모용 더미 값을
 넣는다 (실제 LLM 은 tool_result 에서 값을 보고 series 를 구성).
 
-D 시나리오는 한 번의 `display_chart` 호출에 4개 차트를 list 로 전달해 패널의 반응형
-그리드 렌더링 — 즉 패널 너비에 따라 1열·2열·3열 자동 재배치 — 을 검증한다.
+D 시나리오는 한 번의 `display_chart` 호출에 6개 차트를 list 로 전달해 패널의 반응형
+그리드 렌더링 — 즉 패널 너비에 따라 1열·2열·3열 자동 재배치 — 을 검증한다. 마지막
+2개(그룹 scatter·ecdf)는 `color` 채널(group=A/B/C)을 써 라이트박스 레전드 컨트롤
+(순서·색상·Hide·Filter)을 시연한다.
 
 ### E. composite — analyst → writer 체이닝
 

@@ -171,3 +171,49 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
 | `SKILLS/` body | 매칭된 스킬 첫 호출 시 lazy | dev: mtime 재검사 / frozen: 1회 |
 | `AGENTS/` Front Matter | 부팅 시 `load()` 1회 | 메모리 캐시 고정 |
 | `AGENTS/` body | `call_sub_agent` 위임 시점에 lazy | dev: mtime 재검사 / frozen: 1회 |
+
+---
+
+## 차트 인터랙션 파이프라인
+
+`display_chart` 호출 이후의 인터랙티브 필터링·레전드 편집은 별도 파이프라인으로 처리된다.
+
+### 산출물 파일 구조 (spec 폴더 기준)
+
+```
+result/<session>/<ts>/
+  charts.spec.json    ChartSpecV1 선언 (mark·encoding·data.source)
+  *.parquet           실제 데이터
+  charts.json         render_spec_to_echarts() 결과 — 프론트가 fetch
+  charts.filter.json  ViewState 사이드카 — exclude·legend 통합 undo/redo 스택 (v2)
+```
+
+### ViewState 스택 (`backend/agent/runtime/chart_filter_store.py`)
+
+v2 스키마로 **필터(exclude)와 레전드 오버라이드(legend)를 단일 undo/redo 스택**에 통합. cursor가 가리키는 `ViewSnapshot`이 현재 상태.
+
+| 전이 함수 | 효과 |
+|---|---|
+| `apply_exclude(state, chart_index, row_ids, scope, chart_sources)` | brush/레전드 Filter → 행 제외 push (legend carry) |
+| `apply_legend(state, chart_index, *, order, colors, hidden, scope, ...)` | 순서·색상·Hide → legend 갱신 push (exclude carry) |
+| `reset(state)` | 빈 스냅샷 push (undo 로 복구 가능) |
+| `undo(state)` / `redo(state)` | cursor 이동만 — 양쪽 동작 무관하게 되감음 |
+
+### `/api/chart/filter` 엔드포인트 (`backend/api/chart.py`)
+
+| action | 동작 |
+|---|---|
+| `exclude` | brush 선택 행 제외 |
+| `exclude_legend` | 레전드 이름 → `color.field` 값으로 행 역추적 → 기존 exclude funnel |
+| `set_legend` | order·colors·hidden 오버라이드 저장 (재집계 없음) |
+| `undo` / `redo` / `reset` | ViewState cursor 조작 |
+
+응답: `{ items, can_undo, can_redo }` — `items`로 `charts.json`도 덮어씌워 재진입 일관성 보장.
+
+### 렌더러 확장 (`backend/agent/runtime/chart_renderer.py`)
+
+`render_spec_to_echarts(spec, base_dir, exclude_by_chart=None, legend_by_chart=None)`
+
+- `legend_by_chart`: 차트 인덱스 → `{"order":[name], "colors":{name:hex}, "hidden":[name]}`
+- `_apply_legend_config`: order(line+overlay 트윈 그룹 인접 유지)·colors(itemStyle+lineStyle)·hidden(`legend.selected`) 적용
+- `resolve_legend_row_ids(chart, base_dir, legend_values)`: color.field 컬럼 기반 행 역추적 (레전드 Filter → exclude 환원)

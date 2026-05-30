@@ -58,7 +58,7 @@
   - `quantitative` → 수치축(value)
   - `nominal` → 범주축(category)
   - `temporal` → 시간축(time)
-- `color` 채널 → 시리즈 분할(그룹별 다중 곡선/막대).
+- `color` 채널 → 시리즈 분할(그룹별 다중 곡선/막대). **라이트박스 Legend 버튼도 이 채널이 있어야 활성화된다** — 항목 2개 이상 필요.
 - `aggregate` (`count`/`mean`/`sum`/`min`/`max`) → groupby 집계.
 - `extra_option` → 기본 ECharts option 에 깊은 병합. dict 는 재귀 병합, **list 는 통째 교체**.
 
@@ -129,6 +129,23 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 
 이 모든 동작은 자동이다. SKILL/AGENT 작성자는 **mark 와 encoding 만 올바르게 적으면** 되고, overlay·필터 로직을 위해 추가로 설정할 것은 없다.
 
+### 4-3. 레전드 컨트롤 — 순서·색상·Hide·Filter (color 채널 차트)
+
+`encoding.color`(seaborn 의 hue)를 준 차트는 그룹별 시리즈가 생기고, 라이트박스 툴바의 **Legend** 버튼으로 레전드를 편집할 수 있다. 레전드 항목이 2개 이상일 때만 활성화된다(단일 시리즈·히트맵·집계 box 는 비대상).
+
+| 동작 | 효과 | 데이터 |
+|---|---|---|
+| **순서 변경** | 항목을 드래그해 시리즈/레전드 표시 순서 재배치 | 시각적 |
+| **색상 변경** | 색상 스와치 클릭 → 해당 그룹 색 오버라이드 | 시각적 |
+| **Hide(눈)** | 시리즈를 숨김/표시 토글 (`legend.selected`) | 시각적, **재집계 없음** |
+| **Filter** | 항목 체크 후 위의 **Filter / Filter All** 버튼으로 그 그룹의 원본 행을 제외 | **데이터 제거 → 재집계** |
+
+- **Hide vs Filter** 구분: Hide 는 곡선만 가렸다 다시 보일 수 있는 시각 토글이고, Filter 는 그 그룹의 행을 실제로 빼서 box·histogram 등 같은 parquet 의 다른 차트까지(Filter All) 통계가 재계산된다.
+- 순서·색상·Hide·Filter 모두 brush 필터와 **하나의 Undo/Redo/Reset 스택**을 공유한다 — Undo 한 번이 종류와 무관하게 마지막 동작을 되감는다.
+- 모든 상태는 `charts.json`+`charts.filter.json` 에 영속되어 새로고침·세션 재진입 후에도 복원된다.
+
+> 작성자는 `color` 채널만 올바르게 지정하면 된다. 레전드 컨트롤 UI·영속화는 자동이다.
+
 ---
 
 ## 5. SKILL/AGENT 본문 작성 패턴
@@ -186,19 +203,38 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 
 > line·ecdf 차트는 위처럼 평범하게 적으면 brush 필터가 자동으로 활성화된다. 별도 overlay 설정 불필요.
 
-### 예시 — 그룹별 곡선 (color 채널)
+### 예시 — 그룹별 산점도 + 누적분포 (color 채널 → 레전드 컨트롤 활성)
+
+`encoding.color` 를 주면 그룹별 시리즈가 생기고, 라이트박스에서 Legend 버튼으로 순서·색상·Hide·Filter 를 제어할 수 있다.
 
 ```json
 {
-  "mark": "ecdf",
-  "title": "그룹별 누적분포",
-  "data": { "source": "samples.parquet" },
-  "encoding": {
-    "x":     { "field": "value", "type": "quantitative", "title": "값" },
-    "color": { "field": "group", "type": "nominal" }
-  }
+  "version": "1",
+  "charts": [
+    {
+      "mark": "scatter",
+      "title": "그룹별 산점도",
+      "data": { "source": "samples.parquet" },
+      "encoding": {
+        "x":     { "field": "value",         "type": "quantitative", "title": "값" },
+        "y":     { "field": "anomaly_score", "type": "quantitative", "title": "이상치" },
+        "color": { "field": "group",         "type": "nominal",      "title": "그룹" }
+      }
+    },
+    {
+      "mark": "ecdf",
+      "title": "그룹별 누적분포",
+      "data": { "source": "samples.parquet" },
+      "encoding": {
+        "x":     { "field": "value", "type": "quantitative", "title": "값" },
+        "color": { "field": "group", "type": "nominal" }
+      }
+    }
+  ]
 }
 ```
+
+> scatter 는 brush 점 필터 + 레전드 Filter 둘 다 지원. ecdf 는 line+overlay 경로라 동일하게 동작한다.
 
 ---
 
@@ -211,6 +247,9 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 - ❌ heatmap 의 color.type 을 nominal 로 → color 는 `quantitative` 여야 셀 값이 된다.
 - ❌ spec 을 저장하기 전에 parquet 을 안 만듦 → 렌더 시 "parquet 파일을 찾을 수 없다".
 - ✅ bar·box 에서 brush 점 필터가 안 된다고 당황하지 말 것 — **설계상 집계 차트는 점 필터 비대상**(Filter All 의 교차 재집계는 받음).
+- ❌ Legend 버튼이 비활성 → `encoding.color` 채널이 없거나 그룹(시리즈)이 1개 이하. `color.field` 가 있고 데이터에 실제로 2종 이상의 값이 있어야 활성화된다.
+- ❌ heatmap 의 `color` 를 레전드 컨트롤에 쓰려 함 → heatmap 의 color 는 셀 수치값(`quantitative`)이라 시리즈 분할이 아님. 레전드 컨트롤 비대상.
+- ❌ 레전드 Filter 로 숨긴 그룹이 Undo 후에도 유지됨 → Hide(눈 토글)와 Filter(데이터 제외)는 다른 동작. Hide 는 ECharts `legend.selected` 시각 토글, Filter 는 parquet 행 제외 재집계.
 
 ---
 
@@ -219,4 +258,6 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 - [builtin-tools.md](builtin-tools.md) — `display_chart` 를 포함한 전체 내장 도구 인자 레퍼런스
 - [skills.md](skills.md) / [agents.md](agents.md) — SKILL·AGENT Front Matter 와 본문 작성법
 - `backend/agent/runtime/chart_spec.py` — ChartSpecV1 Pydantic 모델(스키마 단일 진실)
-- `backend/agent/runtime/chart_renderer.py` — mark 별 렌더러·brush overlay 구현
+- `backend/agent/runtime/chart_renderer.py` — mark 별 렌더러·brush overlay 구현·legend 적용(`_apply_legend_config`)·레전드→행 역추적(`resolve_legend_row_ids`)
+- `backend/agent/runtime/chart_filter_store.py` — ViewState undo/redo 스택 (exclude·legend 통합 v2 스키마)
+- `backend/api/chart.py` — `/api/chart/filter` 엔드포인트 (exclude·exclude_legend·set_legend·undo·redo·reset)

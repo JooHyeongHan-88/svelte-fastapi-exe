@@ -10,7 +10,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from agent.runtime.chart_renderer import render_spec_to_echarts
+from agent.runtime.chart_renderer import (
+    render_spec_to_echarts,
+    resolve_legend_row_ids,
+)
 from agent.runtime.chart_spec import ChartSpecV1
 
 
@@ -632,3 +635,110 @@ def test_ecdf_requires_quantitative_x(base_dir: Path) -> None:
             },
             base_dir,
         )
+
+
+# ---------------------------------------------------------------------------
+# 레전드 컨트롤 (순서·색상·Hide) + 그룹→행 해석
+# ---------------------------------------------------------------------------
+
+# group A=rows0,1 / B=2,3 / C=4,5 인 grouped.parquet 의 ecdf — A/B/C 시리즈 + overlay.
+_GROUPED_ECDF = {
+    "version": "1",
+    "charts": [
+        {
+            "mark": "ecdf",
+            "data": {"source": "grouped.parquet"},
+            "encoding": {
+                "x": {"field": "value", "type": "quantitative"},
+                "color": {"field": "group", "type": "nominal"},
+            },
+        }
+    ],
+}
+
+
+def test_legend_order_reorders_series_keeping_overlay_adjacent(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_GROUPED_ECDF)
+    item = render_spec_to_echarts(
+        spec, base_dir, legend_by_chart={0: {"order": ["C", "A", "B"]}}
+    )[0]
+    names = [s["name"] for s in item["option"]["series"]]
+    # line+overlay 트윈이 그룹으로 묶여 인접 유지 + 요청 순서대로 재배치.
+    assert names == ["C", "C", "A", "A", "B", "B"]
+    types = [s["type"] for s in item["option"]["series"]]
+    assert types == ["line", "scatter", "line", "scatter", "line", "scatter"]
+    assert item["option"]["legend"]["data"] == ["C", "A", "B"]
+
+
+def test_legend_colors_inject_into_line_and_itemstyle(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_GROUPED_ECDF)
+    item = render_spec_to_echarts(
+        spec, base_dir, legend_by_chart={0: {"colors": {"A": "#ff0000"}}}
+    )[0]
+    a_line = next(
+        s for s in item["option"]["series"] if s["name"] == "A" and s["type"] == "line"
+    )
+    assert a_line["itemStyle"]["color"] == "#ff0000"
+    assert a_line["lineStyle"]["color"] == "#ff0000"
+
+
+def test_legend_hidden_sets_legend_selected(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_GROUPED_ECDF)
+    item = render_spec_to_echarts(
+        spec, base_dir, legend_by_chart={0: {"hidden": ["B"]}}
+    )[0]
+    selected = item["option"]["legend"]["selected"]
+    assert selected["A"] is True
+    assert selected["B"] is False
+    assert selected["C"] is True
+
+
+def test_legend_config_noop_on_chart_without_legend(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "heatmap",
+                    "data": {"source": "heat.parquet"},
+                    "encoding": {
+                        "x": {"field": "row", "type": "nominal"},
+                        "y": {"field": "col", "type": "nominal"},
+                        "color": {"field": "value", "type": "quantitative"},
+                    },
+                }
+            ],
+        }
+    )
+    # heatmap 은 legend 키가 없다 — 레전드 오버라이드가 와도 crash 없이 무시.
+    item = render_spec_to_echarts(
+        spec, base_dir, legend_by_chart={0: {"order": ["x"], "colors": {"x": "#000"}}}
+    )[0]
+    assert "legend" not in item["option"]
+    assert item["option"]["series"][0]["type"] == "heatmap"
+
+
+def test_resolve_legend_row_ids_returns_group_rows(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(_GROUPED_ECDF)
+    chart = spec.charts[0]
+    assert sorted(resolve_legend_row_ids(chart, base_dir, ["A"])) == [0, 1]
+    assert sorted(resolve_legend_row_ids(chart, base_dir, ["B", "C"])) == [2, 3, 4, 5]
+
+
+def test_resolve_legend_row_ids_empty_without_color(base_dir: Path) -> None:
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "line",
+                    "data": {"source": "samples.parquet"},
+                    "encoding": {
+                        "x": {"field": "idx", "type": "quantitative"},
+                        "y": {"field": "value", "type": "quantitative"},
+                    },
+                }
+            ],
+        }
+    )
+    assert resolve_legend_row_ids(spec.charts[0], base_dir, ["anything"]) == []

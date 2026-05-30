@@ -69,6 +69,7 @@ def render_spec_to_echarts(
     spec: ChartSpecV1,
     base_dir: Path,
     exclude_by_chart: dict[Any, list[int]] | None = None,
+    legend_by_chart: dict[Any, dict] | None = None,
 ) -> list[dict[str, Any]]:
     """spec 의 각 차트를 ECharts option dict 로 변환해 리스트로 반환한다.
 
@@ -77,6 +78,9 @@ def render_spec_to_echarts(
         base_dir: parquet 파일을 찾을 디렉터리 (spec 파일이 위치한 폴더).
         exclude_by_chart: 차트 인덱스(int 또는 str) → 제외할 원본 행 인덱스 리스트.
             인터랙티브 brush 필터링 상태. None 이면 무필터 (최초 렌더와 동일).
+        legend_by_chart: 차트 인덱스(int 또는 str) → 레전드 오버라이드
+            ``{"order": [name], "colors": {name: hex}, "hidden": [name]}``.
+            None 이면 레전드 기본값 (최초 렌더와 동일).
 
     Returns:
         ``[{chart_type, title, option, source, row_ids}, ...]`` — 프론트엔드가
@@ -106,6 +110,10 @@ def render_spec_to_echarts(
         if chart.extra_option:
             option = _deep_merge(option, chart.extra_option)
 
+        legend_cfg = _legend_for_chart(legend_by_chart, idx)
+        if legend_cfg:
+            option = _apply_legend_config(option, legend_cfg)
+
         rendered.append(
             {
                 "chart_type": chart.mark,
@@ -133,6 +141,49 @@ def _excluded_for_chart(
     if not raw:
         return None
     return [int(v) for v in raw]
+
+
+def _legend_for_chart(legend_by_chart: dict[Any, dict] | None, idx: int) -> dict | None:
+    """차트 인덱스의 레전드 오버라이드를 반환한다 (없으면 None).
+
+    JSON 라운드트립으로 키가 str 로 바뀔 수 있어 int/str 양쪽을 조회한다.
+    """
+    if not legend_by_chart:
+        return None
+    cfg = legend_by_chart.get(idx)
+    if cfg is None:
+        cfg = legend_by_chart.get(str(idx))
+    if not cfg:
+        return None
+    return cfg
+
+
+def resolve_legend_row_ids(
+    chart: ChartV1, base_dir: Path, legend_values: list[str]
+) -> list[int]:
+    """레전드 이름(들)에 해당하는 원본 parquet 행 인덱스를 반환한다.
+
+    "레전드 Filter" 를 기존 행-기반 exclude 로 환원하는 다리 — color 채널의 컬럼
+    값이 ``legend_values`` 에 속하는 모든 행의 ``__row_id__`` 를 모은다. 시리즈
+    name 은 ``str(group_value)`` 라, 비교도 컬럼을 문자열로 캐스팅해 맞춘다.
+
+    Args:
+        chart: 레전드 그룹을 가진 차트 정의 (color 채널 필요).
+        base_dir: parquet 파일이 위치한 폴더.
+        legend_values: 제외 대상 레전드 이름 리스트 (시리즈 name).
+
+    Returns:
+        매칭된 원본 행 인덱스 리스트. color 채널이 없거나 컬럼 부재 시 ``[]``.
+    """
+    if chart.encoding.color is None or not legend_values:
+        return []
+    field_name = chart.encoding.color.field
+    df = _load_data_frame(chart.data.source, base_dir).with_row_index(_ROW_ID_COL)
+    if field_name not in df.columns:
+        return []
+    targets = [str(v) for v in legend_values]
+    matched = df.filter(pl.col(field_name).cast(pl.Utf8, strict=False).is_in(targets))
+    return [int(v) for v in matched[_ROW_ID_COL].to_list()]
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +805,79 @@ def _to_jsonable(value: Any) -> Any:
         return value.item()  # numpy / polars 스칼라
     except AttributeError:
         return str(value)  # datetime 등은 ISO 문자열
+
+
+def _apply_legend_config(option: dict[str, Any], legend_cfg: dict) -> dict[str, Any]:
+    """렌더된 option 에 레전드 오버라이드(순서·색상·Hide)를 적용한 새 dict 반환.
+
+    - colors: 해당 name 의 모든 시리즈에 ``itemStyle.color`` 주입(line 은 lineStyle 도).
+      overlay(opacity 0)에 색이 들어가도 무해하다.
+    - order: 시리즈를 name 그룹 단위로 재정렬해 line+overlay 트윈의 인접을 보존한다.
+    - hidden: ``legend.selected`` 에 ``{name: bool}`` 로 표시/숨김을 절대값으로 반영.
+
+    legend/series 키가 없으면(heatmap 등) 안전하게 no-op.
+    """
+    series = option.get("series")
+    if not isinstance(series, list) or not series:
+        return option
+
+    option = copy.deepcopy(option)
+    series = option["series"]
+
+    colors = legend_cfg.get("colors")
+    if colors:
+        for s in series:
+            name = s.get("name")
+            if name in colors:
+                hex_color = colors[name]
+                s.setdefault("itemStyle", {})["color"] = hex_color
+                if s.get("type") == "line":
+                    s.setdefault("lineStyle", {})["color"] = hex_color
+
+    order = legend_cfg.get("order")
+    if order:
+        series = _reorder_series_by_name(series, order)
+        option["series"] = series
+
+    legend = option.get("legend")
+    if isinstance(legend, dict):
+        names = list(
+            dict.fromkeys(s.get("name") for s in series if s.get("name") is not None)
+        )
+        legend["data"] = names
+        hidden = legend_cfg.get("hidden")
+        if hidden:
+            hidden_set = set(hidden)
+            legend["selected"] = {name: name not in hidden_set for name in names}
+
+    return option
+
+
+def _reorder_series_by_name(
+    series: list[dict[str, Any]], order: list[str]
+) -> list[dict[str, Any]]:
+    """시리즈를 name 그룹 단위로 재정렬한다 (그룹 내부 순서·미지정 name 은 보존).
+
+    같은 name 을 공유하는 line+overlay 트윈이 그룹으로 묶여 인접을 유지한다.
+    order 에 없는 name 은 원래 순서대로 뒤에 붙인다.
+    """
+    by_name: dict[Any, list[dict[str, Any]]] = {}
+    original_order: list[Any] = []
+    for s in series:
+        name = s.get("name")
+        if name not in by_name:
+            by_name[name] = []
+            original_order.append(name)
+        by_name[name].append(s)
+
+    result: list[dict[str, Any]] = []
+    for name in order:
+        if name in by_name:
+            result.extend(by_name.pop(name))
+    for name in original_order:
+        if name in by_name:
+            result.extend(by_name.pop(name))
+    return result
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
 
 from agent.runtime import chart_filter_store as filter_store
-from agent.runtime.chart_renderer import render_spec_to_echarts
+from agent.runtime.chart_renderer import render_spec_to_echarts, resolve_legend_row_ids
 from agent.runtime.chart_spec import ChartSpecV1
 from agent.tools.visualize import resolve_spec_path
 from api.deps import require_local_origin
@@ -35,16 +35,36 @@ _write_lock = threading.Lock()
 
 
 class ChartFilterRequest(BaseModel):
-    """필터 액션 요청. exclude 외 액션은 source/scope/chart_index/row_ids 무시."""
+    """뷰 상태 액션 요청 (필터 + 레전드 통합).
+
+    action 별로 사용하는 필드가 다르다:
+        exclude        → scope / chart_index / row_ids
+        exclude_legend → scope / chart_index / legend_values
+        set_legend     → scope / chart_index / order / colors / hidden
+        undo/redo/reset → 없음
+    """
 
     spec: Annotated[str, "save_artifact 가 반환한 charts.spec.json 경로 (result/...)"]
-    action: Annotated[Literal["exclude", "undo", "redo", "reset"], "수행할 필터 액션"]
+    action: Annotated[
+        Literal["exclude", "exclude_legend", "set_legend", "undo", "redo", "reset"],
+        "수행할 뷰 상태 액션",
+    ]
     scope: Annotated[
-        Literal["single", "all"], "exclude 범위 — 단일 차트 / 동일 데이터 전체"
+        Literal["single", "all"], "적용 범위 — 단일 차트 / 동일 데이터 전체"
     ] = "single"
-    chart_index: Annotated[int, "brush 가 일어난 차트 인덱스 (exclude 시)"] = 0
+    chart_index: Annotated[int, "동작이 일어난 차트 인덱스"] = 0
     row_ids: Annotated[list[int], "제외할 원본 parquet 행 인덱스 (exclude 시)"] = Field(
         default_factory=list
+    )
+    legend_values: Annotated[
+        list[str], "제외할 레전드 이름 리스트 (exclude_legend 시)"
+    ] = Field(default_factory=list)
+    order: Annotated[list[str] | None, "레전드 표시 순서 (set_legend 시)"] = None
+    colors: Annotated[
+        dict[str, str] | None, "레전드 색상 오버라이드 {name: hex} (set_legend 시)"
+    ] = None
+    hidden: Annotated[list[str] | None, "숨길 레전드 이름 리스트 (set_legend 시)"] = (
+        None
     )
 
 
@@ -57,12 +77,15 @@ async def chart_filter(req: ChartFilterRequest) -> dict[str, Any]:
 
     with _write_lock:
         state = filter_store.load(base_dir)
-        state = _apply_action(state, req, chart_sources)
+        state = _apply_action(state, req, spec, base_dir, chart_sources)
         filter_store.save(base_dir, state)
 
         try:
             items = render_spec_to_echarts(
-                spec, base_dir, exclude_by_chart=state.current()
+                spec,
+                base_dir,
+                exclude_by_chart=state.current_exclude(),
+                legend_by_chart=state.current_legend(),
             )
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"렌더 실패: {exc}") from exc
@@ -111,14 +134,38 @@ def _load_spec(source: str) -> tuple[Path, ChartSpecV1]:
 def _apply_action(
     state: filter_store.FilterState,
     req: ChartFilterRequest,
+    spec: ChartSpecV1,
+    base_dir: Path,
     chart_sources: list[str],
 ) -> filter_store.FilterState:
-    """action 분기. exclude 에 선택 행이 없으면 no-op."""
+    """action 분기. 선택/변경이 비어 있으면 no-op."""
     if req.action == "exclude":
         if not req.row_ids:
             return state
         return filter_store.apply_exclude(
             state, req.chart_index, req.row_ids, req.scope, chart_sources
+        )
+    if req.action == "exclude_legend":
+        if not req.legend_values or not (0 <= req.chart_index < len(spec.charts)):
+            return state
+        # 레전드 이름 → 원본 행 인덱스로 환원해 기존 exclude 메커니즘으로 funnel.
+        row_ids = resolve_legend_row_ids(
+            spec.charts[req.chart_index], base_dir, req.legend_values
+        )
+        if not row_ids:
+            return state
+        return filter_store.apply_exclude(
+            state, req.chart_index, row_ids, req.scope, chart_sources
+        )
+    if req.action == "set_legend":
+        return filter_store.apply_legend(
+            state,
+            req.chart_index,
+            order=req.order,
+            colors=req.colors,
+            hidden=req.hidden,
+            scope=req.scope,
+            chart_sources=chart_sources,
         )
     if req.action == "undo":
         return filter_store.undo(state)
