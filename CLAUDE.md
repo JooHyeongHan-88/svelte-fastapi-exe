@@ -42,6 +42,8 @@ uv run python -m pytest backend/tests/test_artifact_manifest.py -v     # 세션 
 uv run python -m pytest backend/tests/test_harness_timeout.py -v       # _execute_tool (async)
 uv run python -m pytest backend/tests/test_harness_subagent.py -v      # 서브에이전트 격리
 uv run python -m pytest backend/tests/test_harness_parallel.py -v      # 서브에이전트 병렬 디스패치
+uv run python -m pytest backend/tests/test_harness_error_path.py -v    # run_turn 예외 경로 영속·DoneEvent
+uv run python -m pytest backend/tests/test_chat_concurrent_guard.py -v # 같은 client_id 동시 턴 거부
 uv run python -m pytest backend/tests/test_chart_renderer.py -v        # 차트 렌더러 (legend 적용 포함)
 uv run python -m pytest backend/tests/test_chart_filter_store.py -v    # 차트 뷰 상태 undo/redo 스택
 uv run python -m pytest backend/tests/test_chart_api.py -v             # /api/chart/filter 통합 (HTTP 경계)

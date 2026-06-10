@@ -233,7 +233,7 @@ result/<session>/<ts>/
   charts.filter.json  ViewState 사이드카 — exclude·legend 통합 undo/redo 스택 (v2)
 ```
 
-### ViewState 스택 (`backend/agent/runtime/chart_filter_store.py`)
+### ViewState 스택 (`backend/agent/charts/chart_filter_store.py`)
 
 v2 스키마로 **필터(exclude)와 레전드 오버라이드(legend)를 단일 undo/redo 스택**에 통합. cursor가 가리키는 `ViewSnapshot`이 현재 상태.
 
@@ -255,7 +255,7 @@ v2 스키마로 **필터(exclude)와 레전드 오버라이드(legend)를 단일
 
 응답: `{ items, can_undo, can_redo }` — `items`로 `charts.json`도 덮어씌워 재진입 일관성 보장.
 
-### 렌더러 확장 (`backend/agent/runtime/chart_renderer.py`)
+### 렌더러 확장 (`backend/agent/charts/chart_renderer.py`)
 
 `render_spec_to_echarts(spec, base_dir, exclude_by_chart=None, legend_by_chart=None)`
 

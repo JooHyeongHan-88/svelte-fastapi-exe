@@ -543,8 +543,19 @@ async def exec_code(
 
     # 스레드에서 새 슬롯을 만들었으면 메인 턴 캐시에 역동기화 — 같은 턴의 후속
     # save_artifact 가 동일 폴더를 공유하게 한다.
-    if artifact_dir_provider.created is not None and peek_turn_slot() is None:
-        adopt_turn_slot(artifact_dir_provider.created)
+    if artifact_dir_provider.created is not None:
+        current_slot = peek_turn_slot()
+        if current_slot is None:
+            adopt_turn_slot(artifact_dir_provider.created)
+        elif current_slot != artifact_dir_provider.created:
+            # 병렬 서브에이전트가 각자 슬롯을 만들면 한쪽 adopt 가 스킵돼 같은 턴
+            # 산출물이 폴더 2곳에 분산된다. manifest 경로는 정확하므로 기능 고장은
+            # 아니지만, 진단을 위해 흔적을 남긴다.
+            logger.warning(
+                "turn_slot 분산 감지: 캐시=%s, exec_code 생성=%s",
+                current_slot,
+                artifact_dir_provider.created,
+            )
 
     # 신규 또는 reference 가 바뀐 변수만 namespace 에 저장.
     # 모듈/함수/클래스는 직렬화 비용 대비 가치가 낮아 제외.

@@ -197,6 +197,9 @@ async def run_turn(
     state = state_store.get(client_id)
     user_msg = Message(role="user", content=user_message)
     turn_messages: list[Message] = [user_msg]
+    # 성공 경로의 append 이후 예외 시 except 가 재-append 해 턴이 중복 영속되는 것을
+    # 막는 플래그 (append 성공 ↔ state flush 실패 사이의 좁은 창).
+    turn_persisted = False
 
     try:
         if force_skills:
@@ -315,14 +318,32 @@ async def run_turn(
             state.pending_sub_task = None
 
         store.append(client_id, *turn_messages)
+        turn_persisted = True
         state_store.set(client_id, state)
         yield DoneEvent()
 
     except Exception as exc:  # noqa: BLE001 — 사용자에게 에러 이벤트로 변환해 전달
         logger.exception("harness run_turn failed")
+        # 실패한 턴도 영속한다 — 사용자 메시지까지 증발하면 다음 턴 LLM 컨텍스트가
+        # 끊긴다. 미해결 tool_call 쌍은 영속 전에 보정(OpenAI 400 방지)하고,
+        # mid-mutation pending 은 F11 과 동일하게 클리어한다. 영속 실패가 에러
+        # 알림(ErrorEvent/DoneEvent)을 막으면 안 되므로 best-effort 로 감싼다.
+        try:
+            state.pending_tool = None
+            state.pending_args = {}
+            state.missing_slots = {}
+            state.pending_sub_agent = None
+            state.pending_sub_task = None
+            if not turn_persisted:
+                _balance_all_unresolved(turn_messages)
+                store.append(client_id, *turn_messages)
+            state_store.set(client_id, state)
+        except Exception:  # noqa: BLE001 — 영속은 best-effort, 이중 실패는 로그만
+            logger.exception("run_turn 실패 턴 영속 중 추가 오류 (best-effort 포기)")
         # F12: str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 타입만 전달.
         safe = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
         yield ErrorEvent(message=safe)
+        yield DoneEvent()
 
 
 # ---------------------------------------------------------------------------
@@ -1776,6 +1797,50 @@ def _balance_unresolved_tool_calls(
         messages.append(tool_msg)
         if turn_messages is not None:
             turn_messages.append(tool_msg)
+
+
+_ERROR_TOOL_PLACEHOLDER = (
+    "[중단됨] 턴이 오류로 종료되어 이 도구 호출은 완료되지 않았습니다."
+)
+
+
+def _balance_all_unresolved(turn_messages: list[Message]) -> None:
+    """버퍼 전체를 스캔해 모든 미해결 tool_call 에 placeholder 응답을 채운다.
+
+    run_turn 최상위 예외 경로 전용. `_balance_unresolved_tool_calls` 와 달리 예외
+    시점의 in-flight assistant_msg 를 특정할 수 없으므로 전수 검사한다. placeholder
+    는 끝에 append 하지 않고 해당 assistant 의 tool 응답 블록 바로 뒤에 삽입한다 —
+    OpenAI 와이어 규약상 tool 메시지는 자신의 assistant 메시지에 인접해야 한다.
+
+    Args:
+        turn_messages: 영속화 직전의 턴 버퍼 (in-place 보정).
+    """
+    i = 0
+    while i < len(turn_messages):
+        msg = turn_messages[i]
+        if msg.role != "assistant" or not msg.tool_calls:
+            i += 1
+            continue
+        # 이 assistant 에 인접한 tool 응답 블록의 끝(j)과 해결된 id 집합을 수집.
+        j = i + 1
+        resolved: set[str] = set()
+        while j < len(turn_messages) and turn_messages[j].role == "tool":
+            if turn_messages[j].tool_call_id:
+                resolved.add(turn_messages[j].tool_call_id)
+            j += 1
+        for tc in msg.tool_calls:
+            if tc.id in resolved:
+                continue
+            turn_messages.insert(
+                j,
+                Message(
+                    role="tool",
+                    content=_ERROR_TOOL_PLACEHOLDER,
+                    tool_call_id=tc.id,
+                ),
+            )
+            j += 1
+        i = j
 
 
 def _record_invalid_call(call: ToolCall, history_calls: set[tuple[str, str]]) -> bool:

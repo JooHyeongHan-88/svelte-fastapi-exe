@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from agent.runtime import chart_filter_store as fs
+from agent.charts import chart_filter_store as fs
 
 
 # ---------------------------------------------------------------------------

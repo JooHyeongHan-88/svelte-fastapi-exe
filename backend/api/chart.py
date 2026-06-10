@@ -19,9 +19,9 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
 
-from agent.runtime import chart_filter_store as filter_store
-from agent.runtime.chart_renderer import render_spec_to_echarts, resolve_legend_row_ids
-from agent.runtime.chart_spec import ChartSpecV1
+from agent.charts import chart_filter_store as filter_store
+from agent.charts.chart_renderer import render_spec_to_echarts, resolve_legend_row_ids
+from agent.charts.chart_spec import ChartSpecV1
 from agent.tools.visualize import resolve_spec_path
 from api.deps import require_local_origin
 

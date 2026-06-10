@@ -10,11 +10,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from agent.runtime.chart_renderer import (
+from agent.charts.chart_renderer import (
     render_spec_to_echarts,
     resolve_legend_row_ids,
 )
-from agent.runtime.chart_spec import ChartSpecV1
+from agent.charts.chart_spec import ChartSpecV1
 
 
 @pytest.fixture

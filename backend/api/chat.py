@@ -8,7 +8,13 @@ from fastapi.responses import StreamingResponse
 
 from agent import harness
 from agent.config import MAX_AGENT_CALLS_PER_TURN, MAX_AGENT_ITERATIONS
-from agent.models import ChatRequest, ConversationResponse, RestoreRequest
+from agent.models import (
+    ChatRequest,
+    ConversationResponse,
+    DoneEvent,
+    ErrorEvent,
+    RestoreRequest,
+)
 from agent.providers.factory import get_provider
 from agent.registries.agents import registry as agent_registry
 from agent.registries.prompts import registry as prompt_registry
@@ -19,6 +25,17 @@ from api.deps import _settings_store, _state_store, _store, require_local_origin
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_local_origin)])
+
+# 동시 턴 가드 — 같은 client_id 로 턴이 진행 중이면 두 번째 요청을 즉시 거부한다.
+# 탭 복제(같은 세션 공유)에서 양쪽이 전송하면 두 run_turn 이 병주해 히스토리 교차
+# 저장·state Last-Write-Wins 오염이 발생한다. 프론트 ui.streaming 가드는 탭 단위라
+# 백엔드에서 한 번 더 막는다. uvicorn 단일 event loop 에서 check-and-add 사이에
+# await 가 없으므로 set 만으로 원자적이다.
+_active_turn_clients: set[str] = set()
+
+_BUSY_TURN_MESSAGE = (
+    "이미 응답을 생성 중입니다. 진행 중인 응답이 끝난 뒤 다시 시도하세요."
+)
 
 
 @router.post("/chat")
@@ -34,6 +51,12 @@ async def chat(
     """
 
     async def event_source():
+        if client_id in _active_turn_clients:
+            logger.warning("동시 턴 거부: client_id=%s 턴 진행 중", client_id)
+            yield f"data: {ErrorEvent(message=_BUSY_TURN_MESSAGE).model_dump_json()}\n\n"
+            yield f"data: {DoneEvent().model_dump_json()}\n\n"
+            return
+        _active_turn_clients.add(client_id)
         try:
             settings = _settings_store.get()
             provider = get_provider(settings)
@@ -64,11 +87,12 @@ async def chat(
             raise  # Starlette/uvicorn 이 연결 정리를 완료할 수 있도록 재전파.
         except Exception as exc:
             logger.exception("chat event_source error for client_id=%s", client_id)
-            from agent.models import ErrorEvent
-
             # str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 type 만 전달.
             safe_msg = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
             yield f"data: {ErrorEvent(message=safe_msg).model_dump_json()}\n\n"
+        finally:
+            # CancelledError 포함 모든 종료 경로에서 가드 해제.
+            _active_turn_clients.discard(client_id)
 
     return StreamingResponse(
         event_source(),

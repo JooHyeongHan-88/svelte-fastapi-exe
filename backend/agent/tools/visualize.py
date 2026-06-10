@@ -23,8 +23,8 @@ from pydantic import BaseModel, ValidationError
 
 from agent.models import ToolResult
 from agent.registries.tools import register_tool
-from agent.runtime.chart_renderer import render_spec_to_echarts
-from agent.runtime.chart_spec import ChartSpecV1
+from agent.charts.chart_renderer import render_spec_to_echarts
+from agent.charts.chart_spec import ChartSpecV1
 from core.config import RESULT_DIR
 
 logger = logging.getLogger(__name__)

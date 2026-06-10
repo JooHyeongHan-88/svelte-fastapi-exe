@@ -260,7 +260,7 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 
 - [builtin-tools.md](builtin-tools.md) — `display_chart` 를 포함한 전체 내장 도구 인자 레퍼런스
 - [skills.md](skills.md) / [agents.md](agents.md) — SKILL·AGENT Front Matter 와 본문 작성법
-- `backend/agent/runtime/chart_spec.py` — ChartSpecV1 Pydantic 모델(스키마 단일 진실)
-- `backend/agent/runtime/chart_renderer.py` — mark 별 렌더러·brush overlay 구현·legend 적용(`_apply_legend_config`)·레전드→행 역추적(`resolve_legend_row_ids`)
-- `backend/agent/runtime/chart_filter_store.py` — ViewState undo/redo 스택 (exclude·legend 통합 v2 스키마)
+- `backend/agent/charts/chart_spec.py` — ChartSpecV1 Pydantic 모델(스키마 단일 진실)
+- `backend/agent/charts/chart_renderer.py` — mark 별 렌더러·brush overlay 구현·legend 적용(`_apply_legend_config`)·레전드→행 역추적(`resolve_legend_row_ids`)
+- `backend/agent/charts/chart_filter_store.py` — ViewState undo/redo 스택 (exclude·legend 통합 v2 스키마)
 - `backend/api/chart.py` — `/api/chart/filter` 엔드포인트 (exclude·exclude_legend·set_legend·undo·redo·reset)

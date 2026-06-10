@@ -103,6 +103,44 @@ max_iterations 도달 시 salvage 응답의 스타일이 **작업 완료 여부*
 
 ---
 
+## 실패 턴 영속 + DoneEvent 보장 (`backend/agent/harness.py`, R1)
+
+`run_turn()` 최상위 `except Exception` 이 ErrorEvent 만 내보내고 끝나면 실패한 턴
+전체(사용자 메시지 포함)가 백엔드 히스토리에서 증발하고 mid-mutation pending 이
+다음 턴을 오염시킨다. except 블록이 best-effort 로 다음을 수행한다:
+
+1. `_balance_all_unresolved(turn_messages)` — 버퍼 **전수 스캔**으로 미해결 tool_call
+   에 placeholder 를 해당 assistant 블록 **바로 뒤에 삽입** (끝 append 는 와이어 규약
+   위반). F1b 의 `_balance_unresolved_tool_calls` 는 in-flight assistant 한 건 전용이라
+   예외 시점에는 쓸 수 없다.
+2. F11 과 동일한 pending 클리어 → `store.append` + `state_store.set`.
+3. ErrorEvent(F12 안전화 유지) 뒤 **DoneEvent 정확히 1회**.
+
+- `turn_persisted` 플래그: 성공 경로의 append 성공 ↔ state flush 실패 사이 좁은 창에서
+  except 가 재-append 해 턴이 중복 영속되는 것을 방지.
+- 영속 자체가 또 실패하면 로그만 남기고 ErrorEvent/DoneEvent 송출은 막지 않는다.
+- ESC/disconnect 의 `CancelledError` 는 `BaseException` 이라 이 경로를 타지 않는다
+  (중단 턴 미영속은 의도된 기존 동작).
+
+테스트: `backend/tests/test_harness_error_path.py`
+
+---
+
+## 동시 턴 가드 (`backend/api/chat.py`, R2)
+
+같은 client_id 로 턴이 진행 중일 때 두 번째 `/api/chat` POST 는 **즉시 거부**된다 —
+run_turn 미진입, `ErrorEvent("이미 응답을 생성 중...") + DoneEvent` 2건으로 스트림 종결.
+
+- 탭 복제(같은 세션 = 같은 client_id 공유)는 presence 가 명시 지원하는 시나리오라,
+  양쪽 동시 전송 시 두 run_turn 이 병주해 히스토리 교차 저장·state Last-Write-Wins
+  오염이 발생할 수 있었다. 프론트 `ui.streaming` 가드는 탭 단위라 막지 못한다.
+- `_active_turn_clients: set[str]` — uvicorn 단일 event loop 에서 check-and-add 사이에
+  await 가 없으므로 set 만으로 원자적. 해제는 `finally` (CancelledError 포함 전 경로).
+
+테스트: `backend/tests/test_chat_concurrent_guard.py`
+
+---
+
 ## 에러 메시지 안전화 (F12)
 
 - `run_turn()` 최상위 `except Exception`: `str(exc)` → `f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."` — API 키·URL 노출 방지.
