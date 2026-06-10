@@ -6,7 +6,11 @@
   import TodoProgress from "./TodoProgress.svelte";
   import SkillCompleteBadge from "./SkillCompleteBadge.svelte";
   import AskUserCard from "./AskUserCard.svelte";
-  import { openArtifact } from "../lib/artifactActions.svelte.js";
+  import {
+    openArtifact,
+    artifactRefPath,
+    insertArtifactReference,
+  } from "../lib/artifactActions.svelte.js";
   import { rewindToMessage } from "../lib/chatActions.svelte.js";
   import { formatAbsoluteTime, formatDuration } from "../lib/format.js";
   import TurnStatus from "./TurnStatus.svelte";
@@ -151,25 +155,40 @@
       {#if message.artifactChips && message.artifactChips.length > 0}
         <div class="artifact-chip-bar">
           {#each message.artifactChips as chip (chip.id)}
-            <button
-              class="artifact-chip"
-              onclick={() => openArtifact(chip.id)}
-              title={chip.label}
-            >
-              {ARTIFACT_ICON[chip.kind] ?? "📄"}
-              <span class="artifact-chip-label">{chip.label}</span>
-              <svg
-                class="artifact-chip-arrow"
-                width="11"
-                height="11"
-                viewBox="0 0 11 11"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
+            <div class="artifact-chip-group">
+              <button
+                class="artifact-chip"
+                onclick={() => openArtifact(chip.id)}
+                title={chip.label}
               >
-                <path d="M2 5.5h7M6 2.5l3 3-3 3" />
-              </svg>
-            </button>
+                {ARTIFACT_ICON[chip.kind] ?? "📄"}
+                <span class="artifact-chip-label">{chip.label}</span>
+                <svg
+                  class="artifact-chip-arrow"
+                  width="11"
+                  height="11"
+                  viewBox="0 0 11 11"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                >
+                  <path d="M2 5.5h7M6 2.5l3 3-3 3" />
+                </svg>
+              </button>
+              {#if artifactRefPath(chip)}
+                <button
+                  class="artifact-chip-ref"
+                  title="이 산출물 경로를 입력창에 삽입"
+                  aria-label="입력창에 참조 삽입"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    insertArtifactReference(chip.id);
+                  }}
+                >
+                  @
+                </button>
+              {/if}
+            </div>
           {/each}
         </div>
       {/if}
@@ -295,6 +314,11 @@
     margin-top: 10px;
   }
 
+  .artifact-chip-group {
+    display: inline-flex;
+    align-items: stretch;
+  }
+
   .artifact-chip {
     display: inline-flex;
     align-items: center;
@@ -314,6 +338,32 @@
 
   .artifact-chip:hover {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  /* 참조 삽입 보조 버튼 — 메인 칩과 붙은 작은 '@' 버튼 */
+  .artifact-chip-group:has(.artifact-chip-ref) .artifact-chip {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .artifact-chip-ref {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-left: none;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    cursor: pointer;
+    transition: background 0.13s;
+  }
+
+  .artifact-chip-ref:hover {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 
   .artifact-chip-label {

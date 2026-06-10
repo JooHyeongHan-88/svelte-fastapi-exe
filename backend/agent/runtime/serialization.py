@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 
 Format = Literal["parquet", "npy", "pickle"]
 
+# Format ↔ 확장자 단일 진실원천. extension_for / format_for_extension 양방향 공유.
+_FORMAT_EXTENSIONS: dict[Format, str] = {
+    "parquet": ".parquet",
+    "npy": ".npy",
+    "pickle": ".pkl",
+}
+_EXTENSION_FORMATS: dict[str, Format] = {
+    ext: fmt for fmt, ext in _FORMAT_EXTENSIONS.items()
+}
+
 
 def estimate_size(obj: Any) -> int:
     """객체 메모리 점유 추정 (bytes). 타입별 정확도 차이 있음.
@@ -72,7 +82,24 @@ def pick_format(obj: Any) -> Format:
 
 
 def extension_for(fmt: Format) -> str:
-    return {"parquet": ".parquet", "npy": ".npy", "pickle": ".pkl"}[fmt]
+    return _FORMAT_EXTENSIONS[fmt]
+
+
+def format_for_extension(filename_or_ext: str) -> Format | None:
+    """파일명/확장자 → Format 역매핑. 미지의 확장자는 None.
+
+    namespace 디스크 파일을 재색인할 때 파일 확장자로부터 직렬화 포맷을 복원한다.
+
+    Args:
+        filename_or_ext: 파일명('df.parquet') 또는 확장자('.parquet').
+
+    Returns:
+        대응 Format, 없으면 None.
+    """
+    ext = filename_or_ext.lower()
+    if not ext.startswith("."):
+        ext = Path(ext).suffix.lower()
+    return _EXTENSION_FORMATS.get(ext)
 
 
 def dump_to_disk(obj: Any, path: Path, fmt: Format) -> None:

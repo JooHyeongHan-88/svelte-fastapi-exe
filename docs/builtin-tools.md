@@ -253,6 +253,43 @@ Markdown 산출물 파일을 아티팩트 패널에 렌더링한다.
 
 ---
 
+## 산출물 재발견·재사용 도구
+
+`save_artifact` 가 쓰기 방향(namespace → 디스크)이라면, 아래 두 도구는 읽기 방향이다 —
+과거 턴/세션에 저장한 산출물을 다시 작업 입력으로 끌어온다. 모든 경로 해석은
+`core.result_store.resolve_result_path` 로 일원화되어 frozen EXE 에서도 CWD 와 무관하게 동작한다.
+
+### `list_artifacts`
+
+현재 세션의 산출물 목록을 최신순으로 조회한다 (세션 rename 으로 폴더가 여러 개여도 cid8 로 전부 병합).
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `kind` | `"all"\|"markdown"\|"json"\|"text"\|"parquet"\|"binary"` | 선택 | `"all"` | 필터링할 산출물 종류 |
+| `limit` | int | 선택 | `20` | 반환 최대 개수 (최신순) |
+
+- parquet 은 pyarrow footer 만 읽어 `rows×cols` 를 요약 (데이터 본문 미로드).
+- 파생물(`charts.json`/`charts.filter.json`)·내부 폴더(`_namespace`)는 제외.
+- 반환 `data={"artifacts":[{path, kind, size, filename, ts, rows?, columns?}]}`.
+
+### `load_artifact`
+
+`result/...` 경로의 파일을 읽어 세션 namespace 변수로 복원한다 (save_artifact 의 역방향).
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `path` | string | **필수** | — | `result/...` 형식 산출물 경로 (list_artifacts/save_artifact 가 반환) |
+| `store_as` | string | 조건부 | `""` | namespace 변수 이름. parquet/바이너리는 필수, json/텍스트는 생략 시 내용만 반환 |
+
+확장자별 동작: `.parquet`→polars DataFrame, `.json`→파싱된 객체, `.md/.txt`→문자열,
+바이너리(`.png/.svg/.pdf/.pptx/.xlsx`)→bytes. 실패 시 "list_artifacts 로 확인" 유도 에러.
+
+**표준 체인**: `list_artifacts` → `load_artifact(path, store_as='df')` → `exec_code`/`call_function` 에서 `df` 참조.
+
+> 단순 재표시(차트·마크다운·이미지)는 load 없이 `display_*` 에 경로를 직접 전달하면 된다.
+
+---
+
 ## 실행 도구
 
 ### `now`
@@ -570,6 +607,8 @@ async def fetch_sales(
 | 도구 | 종류 | 사용 주체 | 핵심 효과 |
 |---|---|---|---|
 | `now` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 시각 반환 |
+| `list_artifacts` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 세션 산출물 목록 조회 (재발견) |
+| `load_artifact` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 산출물 파일을 namespace 로 로드 (역방향 브리지) |
 | `display_image` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 이미지 표시 |
 | `display_chart` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 ECharts 인터랙티브 차트 표시 |
 | `display_markdown` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 Markdown 파일 렌더링 |

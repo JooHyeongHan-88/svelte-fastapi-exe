@@ -9,6 +9,7 @@
 
 from agent.tools import (  # noqa: F401 — 등록 부수효과
     artifact,
+    artifact_io,
     builtin,
     clarify,
     dispatch,

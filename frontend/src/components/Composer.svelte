@@ -115,11 +115,14 @@
   // skill chip 이 붙어 있으면 본문이 없어도 전송 활성화
   let canSend = $derived((value.trim().length > 0 || ui.composerSkills.length > 0) && !ui.streaming);
 
-  // ui.composerSeed 가 외부(rewindToMessage)에서 채워지면 textarea 에 복사 후 즉시 비운다.
+  // ui.composerSeed 가 외부에서 채워지면 textarea 에 반영 후 즉시 비운다.
   // 빈 문자열 → 빈 문자열 변경은 Svelte 가 트리거하지 않으므로 무한 루프 위험 없음.
+  // rewindToMessage 는 빈 composer 에서 발동하므로 append 든 replace 든 결과가 같고,
+  // 아티팩트 참조 삽입(insertArtifactReference)은 기존 입력 뒤에 공백으로 이어 붙인다.
   $effect(() => {
     if (ui.composerSeed) {
-      value = ui.composerSeed;
+      const seed = ui.composerSeed;
+      value = value ? `${value.trimEnd()} ${seed}` : seed;
       ui.composerSeed = "";
       // autoResize / focus 는 DOM 갱신 직후가 안전 — microtask 로 한 프레임 미룬다.
       queueMicrotask(() => {

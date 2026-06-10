@@ -4,6 +4,8 @@
     closeArtifactPanel,
     openArtifact,
     listSessionArtifacts,
+    artifactRefPath,
+    insertArtifactReference,
   } from "../lib/artifactActions.svelte.js";
   import {
     saveArtifactWidth,
@@ -81,18 +83,30 @@
           아티팩트
         {/if}
       </span>
-      <button class="close-btn" onclick={closeArtifactPanel} aria-label="패널 닫기">
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <path d="M3 3l10 10M13 3 3 13" />
-        </svg>
-      </button>
+      <div class="panel-header-actions">
+        {#if activeArtifact && artifactRefPath(activeArtifact)}
+          <button
+            class="ref-btn"
+            onclick={() => insertArtifactReference(activeArtifact.id)}
+            title="이 산출물 경로를 입력창에 삽입"
+            aria-label="입력창에 참조 삽입"
+          >
+            @ 참조
+          </button>
+        {/if}
+        <button class="close-btn" onclick={closeArtifactPanel} aria-label="패널 닫기">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M3 3l10 10M13 3 3 13" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- 아티팩트 탭 목록 (2개 이상일 때만 표시) -->
@@ -201,6 +215,30 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+  }
+
+  .panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .ref-btn {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 3px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+
+  .ref-btn:hover {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 
   .close-btn {

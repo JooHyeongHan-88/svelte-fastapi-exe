@@ -742,3 +742,73 @@ def test_resolve_legend_row_ids_empty_without_color(base_dir: Path) -> None:
         }
     )
     assert resolve_legend_row_ids(spec.charts[0], base_dir, ["anything"]) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — data.source 의 'result/...' 전체 경로 지원
+# ---------------------------------------------------------------------------
+
+
+def test_result_path_source_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """data.source 가 'result/...' 전체 경로면 RESULT_DIR 기준으로 로드한다."""
+    from core import result_store
+
+    monkeypatch.setattr(result_store, "RESULT_DIR", tmp_path)
+
+    # 이전 턴 폴더에 parquet 을 두고, spec 은 다른 폴더에서 그것을 참조.
+    data_dir = tmp_path / "sess" / "20260101-090000"
+    data_dir.mkdir(parents=True)
+    pl.DataFrame({"x": [1.0, 2.0], "y": [3.0, 4.0]}).write_parquet(
+        data_dir / "old.parquet"
+    )
+    rel = result_store.to_result_relative(data_dir / "old.parquet")
+
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "scatter",
+                    "data": {"source": rel},
+                    "encoding": {
+                        "x": {"field": "x", "type": "quantitative"},
+                        "y": {"field": "y", "type": "quantitative"},
+                    },
+                }
+            ],
+        }
+    )
+    # base_dir 는 spec 폴더(다른 곳) — result/ 경로면 base_dir 와 무관하게 로드돼야 함.
+    spec_dir = tmp_path / "sess" / "20260101-120000"
+    spec_dir.mkdir(parents=True)
+    rendered = render_spec_to_echarts(spec, base_dir=spec_dir)
+    assert len(rendered) == 1
+    assert rendered[0]["chart_type"] == "scatter"
+
+
+def test_result_path_source_rejects_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'result/' 로 시작하지만 escape 를 시도하면 거부한다."""
+    from core import result_store
+
+    monkeypatch.setattr(result_store, "RESULT_DIR", tmp_path)
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "scatter",
+                    "data": {"source": "result/../escape.parquet"},
+                    "encoding": {
+                        "x": {"field": "x", "type": "quantitative"},
+                        "y": {"field": "y", "type": "quantitative"},
+                    },
+                }
+            ],
+        }
+    )
+    with pytest.raises(FileNotFoundError):
+        render_spec_to_echarts(spec, base_dir=tmp_path)

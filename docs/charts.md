@@ -53,7 +53,10 @@
 ```
 
 - `charts` 는 **1개 이상**. 여러 차트를 한 배열에 담으면 패널이 반응형 그리드(페이지당 6개)로 렌더한다.
-- `data.source` 는 **단순 파일명만** (슬래시·`..` 금지). spec 파일과 같은 폴더의 parquet 를 가리킨다.
+- `data.source` 는 두 가지 표기를 허용한다:
+  - **단순 파일명** (`samples.parquet`) — spec 파일과 같은 폴더의 parquet.
+  - **`result/...` 전체 상대 경로** (`result/<session>/<ts>/old.parquet`) — 이전 턴에 저장한 parquet 를 재사용할 때. `RESULT_DIR` 기준으로 해석되며 containment 검증을 거친다 (frozen EXE 경로 안전).
+  - ⚠️ **한 spec 안에서 같은 데이터는 표기를 통일**하라. `Filter All`(scope="all") 그룹 판정이 `data.source` 문자열 동등성으로 이뤄지므로, 한 차트는 `data.parquet`·다른 차트는 `result/.../data.parquet` 로 섞으면 같은 데이터인데도 그룹이 묶이지 않는다.
 - `encoding.type`:
   - `quantitative` → 수치축(value)
   - `nominal` → 범주축(category)

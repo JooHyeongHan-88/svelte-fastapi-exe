@@ -72,14 +72,20 @@ from agent.registries.tools import (
     ToolRegistry,
 )
 from agent.runtime import introspect
+from agent.tools.artifact_io import ARTIFACT_IO_TOOL_NAMES
 from agent.tools.runtime import INFRASTRUCTURE_TOOL_NAMES
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
+from core.result_store import current_client_id, read_manifest_entries
 
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_ID = "orchestrator"
 TASK_SUMMARY_HEADER = "Task Summary:"
+
+# Session Artifacts 프롬프트 섹션 — 노출 개수와 설명 절단 길이 (토큰 예산 통제).
+_ARTIFACTS_SECTION_LIMIT = 10
+_ARTIFACT_DESC_MAX_CHARS = 80
 
 # 동일 (name, args) 호출이 반복될 때 LLM 에 회신하는 루프 차단 메시지.
 # 정상 실행 경로(history_calls)와 형식오류 self-correct 경로 양쪽에서 재사용한다.
@@ -1224,6 +1230,10 @@ def _compose_orchestrator_system_prompt(
         )
         parts.append(f"\n# 현재 To-do\n{rendered}")
 
+    artifacts_section = _render_session_artifacts_section()
+    if artifacts_section:
+        parts.append(artifacts_section)
+
     # 서브 에이전트 pending 이 오케스트레이터 자체 pending 보다 우선.
     if state.pending_sub_agent and state.missing_slots:
         first_q = next(iter(state.missing_slots.values()))
@@ -1292,6 +1302,53 @@ def _compose_orchestrator_system_prompt(
         parts.append("\n" + api_section)
 
     return "\n".join(parts)
+
+
+def _render_session_artifacts_section(limit: int = _ARTIFACTS_SECTION_LIMIT) -> str:
+    """현재 세션 산출물 목록을 '# Session Artifacts' 프롬프트 섹션으로 렌더링한다.
+
+    히스토리 윈도우 밖이나 세션 복원(tool 메시지 소실) 후에도 LLM 이 과거
+    산출물을 재발견할 수 있도록, 디스크 manifest 를 진실원천으로 최근 N개를
+    compact 하게 노출한다. 빈 세션이면 빈 문자열을 반환해 섹션을 생략한다.
+
+    Args:
+        limit: 노출할 최대 산출물 수.
+
+    Returns:
+        '# Session Artifacts' 섹션 문자열, 또는 산출물이 없으면 "".
+    """
+    client_id = current_client_id()
+    if not client_id:
+        return ""
+
+    entries = read_manifest_entries(client_id, limit)
+    if not entries:
+        return ""
+
+    lines: list[str] = [
+        "\n# Session Artifacts",
+        "이 세션에서 저장된 산출물 (최신순). 사용자가 과거 산출물을 지칭하면 아래 경로를 사용하라:",
+    ]
+    for e in entries:
+        path = e.get("path", "")
+        if not path:
+            continue
+        kind = e.get("kind", "")
+        desc = str(e.get("description", "")).strip()[:_ARTIFACT_DESC_MAX_CHARS]
+        shape = ""
+        if e.get("rows") is not None and e.get("columns") is not None:
+            shape = f", {e['rows']}×{e['columns']}"
+        suffix = f" — {desc}" if desc else ""
+        lines.append(f"- {path} ({kind}{shape}){suffix}")
+
+    lines.append(
+        "재표시는 display_markdown/display_chart/display_image 에 경로를 직접 전달하고, "
+        "재계산·추가분석은 load_artifact(path=..., store_as=...) 로 namespace 에 로드하라. "
+        "전체 목록이 필요하면 list_artifacts 를 호출하라. "
+        "exec_code 에서 'result/...' 를 open() 으로 직접 열지 말고 load_artifact 를 쓰라 "
+        "(frozen EXE 경로 안전)."
+    )
+    return "\n".join(lines)
 
 
 def _render_skills_api_refs(skills: list[Skill]) -> str:
@@ -1427,7 +1484,9 @@ def _filter_specs_for_sub_agent(
         - 에이전트 또는 학습 SKILL 에 api_refs 가 하나라도 있으면 화이트리스트와
           무관하게 INFRASTRUCTURE_TOOL_NAMES 가 specs 에 포함된다. SKILL 본문에
           명시하지 않아도 LLM 이 자체 plan 으로 call_function/eval_expression 등을
-          호출 가능.
+          호출 가능. 산출물 체이닝(load_artifact 로 과거 parquet 재사용 등)도
+          런타임 작업의 일부이므로 ARTIFACT_IO_TOOL_NAMES 를 함께 포함한다 —
+          에이전트 작성자가 화이트리스트에 일일이 적지 않아도 동작.
     """
     forbidden: frozenset[str] = frozenset(
         {SUB_AGENT_DISPATCH, SUB_AGENTS_PARALLEL_DISPATCH}
@@ -1438,7 +1497,9 @@ def _filter_specs_for_sub_agent(
         skill_bodies is not None and any(s.meta.api_refs for s in skill_bodies)
     )
     if needs_runtime:
-        allowed_runtime: set[str] = set(INFRASTRUCTURE_TOOL_NAMES)
+        allowed_runtime: set[str] = set(INFRASTRUCTURE_TOOL_NAMES) | set(
+            ARTIFACT_IO_TOOL_NAMES
+        )
     else:
         allowed_runtime = set()
 
@@ -1573,6 +1634,10 @@ def _compose_system_prompt(
             for t in state.todo_list
         )
         parts.append(f"\n# 현재 To-do\n{rendered}")
+
+    artifacts_section = _render_session_artifacts_section()
+    if artifacts_section:
+        parts.append(artifacts_section)
 
     if state.pending_tool and state.missing_slots:
         first_q = next(iter(state.missing_slots.values()))

@@ -84,6 +84,7 @@ import {
   openLightbox, closeLightbox, lightboxNext, lightboxPrev,
   filterChartSelection, undoChartFilter, redoChartFilter, resetChartFilter,
   excludeLegend, setChartLegend,   // 레전드 Filter / 순서·색상·Hide
+  artifactRefPath, insertArtifactReference,   // 칩→Composer 경로 참조 삽입
 } from "$lib/artifactActions.svelte.js";
 ```
 
@@ -255,6 +256,14 @@ ArtifactChart (그리드)        ArtifactLightbox (라이트박스)
 
 사용 아이콘: `drag_indicator, redo, refresh, undo, visibility, visibility_off`.  
 **새 아이콘을 사용할 때** 반드시 `index.html`의 `&icon_names=` 파라미터에 추가해야 한다. 누락 시 ligature 텍스트(글자 그대로)로 렌더된다.
+
+## 칩→Composer 참조 삽입
+
+아티팩트 칩(메시지 버블)과 패널 헤더에 보조 버튼이 있어, 산출물의 `result/...` 경로를 입력창에 삽입한다 — "이 산출물로 작업해줘" 류 후속 요청을 클릭으로 지정하는 UX. 백엔드 `load_artifact`/`display_*` 가 그대로 해석하는 경로이므로 [backend_architecture.md](backend_architecture.md)의 산출물 재발견 도구와 직결된다.
+
+- `artifactRefPath(chip)` — 칩 종류별 참조 경로 환원: chart는 `payload.spec`(이미 `result/...`), markdown/image는 `/result/...` URL → `result/...` (data URI·외부 URL·workspace/assets는 `null` → 버튼 숨김).
+- `insertArtifactReference(chipId)` — `ui.composerSeed` 에 경로를 써넣는다. `MessageBubble` 의 칩은 `event.stopPropagation()` 으로 패널 열기(`openArtifact`)와 분리한 별도 `@` 버튼, `ArtifactPanel` 은 헤더의 `@ 참조` 버튼.
+- **Composer seed 는 replace→append 로 변경됨**: `value ? value.trimEnd() + " " + seed : seed`. 기존 입력 뒤에 공백으로 이어 붙는다. `rewindToMessage` 는 빈 composer 에서 발동하므로 동작 불변.
 
 ## 테마 시스템
 

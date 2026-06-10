@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # 도구 등록을 트리거 (데코레이터 부수효과).
 import agent.tools.artifact as artifact_module  # noqa: E402, F401
+from agent.runtime import namespace as ns_module  # noqa: E402
 from core import result_store  # noqa: E402
 from tests._runner import run_tests  # noqa: E402
 
@@ -18,6 +19,7 @@ from tests._runner import run_tests  # noqa: E402
 def _setup() -> None:
     """매 테스트 시작 시 세션 컨텍스트를 새로 설정한다."""
     # uuid 처럼 보이도록 16자 hex 사용 — session_dir_name 이 처음 8자를 prefix 로 쓴다.
+    ns_module._reset_for_tests()
     result_store.set_session_context("artifacttest1234", "산출물도구테스트")
 
 
@@ -26,6 +28,11 @@ def _save(filename: str, content, kind: str = "markdown"):
     return asyncio.run(
         artifact_module.save_artifact(filename=filename, content=content, kind=kind)
     )
+
+
+def _save_kw(**kwargs):
+    """임의 인자로 save_artifact 를 동기 실행한다 (바이너리 source 등)."""
+    return asyncio.run(artifact_module.save_artifact(**kwargs))
 
 
 def test_happy_path_markdown_writes_file_and_returns_path() -> None:
@@ -139,6 +146,60 @@ def test_markdown_response_includes_display_hint() -> None:
     result = _save("hint.md", "# hi", "markdown")
     assert result.is_error is False
     assert "display_markdown" in result.content
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — 바이너리 kind (png/pptx 등)
+# ---------------------------------------------------------------------------
+
+
+def test_binary_png_from_bytes_var() -> None:
+    _setup()
+    ns_module.current_namespace().store("png_bytes", b"\x89PNG\r\n\x1a\n fake")
+    result = _save_kw(filename="fig.png", kind="png", source="$png_bytes")
+
+    assert result.is_error is False, result.content
+    assert result.data["kind"] == "png"
+    assert "display_image" in result.content
+    abs_path = (result_store.turn_slot() / "fig.png").resolve()
+    assert abs_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_binary_accepts_bytesio() -> None:
+    import io
+
+    _setup()
+    ns_module.current_namespace().store("buf", io.BytesIO(b"PK\x03\x04 fake-xlsx"))
+    result = _save_kw(filename="out.xlsx", kind="xlsx", source="$buf")
+
+    assert result.is_error is False, result.content
+    assert result.data["kind"] == "xlsx"
+    # pptx/xlsx/pdf 는 다운로드 링크 안내.
+    assert "/result/" in result.content
+
+
+def test_binary_rejects_non_bytes_type() -> None:
+    _setup()
+    ns_module.current_namespace().store("not_bytes", {"k": "v"})
+    result = _save_kw(filename="fig.png", kind="png", source="$not_bytes")
+
+    assert result.is_error is True
+    assert "bytes" in result.content
+    assert "io.BytesIO" in result.content  # self-correct 패턴 안내
+
+
+def test_binary_rejects_content_arg() -> None:
+    _setup()
+    result = _save_kw(filename="fig.png", kind="png", content="not allowed")
+    assert result.is_error is True
+
+
+def test_binary_kind_extension_must_match() -> None:
+    _setup()
+    ns_module.current_namespace().store("b", b"x")
+    result = _save_kw(filename="fig.jpg", kind="png", source="$b")
+    assert result.is_error is True
+    assert "확장자" in result.content
 
 
 if __name__ == "__main__":

@@ -26,11 +26,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from pathlib import Path
 from typing import Annotated, Any
 
 from agent.models import ToolResult
 from agent.registries.tools import register_tool
 from agent.runtime import evaluator, introspect, namespace, resolver
+from core.result_store import (
+    adopt_turn_slot,
+    artifact_slot,
+    current_client_id,
+    current_session_title,
+    peek_turn_slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +68,35 @@ INFRASTRUCTURE_TOOL_NAMES: frozenset[str] = frozenset(
         DELETE_VARIABLE,
     }
 )
+
+# exec_code 가 scope 에 주입하는 헬퍼 이름 — namespace 저장 루프에서 silent skip 한다
+# (skipped 리스트에 넣으면 매 호출 노이즈, 저장하면 namespace 오염). 예약어로 취급.
+_INJECTED_HELPER_NAMES: frozenset[str] = frozenset({"artifact_dir"})
+
+
+class _ArtifactDirProvider:
+    """exec_code 에 주입하는 ``artifact_dir()`` 헬퍼 — 현재 턴 산출물 슬롯을 반환한다.
+
+    ``loop.run_in_executor`` 는 contextvars 를 전파하지 않으므로, 생성 시점(메인
+    코루틴)에 client_id/session_title/기존 슬롯을 미리 캡처한다. 워커 스레드에서
+    호출돼도 캡처값으로 ``artifact_slot()`` 을 만들 수 있다. 슬롯은 첫 호출에서만
+    lazy 생성되므로, artifact_dir() 를 부르지 않은 턴은 빈 폴더를 남기지 않는다.
+    """
+
+    def __init__(self) -> None:
+        self._client_id = current_client_id()
+        self._session_title = current_session_title()
+        # 같은 턴에 prior save_artifact 가 이미 슬롯을 만들었으면 그것을 재사용한다.
+        self._existing = peek_turn_slot()
+        self.created: Path | None = None
+
+    def __call__(self) -> Path:
+        if self._existing is not None:
+            return self._existing
+        if self.created is not None:
+            return self.created
+        self.created = artifact_slot(self._client_id, self._session_title)
+        return self.created
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +489,12 @@ async def eval_expression(
         "Restrictions: exec/eval/compile 차단. import 는 stdlib 안전 모듈 + "
         "APP_ALLOWED_LIBRARIES 만 허용. "
         "Returns: stdout 출력 + 새로 추가/변경된 namespace 변수 요약. "
-        "기존 namespace 변수는 자동으로 동일 이름의 local 변수로 노출된다."
+        "기존 namespace 변수는 자동으로 동일 이름의 local 변수로 노출된다. "
+        "Helper: artifact_dir() 를 호출하면 이번 턴 산출물 폴더(pathlib.Path)를 반환한다 — "
+        "라이브러리가 파일을 직접 써야 할 때 사용하라. 'result/...' 를 open() 으로 직접 열지 말 것 "
+        "(frozen EXE CWD 함정). 산출 경로를 후속 단계에 넘기려면 str 로 변수에 담아라: "
+        "out = str(artifact_dir() / 'model.pkl'). 'artifact_dir' 은 예약어라 재할당해도 "
+        "namespace 에 저장되지 않는다."
     ),
     slot_prompts={
         "code": "실행할 Python 코드를 알려주세요 (multi-line 가능).",
@@ -482,6 +524,11 @@ async def exec_code(
         except Exception as exc:  # noqa: BLE001
             logger.warning("namespace 변수 '%s' 로드 실패: %s", ref.name, exc)
 
+    # artifact_dir() 헬퍼 주입 — spade 등이 산출물을 직접 디스크에 쓸 경로.
+    # contextvars 가 executor 로 전파되지 않으므로 provider 가 지금 값을 캡처한다.
+    artifact_dir_provider = _ArtifactDirProvider()
+    local_scope["artifact_dir"] = artifact_dir_provider
+
     # 블로킹 exec 를 executor 로 — 큰 라이브러리 import 가 event loop 를 잡지 않게.
     try:
         loop = asyncio.get_running_loop()
@@ -494,6 +541,11 @@ async def exec_code(
             is_error=True,
         )
 
+    # 스레드에서 새 슬롯을 만들었으면 메인 턴 캐시에 역동기화 — 같은 턴의 후속
+    # save_artifact 가 동일 폴더를 공유하게 한다.
+    if artifact_dir_provider.created is not None and peek_turn_slot() is None:
+        adopt_turn_slot(artifact_dir_provider.created)
+
     # 신규 또는 reference 가 바뀐 변수만 namespace 에 저장.
     # 모듈/함수/클래스는 직렬화 비용 대비 가치가 낮아 제외.
     saved: list[namespace.VariableRef] = []
@@ -501,6 +553,8 @@ async def exec_code(
     for key, value in list(local_scope.items()):
         if key.startswith("_"):
             continue
+        if key in _INJECTED_HELPER_NAMES:
+            continue  # 주입 헬퍼(artifact_dir) — 저장도 노이즈도 없이 조용히 건너뛴다.
         if inspect.ismodule(value):
             continue
         if inspect.isfunction(value) or inspect.isclass(value):

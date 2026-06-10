@@ -219,7 +219,8 @@ async def display_image(
         "mark: bar | line | scatter | box | histogram | heatmap | ecdf "
         "(ecdf=경험적 누적분포: quantitative x 만 필요, y 는 자동 누적비율, color 로 그룹별 곡선). "
         "encoding.type: quantitative (수치축) | nominal (범주축) | temporal (시간축). "
-        "data.source 는 같은 폴더의 parquet 파일명 (상대). "
+        "data.source 는 같은 폴더의 parquet 파일명(상대) 또는 이전 턴 parquet 을 재사용할 때 "
+        "'result/...' 전체 상대 경로. "
         "When NOT to use: 데이터가 텍스트/표 형태일 때(그 경우 save_artifact + display_markdown)."
     ),
     slot_prompts={

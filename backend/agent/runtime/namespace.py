@@ -4,9 +4,11 @@
     - client_id 별로 격리된 ``SessionNamespace`` 를 모듈 전역 dict 에 보관.
     - 변수 크기가 ``APP_NAMESPACE_MEMORY_THRESHOLD`` 이상이면 디스크에 spill,
       미만이면 in-memory.
-    - LRU 강등: ``APP_NAMESPACE_MAX_VARS`` 초과 시 가장 오래된 memory 변수를
-      디스크로 강등.
-    - 세션 종료 시 :func:`cleanup_namespace` 가 memory dict 와 disk 파일을 모두 제거.
+    - LRU spill: ``APP_NAMESPACE_MAX_VARS`` 초과 시 가장 오래된 변수를 디스크로
+      spill 한 뒤 ``_entries`` 에서 deregister 한다 (값은 보존). list_namespace
+      요약 크기는 bounded 로 유지되며, 같은 이름 재참조 시 lazy 재색인으로 부활한다.
+    - crash 복구: ``__init__`` 이 disk_dir 의 파일을 disk-tier 변수로 eager 재색인.
+    - 세션 종료 시 :func:`cleanup_namespace` 가 memory dict 와 disk 디렉터리를 모두 제거.
 
 디스크 경로::
 
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -99,6 +102,9 @@ class SessionNamespace:
         self._session_title = session_title
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._lock = threading.RLock()
+        # 비정상 종료(crash) 후 재기동 시, 이전 세션이 spill/강등으로 남긴 디스크
+        # 파일을 disk-tier 변수로 복원한다 (정상 종료는 cleanup 이 파일을 지움).
+        self._reindex_disk_dir()
 
     # ------------------------------------------------------------------ #
     # public API
@@ -129,7 +135,19 @@ class SessionNamespace:
 
         with self._lock:
             # 기존 entry 가 있으면 disk 파일도 정리.
-            self._remove_entry_files(self._entries.pop(name, None))
+            existing = self._entries.pop(name, None)
+            self._remove_entry_files(existing)
+            # deregister 된 spill 변수는 entry 없이 디스크 파일만 남아 있을 수 있다 —
+            # 같은 이름 재저장 시 stale 파일이 재색인으로 부활하지 않도록 직접 정리.
+            if existing is None:
+                orphan = self._disk_file_for(name)
+                if orphan is not None:
+                    try:
+                        orphan[0].unlink()
+                    except OSError as exc:
+                        logger.warning(
+                            "namespace orphan 파일 정리 실패: %s (%s)", orphan[0], exc
+                        )
 
             threshold = _memory_threshold_bytes()
             if size < threshold:
@@ -170,6 +188,10 @@ class SessionNamespace:
         with self._lock:
             entry = self._entries.get(name)
             if entry is None:
+                # spill/강등으로 deregister 됐거나 crash 후 미색인 — 디스크에서 부활 시도.
+                self._reindex_one(name)
+                entry = self._entries.get(name)
+            if entry is None:
                 raise KeyError(f"namespace 에 '{name}' 변수가 없습니다.")
 
             self._entries.move_to_end(name)
@@ -186,7 +208,10 @@ class SessionNamespace:
 
     def has(self, name: str) -> bool:
         with self._lock:
-            return name in self._entries
+            if name in self._entries:
+                return True
+            # deregister 된 spill 변수는 디스크에서 부활시켜 가시화한다.
+            return self._reindex_one(name)
 
     def get_ref(self, name: str) -> VariableRef:
         """변수의 메타데이터만 반환 (값은 로드하지 않음)."""
@@ -211,19 +236,20 @@ class SessionNamespace:
             return True
 
     def cleanup(self) -> None:
-        """세션 종료 시 호출 — 모든 변수와 disk 파일 삭제."""
-        with self._lock:
-            for entry in self._entries.values():
-                self._remove_entry_files(entry)
-            self._entries.clear()
+        """세션 종료 시 호출 — 모든 변수와 disk 디렉터리를 통째로 삭제한다.
 
-            # _namespace 디렉터리도 비어 있으면 정리.
+        spill-후-deregister 된 변수는 ``_entries`` 에 없지만 디스크 파일은 남아 있으므로,
+        entry 순회 삭제로는 누수가 발생한다. disk_dir 전체를 glob 삭제해 확실히 정리한다.
+        """
+        with self._lock:
+            self._entries.clear()
             try:
                 if self.disk_dir.exists():
-                    self.disk_dir.rmdir()
-            except OSError:
-                # 다른 파일이 남아있으면 OSError — 그대로 두는 게 안전.
-                pass
+                    shutil.rmtree(self.disk_dir, ignore_errors=True)
+            except OSError as exc:
+                logger.warning(
+                    "namespace disk_dir 정리 실패: %s (%s)", self.disk_dir, exc
+                )
 
     def summarize(self) -> str:
         """LLM context 용 한 줄씩 요약. 빈 namespace 면 안내 문자열."""
@@ -261,18 +287,101 @@ class SessionNamespace:
                 )
 
     def _evict_if_needed(self) -> None:
-        """변수 총 개수가 max 초과면 가장 오래된 변수를 제거한다.
+        """변수 총 개수가 max 초과면 가장 오래된 변수를 디스크로 spill 후 deregister 한다.
 
-        설계 결정: '강등(memory→disk)' 만으로는 count 가 줄지 않아 무한루프 위험.
-        총량 제한은 LLM 컨텍스트 안정성 (list_namespace summary 폭증 방지) 이 목적이며,
-        메모리 압력은 size 기반 disk spillover 로 store() 안에서 따로 처리된다.
+        설계 결정: 과거에는 삭제했으나, 멀티스텝 파이프라인(7단계)이 변수 20개를
+        쉽게 넘겨 턴 중간에 ``$df`` 가 증발하면 LLM 이 혼란 루프에 빠진다. 이제는
+        값을 디스크에 보존(spill)하고 ``_entries`` 에서만 제거한다 — list_namespace
+        요약 크기는 bounded 로 유지되면서, 같은 이름 재참조 시 lazy 재색인으로 부활한다.
+        직렬화 불가(BytesIO 등)한 값만 파일 없이 제거한다 (보존 불가 값의 무한 재시도 방지).
         """
         max_vars = _max_vars_per_session()
         while len(self._entries) > max_vars:
             oldest_key = next(iter(self._entries))
-            oldest_entry = self._entries.pop(oldest_key)
-            self._remove_entry_files(oldest_entry)
-            logger.info("namespace LRU 제거(max=%d): %s", max_vars, oldest_key)
+            entry = self._entries[oldest_key]
+            if entry.tier == "memory":
+                try:
+                    fmt = ser.pick_format(entry.value)
+                    path = self._allocate_disk_path(oldest_key, fmt)
+                    ser.dump_to_disk(entry.value, path, fmt)
+                except Exception as exc:  # noqa: BLE001 — 직렬화 불가 값은 보존 포기
+                    logger.warning(
+                        "namespace spill 실패, 파일 없이 제거: %s (%s)", oldest_key, exc
+                    )
+            # disk 파일은 남기고 entry 만 제거 — 재색인으로 부활 가능.
+            self._entries.pop(oldest_key)
+            logger.info(
+                "namespace LRU spill/deregister(max=%d): %s", max_vars, oldest_key
+            )
+
+    # ------------------------------------------------------------------ #
+    # 디스크 재색인 — crash 복구 + spill 변수 lazy 부활
+    # ------------------------------------------------------------------ #
+
+    def _disk_file_for(self, name: str) -> tuple[Path, ser.Format] | None:
+        """disk_dir 에서 변수 이름에 대응하는 파일과 포맷을 찾는다 (없으면 None)."""
+        if not self.disk_dir.exists():
+            return None
+        for ext, fmt in ((".parquet", "parquet"), (".npy", "npy"), (".pkl", "pickle")):
+            candidate = self.disk_dir / f"{name}{ext}"
+            if candidate.exists():
+                return candidate, fmt
+        return None
+
+    def _make_disk_entry(self, name: str, path: Path, fmt: ser.Format) -> _Entry:
+        """디스크 파일로부터 disk-tier _Entry 를 만든다 (값은 로드하지 않음).
+
+        type_name/preview 는 값 로드 비용을 피하려 placeholder 로 둔다 —
+        describe_variable / load 시점에 실제 값이 복원된다.
+        """
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        return _Entry(
+            name=name,
+            type_name="(disk)",
+            size_bytes=size,
+            tier="disk",
+            value=None,
+            disk_path=path,
+            disk_format=fmt,
+            preview="(디스크에서 복원됨 — describe_variable 로 확인)",
+        )
+
+    def _reindex_one(self, name: str) -> bool:
+        """name 에 해당하는 disk 파일이 있으면 disk-tier entry 로 등록한다.
+
+        Returns:
+            재색인 성공 여부. 호출자는 lock 을 이미 보유한 상태여야 한다.
+        """
+        if name in self._entries:
+            return True
+        found = self._disk_file_for(name)
+        if found is None:
+            return False
+        path, fmt = found
+        self._entries[name] = self._make_disk_entry(name, path, fmt)
+        self._entries.move_to_end(name)
+        self._evict_if_needed()
+        return True
+
+    def _reindex_disk_dir(self) -> None:
+        """__init__ 시 disk_dir 의 모든 파일을 disk-tier entry 로 복원한다 (crash 복구)."""
+        if not self.disk_dir.exists():
+            return
+        with self._lock:
+            for path in sorted(self.disk_dir.iterdir()):
+                if not path.is_file():
+                    continue
+                fmt = ser.format_for_extension(path.name)
+                if fmt is None:
+                    continue
+                stem = path.stem
+                if not stem.isidentifier() or stem in self._entries:
+                    continue
+                self._entries[stem] = self._make_disk_entry(stem, path, fmt)
+            self._evict_if_needed()
 
 
 # ---------------------------------------------------------------------------

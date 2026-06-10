@@ -172,6 +172,20 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
 | `describe_variable` | 변수 타입별 상세 요약 (DataFrame shape, ndarray min/max 등) |
 | `delete_variable` | namespace 변수 영구 삭제 |
 
+> `exec_code` scope 에는 `artifact_dir()` 헬퍼가 주입된다 — 이번 턴 산출물 폴더(`Path`)를 반환해 라이브러리가 파일을 직접 쓰게 한다. `run_in_executor` 가 contextvars 를 전파하지 않으므로 `_ArtifactDirProvider` 가 생성 시점에 client_id/title/슬롯을 캡처하고, 실행 후 `adopt_turn_slot` 으로 메인 턴 캐시에 역동기화한다 (같은 턴 `save_artifact` 와 폴더 공유). `artifact_dir` 은 예약어로 namespace 저장에서 silent skip.
+
+### 산출물 재발견·재사용 도구 (always-exposed)
+
+`backend/agent/tools/artifact_io.py` — `list_artifacts`/`load_artifact` (`ARTIFACT_IO_TOOL_NAMES`). 인프라 메타 도구와 달리 `api_refs` 조건과 무관하게 **항상 노출**된다 (markdown 재표시 등 라이브러리 런타임 없이도 필요). 서브 에이전트 화이트리스트 우회는 `_filter_specs_for_sub_agent` 에서 `INFRASTRUCTURE_TOOL_NAMES | ARTIFACT_IO_TOOL_NAMES` 로 처리. 모든 경로 해석은 `core.result_store.resolve_result_path` (RESULT_DIR 절대 기준 + containment) 로 일원화 — frozen EXE 의 CWD 함정 회피.
+
+### 세션 manifest + Session Artifacts 프롬프트 섹션
+
+`save_artifact` 성공 시 세션 루트의 `_artifacts.jsonl` 에 한 줄 append (`append_manifest_entry`, OSError 는 삼킴). `run_turn` 의 시스템 프롬프트 합성이 `_render_session_artifacts_section` 으로 최근 N개(기본 10) 산출물을 `# Session Artifacts` 섹션으로 주입한다 (manifest 우선, 없으면 디스크 스캔 fallback). **세션 복원이 tool 메시지를 버려도**(OpenAI 와이어 규약상 고아 tool 메시지 복원 불가) 디스크 manifest 가 진실원천이라 과거 산출물 재발견이 끊기지 않는다.
+
+### namespace LRU spill (휘발성 완화)
+
+`APP_NAMESPACE_MAX_VARS` 초과 시 가장 오래된 변수를 **삭제하지 않고** 디스크로 spill 후 `_entries` 에서 deregister 한다 (`namespace._evict_if_needed`). 요약 크기는 bounded 로 유지되면서 같은 이름 재참조 시 lazy 재색인으로 부활한다. `__init__` 의 eager 재색인은 crash 복구용. `cleanup` 은 `disk_dir` 전체 rmtree (spill-후-deregister 파일 누수 방지). 단, presence 단절 2초 후 `cleanup_namespace` 가 디렉터리째 삭제하는 의도적 휘발 설계는 그대로 — **세션 간 영속의 정식 경로는 save→load_artifact** 이다.
+
 **evaluator 보안 모델** (`backend/agent/runtime/evaluator.py`): 단일 사용자 로컬 데스크탑 앱 위협 모델에 맞게 완화됨.
 - **차단**: `exec`, `eval`, `compile` (재귀 인젝션 방지), `__import__` 직접 무제한 사용
 - **허용**: 그 외 모든 public builtin (`open`, `print`, `getattr`, `vars`, `dir`, `iter`, `next`, ...)

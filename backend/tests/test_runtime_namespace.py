@@ -75,7 +75,11 @@ def test_overwrite_clears_old_disk_file() -> None:
 
 
 def test_lru_removes_oldest_when_max_exceeded() -> None:
-    """max_vars 초과 시 가장 오래된 변수가 완전 제거된다 (memory + disk)."""
+    """max_vars 초과 시 가장 오래된 변수가 요약(list_refs)에서 제외된다.
+
+    spill 설계: 값은 디스크에 보존되지만 _entries 에서 deregister 되어 요약 크기는
+    bounded 로 유지된다 (복원 가능성은 별도 테스트에서 검증).
+    """
     _setup_threshold(memory_threshold=1024 * 1024, max_vars=3)
     cid = _new_client_id()
     try:
@@ -84,15 +88,82 @@ def test_lru_removes_oldest_when_max_exceeded() -> None:
         ns.store("b", "small_b")
         ns.store("c", "small_c")
 
-        # 4번째: max=3 초과로 가장 오래된 'a' 가 제거된다.
+        # 4번째: max=3 초과로 가장 오래된 'a' 가 deregister 된다.
         ns.store("d", "small_d")
 
         names = {r.name for r in ns.list_refs()}
         assert names == {"b", "c", "d"}, (
-            f"가장 오래된 'a' 가 LRU 제거되어야 함. 현재: {names}"
+            f"가장 오래된 'a' 가 요약에서 제외되어야 함. 현재: {names}"
         )
+        assert len(ns.list_refs()) == 3, "요약 크기는 max_vars 로 bounded 유지"
     finally:
         namespace.cleanup_namespace(cid)
+
+
+def test_lru_spilled_var_recoverable_via_load() -> None:
+    """deregister 된 변수를 load 로 다시 참조하면 디스크에서 부활한다."""
+    _setup_threshold(memory_threshold=1024 * 1024, max_vars=3)
+    cid = _new_client_id()
+    try:
+        ns = namespace.get_namespace(cid, "test-session")
+        ns.store("a", "value_a")
+        ns.store("b", "b")
+        ns.store("c", "c")
+        ns.store("d", "d")  # 'a' deregister.
+
+        assert "a" not in {r.name for r in ns.list_refs()}
+        # load 로 'a' 부활 — spill 된 값이 보존돼야 한다.
+        assert ns.has("a") is True
+        assert ns.load("a") == "value_a"
+    finally:
+        namespace.cleanup_namespace(cid)
+
+
+def test_crash_recovery_reindexes_disk_vars() -> None:
+    """프로세스 재기동(레지스트리 소실) 후 disk-tier 변수가 재색인된다."""
+    _setup_threshold(memory_threshold=50)  # 큰 값은 처음부터 disk tier.
+    cid = _new_client_id()
+    try:
+        ns = namespace.get_namespace(cid, "test-session")
+        ns.store("big", list(range(100)))
+        assert ns._entries["big"].tier == "disk"
+
+        # 재기동 모사 — cleanup(파일 삭제) 없이 레지스트리에서만 제거.
+        with namespace._registry_lock:
+            namespace._namespaces.pop(cid, None)
+
+        # 새 namespace 생성 → __init__ 이 disk_dir 를 eager 재색인.
+        ns2 = namespace.get_namespace(cid, "test-session")
+        assert ns2.has("big"), "재기동 후 disk 파일이 재색인되어야 함"
+        assert ns2.load("big") == list(range(100))
+    finally:
+        namespace.cleanup_namespace(cid)
+
+
+def test_cleanup_removes_deregistered_spill_files() -> None:
+    """spill-후-deregister 된 파일도 cleanup 의 disk_dir 통째 삭제로 정리된다."""
+    _setup_threshold(memory_threshold=1024 * 1024, max_vars=2)
+    cid = _new_client_id()
+    ns = namespace.get_namespace(cid, "test-session")
+    ns.store("a", "aaa")
+    ns.store("b", "bbb")
+    ns.store("c", "ccc")  # 'a' deregister → a.pkl 디스크에 남음.
+    disk_dir = ns.disk_dir
+    assert disk_dir.exists()
+
+    namespace.cleanup_namespace(cid)
+    assert not disk_dir.exists(), "cleanup 후 disk_dir 전체가 제거되어야 함"
+
+
+def test_format_for_extension_roundtrip() -> None:
+    """serialization 의 Format ↔ 확장자 역매핑 정합성."""
+    from agent.runtime import serialization as ser
+
+    for fmt in ("parquet", "npy", "pickle"):
+        ext = ser.extension_for(fmt)
+        assert ser.format_for_extension(ext) == fmt
+        assert ser.format_for_extension(f"var{ext}") == fmt
+    assert ser.format_for_extension(".unknown") is None
 
 
 def test_lru_load_refreshes_recency() -> None:

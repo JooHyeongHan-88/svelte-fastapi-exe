@@ -129,6 +129,39 @@ namespace 변수를 사용한 짧은 Python 식 평가.
 - `print()` 등 stdout 출력은 캡쳐되어 결과 텍스트에 포함된다.
 - import 는 stdlib safe-list + `APP_ALLOWED_LIBRARIES` 만 허용 (동일한 보안 모델).
 
+#### `artifact_dir()` 헬퍼 (exec_code 전용)
+
+scope 에 `artifact_dir()` 가 주입된다 — 호출하면 **이번 턴의 산출물 폴더**(`pathlib.Path`)를 반환한다. 라이브러리가 파일을 직접 디스크에 써야 할 때 사용한다.
+
+```python
+# 예: matplotlib 그림 → 산출물 폴더에 직접 저장
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+ax.plot(df["value"].to_list())
+out = str(artifact_dir() / "trend.png")  # str 로 담아야 namespace 에 보존됨
+fig.savefig(out)
+```
+
+- `result/...` 를 `open()` 으로 **직접 열지 말 것** (frozen EXE 의 CWD 함정). 읽기는 `load_artifact`, 쓰기는 `artifact_dir()`.
+- `artifact_dir` 은 예약어 — 재할당해도 namespace 에 저장되지 않는다.
+- 같은 턴의 `save_artifact` 와 동일 폴더를 공유한다 (turn-slot 역동기화).
+
+#### 바이너리 산출물 생성 체인
+
+`io.BytesIO` 로 바이너리를 만들고 `save_artifact` 의 바이너리 kind 로 저장한다 (신규 의존성 없이 `APP_ALLOWED_LIBRARIES` 옵트인 라이브러리 활용):
+
+```python
+import io
+buf = io.BytesIO()
+fig.savefig(buf, format="png")
+png_bytes = buf.getvalue()
+# → save_artifact(kind="png", filename="fig.png", source="$png_bytes") → display_image
+```
+
+> pptx/xlsx 생성은 `python-pptx`/`openpyxl` 등을 설치 + `.env` 의 `APP_ALLOWED_LIBRARIES` 에 추가 + 재패키징해야 EXE 에 번들된다 (`App.spec` 이 `.env` 를 읽어 `collect_all`).
+
 ### `list_namespace()`
 
 현재 세션의 모든 변수 한 줄씩 요약.

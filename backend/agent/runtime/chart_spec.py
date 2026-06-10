@@ -48,11 +48,17 @@ class Encoding(BaseModel):
 
 
 class DataRef(BaseModel):
-    """차트가 참조하는 데이터 — spec 파일과 같은 폴더의 parquet 파일."""
+    """차트가 참조하는 parquet 데이터.
+
+    두 표기 허용: (1) 같은 폴더 파일명 ('samples.parquet'), (2) 이전 턴 산출물을
+    재사용할 때의 전체 상대 경로 ('result/<session>/<ts>/samples.parquet').
+    """
 
     source: Annotated[
         str,
-        "spec 파일 기준 상대 parquet 파일명 (예: 'samples.parquet'). 경로 escape 금지.",
+        "parquet 데이터 경로. 같은 폴더 파일명('samples.parquet') 또는 "
+        "'result/...' 전체 상대 경로(이전 턴 parquet 재사용) 둘 다 허용. "
+        "한 spec 안에서 같은 데이터는 표기를 통일하라 (Filter All 그룹 판정 기준).",
     ]
 
 

@@ -370,5 +370,92 @@ def test_dollar_kwargs_ref_substitution() -> None:
         namespace.cleanup_namespace(cid)
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 — exec_code 의 artifact_dir() 헬퍼
+# ---------------------------------------------------------------------------
+
+
+def _with_tmp_result_dir(fn) -> None:
+    """RESULT_DIR 을 임시 폴더로 두고 fn 을 실행한 뒤 원복·정리한다."""
+    import shutil
+    import tempfile
+
+    original = result_store.RESULT_DIR
+    tmp = Path(tempfile.mkdtemp(prefix="artdir-test-"))
+    result_store.RESULT_DIR = tmp
+    try:
+        fn()
+    finally:
+        result_store.RESULT_DIR = original
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_exec_code_artifact_dir_writes_file() -> None:
+    _setup()
+
+    def body() -> None:
+        cid = _bind_session()
+        try:
+            # 같은 코루틴(=같은 contextvars 컨텍스트)에서 실행해 production 턴을 모사.
+            async def scenario():
+                code = (
+                    "p = artifact_dir() / 'out.txt'\n"
+                    "p.write_text('hello', encoding='utf-8')\n"
+                    "saved = str(p)"
+                )
+                result = await _call("exec_code", code=code)
+                return result, result_store.peek_turn_slot()
+
+            result, slot = asyncio.run(scenario())
+            assert result.is_error is False, result.content
+            assert slot is not None
+            assert (slot / "out.txt").read_text(encoding="utf-8") == "hello"
+            # 헬퍼는 skipped 노이즈로 새지 않아야 한다.
+            assert "artifact_dir" not in result.content
+            assert "artifact_dir" not in result.data.get("skipped", [])
+            # str 경로는 namespace 에 저장된다.
+            ns = namespace.get_namespace(cid, "test-session")
+            assert ns.has("saved")
+        finally:
+            namespace.cleanup_namespace(cid)
+
+    _with_tmp_result_dir(body)
+
+
+def test_exec_code_then_save_artifact_share_folder() -> None:
+    _setup()
+
+    def body() -> None:
+        import agent.tools.artifact as artifact_module
+
+        cid = _bind_session()
+        try:
+            # exec_code 와 save_artifact 를 한 코루틴에서 실행 — production 의 단일 턴과
+            # 동일한 contextvars 컨텍스트라 adopt 된 슬롯이 후속 도구에 전파된다.
+            async def scenario():
+                exec_result = await _call(
+                    "exec_code",
+                    code="f = artifact_dir() / 'a.txt'\nf.write_text('x', encoding='utf-8')",
+                )
+                slot_after_exec = result_store.peek_turn_slot()
+                save_result = await artifact_module.save_artifact(
+                    filename="report.md", kind="markdown", content="# r"
+                )
+                return exec_result, slot_after_exec, save_result
+
+            exec_result, slot_after_exec, save_result = asyncio.run(scenario())
+            assert exec_result.is_error is False, exec_result.content
+            assert slot_after_exec is not None
+            assert save_result.is_error is False, save_result.content
+            # 같은 턴의 save_artifact 가 exec 가 만든 슬롯에 파일을 썼는지 직접 확인 —
+            # turn_slot 캐시가 adopt 된 슬롯을 그대로 재사용함을 증명한다.
+            assert (slot_after_exec / "report.md").exists()
+            assert (slot_after_exec / "a.txt").exists()
+        finally:
+            namespace.cleanup_namespace(cid)
+
+    _with_tmp_result_dir(body)
+
+
 if __name__ == "__main__":
     run_tests(globals())

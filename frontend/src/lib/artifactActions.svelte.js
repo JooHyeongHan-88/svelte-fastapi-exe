@@ -46,6 +46,53 @@ export function openArtifact(id) {
   saveArtifactPanelOpen(true);
 }
 
+/**
+ * 칩이 가리키는 산출물의 'result/...' 참조 경로를 돌려준다 (없으면 null).
+ *
+ * 백엔드 load_artifact / display_* 도구가 그대로 해석할 수 있는 형태로 환원한다.
+ * data URI·외부 URL·workspace/assets 경로는 load_artifact 대상이 아니므로 null
+ * (호출부가 '참조' 버튼을 숨긴다).
+ *
+ * @param {{kind:string, payload:object}} chip
+ * @returns {string|null}
+ */
+export function artifactRefPath(chip) {
+  if (!chip) return null;
+  if (chip.kind === "chart") {
+    // display_chart 가 ToolResult.data.spec 에 'result/...charts.spec.json' 을 영속.
+    const spec = chip.payload?.spec;
+    return typeof spec === "string" && spec.startsWith("result/") ? spec : null;
+  }
+  if (chip.kind === "markdown") {
+    return _resultUrlToRel(chip.payload?.src);
+  }
+  if (chip.kind === "image") {
+    const items = Array.isArray(chip.payload?.items) ? chip.payload.items : [];
+    return _resultUrlToRel(items[0]?.src);
+  }
+  return null;
+}
+
+/**
+ * 칩의 참조 경로를 Composer 입력창에 삽입한다 ("이 산출물로 작업해줘" UX).
+ * 패널 열기(openArtifact)와 독립적으로 동작하므로 호출부가 stopPropagation 해야 한다.
+ *
+ * @param {string} chipId
+ */
+export function insertArtifactReference(chipId) {
+  const chip = _findChip(chipId);
+  if (!chip) return;
+  const path = artifactRefPath(chip);
+  if (!path) return;
+  // Composer 의 $effect 가 composerSeed 를 감지해 textarea 끝에 append 한다.
+  ui.composerSeed = path;
+}
+
+/** '/result/...' URL 형태를 백엔드가 받는 'result/...' 상대 경로로 환원한다. */
+function _resultUrlToRel(src) {
+  return typeof src === "string" && src.startsWith("/result/") ? src.slice(1) : null;
+}
+
 /** 패널 닫기 (칩은 메시지에 그대로 — 다시 클릭하면 열림). */
 export function closeArtifactPanel() {
   ui.artifactPanelOpen = false;

@@ -4,6 +4,8 @@ polars 로 parquet 을 읽어 encoding 채널에 따라 ECharts option JSON 을 
 프론트엔드는 이 결과를 ``echarts.init().setOption(option)`` 으로 그대로 사용한다.
 
 이 모듈은 순수 함수 모음 — FastAPI/harness 의존성 없이 단독 테스트 가능.
+(예외: data.source 가 'result/...' 전체 경로일 때만 core.result_store 의 경로
+해석을 지연 import 한다. 단순 파일명 경로는 여전히 외부 의존성이 없다.)
 
 지원 mark / encoding 매트릭스:
     bar       : x(nominal|quantitative) + y(quantitative) + color(nominal) optional
@@ -194,10 +196,42 @@ def resolve_legend_row_ids(
 def _load_data_frame(source: str, base_dir: Path) -> pl.DataFrame:
     """spec 의 data.source → polars DataFrame.
 
-    경로 검증: 슬래시/역슬래시/`..` 모두 금지 (단순 파일명만).
+    두 가지 표기를 허용한다:
+        1. 단순 파일명 ('data.parquet') — 같은 폴더(base_dir)에서 로드.
+        2. 'result/...' 전체 상대 경로 — RESULT_DIR 기준으로 해석 (이전 턴의 다른
+           타임스탬프 폴더에 있는 parquet 재사용). 경로 해석만 core.result_store 에
+           의존하며 containment 검증을 포함한다.
+
+    Args:
+        source: data.source 문자열.
+        base_dir: 단순 파일명일 때 parquet 을 찾을 폴더 (spec 위치).
+
+    Returns:
+        로드된 polars DataFrame.
+
+    Raises:
+        ValueError: 경로가 허용 형식이 아닐 때.
+        FileNotFoundError: parquet 파일이 없을 때.
     """
-    if "/" in source or "\\" in source or ".." in source:
-        raise ValueError(f"data.source 는 단순 파일명만 허용한다: {source!r}")
+    normalized = source.replace("\\", "/")
+
+    # 'result/...' 전체 경로 — RESULT_DIR 기준 해석 (frozen EXE 안전).
+    if normalized.startswith("result/"):
+        # 지연 import — 이 모듈이 core 에 import-time 종속되지 않게 한다.
+        from core.result_store import resolve_result_path
+
+        target, error = resolve_result_path(normalized)
+        if error or target is None:
+            raise FileNotFoundError(f"data.source 해석 실패: {error}")
+        if target.suffix.lower() != ".parquet":
+            raise ValueError(f"data.source 는 parquet 이어야 한다: {source!r}")
+        return pl.read_parquet(target)
+
+    # 단순 파일명 — 같은 폴더에서 로드.
+    if "/" in normalized or ".." in normalized:
+        raise ValueError(
+            f"data.source 는 단순 파일명 또는 'result/...' 경로만 허용한다: {source!r}"
+        )
 
     target = base_dir / source
     if not target.exists():
