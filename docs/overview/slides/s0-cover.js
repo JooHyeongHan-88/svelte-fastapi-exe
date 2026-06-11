@@ -96,10 +96,15 @@ function divider(pres, n, title, sub, chips) {
   s.addText(sub, {
     x: 0.74, y: 3.3, w: 9.0, h: 0.4, fontFace: T.KR, fontSize: 14, color: T.DK_MUT, margin: 0,
   });
-  let cx = 0.74;
+  let cx = 0.74, cy = 4.4;
+  const MAXX = 12.85; // 캔버스(13.33in) 안에서 줄바꿈 — 칩이 규격 밖으로 흐르지 않게
   chips.forEach((c) => {
     const w = 0.42 + c.length * 0.155;
-    chip(pres, s, cx, 4.4, w, 0.42, c, { fill: "353331", color: T.DK_MUT, size: 10.5, bold: false });
+    if (cx + w > MAXX) {
+      cx = 0.74;
+      cy += 0.6;
+    }
+    chip(pres, s, cx, cy, w, 0.42, c, { fill: "353331", color: T.DK_MUT, size: 10.5, bold: false });
     cx += w + 0.18;
   });
 }

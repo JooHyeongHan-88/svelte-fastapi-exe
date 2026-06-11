@@ -77,7 +77,7 @@ function s_api(pres) {
     ["스킬", { t: "GET /api/skills", mono: true, s: 9.5 }, "SKILL 카탈로그 — 슬래시 커맨드 자동완성"],
     ["업데이트", { t: "GET /update/check · POST /update/apply · /status", mono: true, s: 9.5 }, "버전 확인 · 적용 · 진행 상태 폴링"],
     ["차트", { t: "POST /api/chart/filter · GET /filter-state", mono: true, s: 9.5 }, "brush 필터·레전드·undo/redo — 재렌더 결과 반환"],
-    ["산출물", { t: "GET /api/artifact/preview · /csv", mono: true, s: 9.5 }, "parquet 미리보기 · CSV 변환 (데이터 칩 전용)"],
+    ["산출물", { t: "GET /api/artifact/preview · /csv · POST /reveal", mono: true, s: 9.5 }, "parquet 미리보기 · CSV 변환 · 산출물 폴더 탐색기 열기 (데이터 칩)"],
     ["정적", { t: "/ · /assets · /result · /workspace", mono: true, s: 9.5 }, "SPA · 빌드 자산 · 에이전트 산출물 · 도구 생성 파일"],
   ], { size: 10.5, colW: [1.55, 5.0, 5.4], rowH: 0.45 });
 }

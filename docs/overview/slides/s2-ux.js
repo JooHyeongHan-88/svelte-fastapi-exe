@@ -230,10 +230,11 @@ function s_artifact(pres) {
   });
   // 공통 UX
   s.addText("패널 공통 UX", { x: 0.7, y: 5.15, w: 4, h: 0.32, fontFace: T.KR, fontSize: 13, bold: true, color: T.INK, margin: 0 });
-  lines(s, 0.7, 5.55, 7.4, 1.3, [
-    { t: "드래그 리사이즈 — 최대 1000px (와이드 테이블 대응), 설정은 localStorage에 기억", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT, gap: 6 },
-    { t: "display 계열 칩은 생성 즉시 패널 자동 오픈 — 칩 클릭으로 언제든 재오픈", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT, gap: 6 },
-    { t: "데이터 칩은 자동 오픈하지 않음 — 빈번한 중간 저장마다 패널이 튀는 것 방지", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT },
+  lines(s, 0.7, 5.5, 7.4, 1.35, [
+    { t: "드래그 리사이즈 — 최대 1000px (와이드 테이블 대응), 설정은 localStorage에 기억", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT, gap: 5 },
+    { t: "display 계열 칩은 생성 즉시 패널 자동 오픈 — 칩 클릭으로 언제든 재오픈", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT, gap: 5 },
+    { t: "데이터 칩은 자동 오픈하지 않음 — 빈번한 중간 저장마다 패널이 튀는 것 방지", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT, gap: 5 },
+    { t: "패널 헤더 ‘폴더 열기’ 버튼 — 산출물이 든 폴더를 OS 탐색기로 연다 (POST /api/artifact/reveal)", bullet: { code: "2022", color: T.ACC }, s: 10.5, c: T.MUT },
   ]);
   card(pres, s, 8.5, 5.15, 4.15, 1.7, { fill: T.ACC_SOFT, noLine: true });
   s.addText([

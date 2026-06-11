@@ -82,7 +82,7 @@ function s_bigpicture(pres) {
     ["업데이트", ["latest.json 확인", "다운로드 + sha256 검증", "Updater가 자가 교체"]],
   ];
   steps.forEach((st, i) => {
-    const x = 0.7 + i * 2.62, y = 1.85, w = 2.28, h = 2.5;
+    const x = 0.7 + i * 2.585, y = 1.85, w = 2.26, h = 2.5;
     card(pres, s, x, y, w, h, { line: i === 4 ? T.ACC : T.LINE, lineW: i === 4 ? 1.5 : 1 });
     numDot(pres, s, x + 0.2, y + 0.2, 0.42, i + 1);
     s.addText(st[0], {

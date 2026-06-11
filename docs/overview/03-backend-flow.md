@@ -89,6 +89,7 @@ dev 모드에서 `build/web/`이 없으면 ⑤의 SPA 서빙과 ⑥이 생략된
 | `GET /api/chart/filter-state` | chart.py | 세션 재진입 시 필터 상태 복원 |
 | `GET /api/artifact/preview` | artifact.py | parquet head(N) 미리보기 (데이터 칩 패널) |
 | `GET /api/artifact/csv` | artifact.py | parquet → CSV 변환 다운로드 |
+| `POST /api/artifact/reveal` | artifact.py | 산출물이 든 폴더를 OS 파일 탐색기에서 열기 (패널 '폴더 열기' 버튼) |
 
 이외 정적 mount: `/` (SPA) · `/assets` · `/result` (산출물) · `/workspace` (도구 생성 파일).
 
@@ -116,7 +117,7 @@ dev 모드에서 `build/web/`이 없으면 ⑤의 SPA 서빙과 ⑥이 생략된
 | `skills.py` | SKILL 카탈로그 노출 |
 | `update.py` | 업데이트 4단계의 HTTP 노출 |
 | `chart.py` | 차트 필터/레전드 액션 → 재렌더된 ECharts option 반환 |
-| `artifact.py` | parquet 미리보기·CSV 변환 (데이터 칩 전용) |
+| `artifact.py` | parquet 미리보기·CSV 변환 + 산출물 폴더 탐색기 열기 (데이터 칩 전용) |
 
 ### `backend/agent/` — 에이전트 하니스 (핵심)
 

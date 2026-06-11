@@ -1,15 +1,16 @@
-// 프로젝트 소개 슬라이드 생성기 — docs/overview/*.md 3부작의 슬라이드 버전
-// 실행: NODE_PATH=<글로벌 node_modules> node make-slides.js
-const pptxgen = require("pptxgenjs");
+// 프로젝트 소개 슬라이드 생성기 (HTML 덱) — docs/overview/*.md 3부작의 슬라이드 버전.
+// 실행: node build-html.js  →  index.html (의존성 없음, 브라우저로 바로 열기)
+//
+// theme.js + s0~s3 의 슬라이드 정의는 pptx/HTML 어느 백엔드에서도 동일하게 동작한다.
+// 여기서는 HtmlPres 를 주입해 같은 컨텐츠를 self-contained HTML 로 출력한다.
+const fs = require("fs");
+const { HtmlPres, renderDeck } = require("./html-render");
 const { cover, agenda, divider, closing } = require("./s0-cover");
 const p1 = require("./s1-overview");
 const p2 = require("./s2-ux");
 const p3 = require("./s3-backend");
 
-const pres = new pptxgen();
-pres.layout = "LAYOUT_WIDE"; // 13.33 × 7.5 in
-pres.author = "hanjoo";
-pres.title = "단일 EXE로 배포하는 로컬 AI Agent 플랫폼 — 프로젝트 소개";
+const pres = new HtmlPres();
 
 cover(pres);
 agenda(pres);
@@ -60,6 +61,9 @@ p3.s_safety(pres);
 
 closing(pres);
 
-pres.writeFile({ fileName: __dirname + "/project-intro.pptx" }).then((f) => {
-  console.log("written:", f);
+const html = renderDeck(pres.slides, {
+  title: "단일 EXE로 배포하는 로컬 AI Agent 플랫폼 — 프로젝트 소개",
 });
+const out = __dirname + "/index.html";
+fs.writeFileSync(out, html, "utf-8");
+console.log("written:", out, "(" + pres.slides.length + " slides)");

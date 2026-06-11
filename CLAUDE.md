@@ -11,6 +11,11 @@ Svelte(Vite) 정적 자산을 FastAPI가 서빙하고 PyInstaller로 단일 `.ex
 - 빌드 산출물 흐름: **`build/` (중간)** → **`release/` (Nexus 업로드 대상)**
 - **앱 이름 변경**: `.env`의 `APP_NAME` 값 하나만 바꾸면 된다. `App.spec`과 `release.ps1`이 이 값을 읽는다.
 
+> ⛔ **`docs/overview/` 는 사람이 관리하는 프로젝트 소개 자료다.** 사용자가 그 폴더를 갱신하라고
+> **명시적으로 지시한 경우에만** 읽거나 편집한다. 그 외에는 — 코드/문서를 광범위하게 손볼 때라도 —
+> `docs/overview/**`(마크다운 원고, `slides/` HTML 덱 생성기 포함)를 자발적으로 열거나 수정하지 않는다.
+> 슬라이드 덱은 `slides/*.js` → `node slides/build-html.js` → `slides/index.html` 로 재생성한다.
+
 ---
 
 ## 주요 명령어

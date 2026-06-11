@@ -15,6 +15,20 @@
 | ② | [02-ux-ui.md](02-ux-ui.md) | 최종 사용자는 어떤 화면에서 어떤 기능을 쓰는가? |
 | ③ | [03-backend-flow.md](03-backend-flow.md) | 백엔드는 내부적으로 어떻게 동작하는가? 어떤 모듈·도구가 있는가? |
 
+## 슬라이드 (발표용)
+
+위 3개 문서의 슬라이드 버전이 `slides/` 에 있다. **의존성·빌드 도구 없이** 브라우저로 바로 여는
+self-contained HTML 덱이다.
+
+```powershell
+node docs/overview/slides/build-html.js   # slides/index.html 재생성
+# slides/index.html 을 브라우저로 열기 — ← / → 방향키로 넘김, 인쇄(PDF 저장) 지원
+```
+
+- 내용은 `s0-cover.js` · `s1-overview.js` · `s2-ux.js` · `s3-backend.js` (섹션 = 슬라이드)에 정의되고,
+  `theme.js` 가 Claude 톤 디자인 시스템, `html-render.js` 가 1280×720 캔버스로 렌더한다.
+- `index.html` 은 생성 산출물 — 직접 편집하지 말고 `build-html.js` 로 재생성한다.
+
 ## 더 깊이 들어가려면
 
 - 에이전트 확장(SKILLS/AGENTS/도구 추가) → [docs/README.md](../README.md)
