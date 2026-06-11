@@ -61,7 +61,9 @@
   - `quantitative` → 수치축(value)
   - `nominal` → 범주축(category)
   - `temporal` → 시간축(time)
+  - 근사 표기는 자동 정규화된다 (`normal`/`categorical`→`nominal`, `numeric`→`quantitative`, `datetime`→`temporal` 등, 대소문자 무관). mark 도 `hist`→`histogram`, `point`→`scatter`, `boxplot`→`box`, aggregate 도 `avg`→`mean` 으로 보정된다. 매핑에 없는 값은 여전히 검증 에러.
 - `color` 채널 → 시리즈 분할(그룹별 다중 곡선/막대). **라이트박스 Legend 버튼도 이 채널이 있어야 활성화된다** — 항목 2개 이상 필요.
+- **`color` 를 쓰려면 데이터는 long 형식**이어야 한다 — 그룹 컬럼 1개 + 값 컬럼 1개 (예: `lambda`·`value`). 그룹별 wide 컬럼(`lambda_5`/`lambda_8`/...)은 parquet 저장 **전에** unpivot 으로 변환한다. 레전드 이름은 `color.field` 컬럼의 실제 값에서 자동 생성되므로 `extra_option.legend.data` 를 따로 적지 않는다.
 - `aggregate` (`count`/`mean`/`sum`/`min`/`max`) → groupby 집계.
 - `extra_option` → 기본 ECharts option 에 깊은 병합. dict 는 재귀 병합, **list 는 통째 교체**.
 
@@ -75,7 +77,7 @@
 | `line` | 시계열·추세 | x + y | color | x 는 보통 `quantitative`/`temporal` |
 | `scatter` | 상관관계 | x + y | color | x, y 모두 `quantitative` |
 | `box` | 분포·사분위 | y | x(그룹), color | y 컬럼에서 `[min,Q1,median,Q3,max]` 자동 계산 |
-| `histogram` | 단일 변수 분포 | x (`bin:true`, `quantitative`) | — | 빈 10개 고정(현재) |
+| `histogram` | 단일 변수 분포 | x (`bin:true`, `quantitative`) | color(그룹별 분포 비교) | 빈 10개 고정(현재). 빈 경계는 전체 범위 공유 |
 | `heatmap` | 2차원 밀도 | x(nominal) + y(nominal) + color(quantitative) | — | color 가 셀 값 |
 | `ecdf` | 누적분포 | x (`quantitative`) | color(그룹별 곡선) | **y 불필요** — 정렬 후 누적비율(0~1) 자동 계산 |
 
@@ -93,7 +95,7 @@
 
 ### 유형별 주의점
 
-- **histogram**: x 채널은 `"type": "quantitative"`. `"bin": true` 는 spec 검증 시 자동 보정되므로 생략 가능. y 채널은 불필요(자동 count).
+- **histogram**: x 채널은 `"type": "quantitative"`. `"bin": true` 는 spec 검증 시 자동 보정되므로 생략 가능. y 채널은 불필요(자동 count). `color` 를 주면 그룹별 시리즈가 한 차트에 겹쳐 그려진다 — 빈 경계는 전체 데이터 범위에서 한 번 계산해 모든 그룹이 공유한다(그룹 간 비교 가능).
 - **ecdf**: x(quantitative) **하나만** 지정. y 를 넣지 말 것. 내부에서 x 오름차순 정렬 후 `i/n` 누적비율을 계단선(`step:"end"`)으로 그린다. `color` 를 주면 그룹별 곡선을 겹쳐 비교한다.
 - **box**: x 또는 color 를 주면 그룹별 박스 묶음. 둘 다 없으면 전체를 단일 박스로.
 - **heatmap**: color.type 은 반드시 `quantitative`(셀 값). x·y 는 nominal 범주.
@@ -250,6 +252,9 @@ brush 필터는 **점이 원본 행과 1:1 대응**할 때만 의미가 있다. 
 - ❌ heatmap 의 color.type 을 nominal 로 → color 는 `quantitative` 여야 셀 값이 된다.
 - ❌ spec 을 저장하기 전에 parquet 을 안 만듦 → 렌더 시 "parquet 파일을 찾을 수 없다" + 세션 내 실존 parquet 후보 목록이 함께 안내된다.
 - ✅ bar·box 에서 brush 점 필터가 안 된다고 당황하지 말 것 — **설계상 집계 차트는 점 필터 비대상**(Filter All 의 교차 재집계는 받음).
+- ❌ 그룹별 wide 컬럼(`lambda_5`/`lambda_8`/...)으로 parquet 저장 후 레전드 분리를 시도 → **`color` 는 long 형식 전제.** 저장 전에 unpivot(그룹 컬럼+값 컬럼)으로 변환해야 한다.
+- ❌ `extra_option.legend.data` 에 임의 라벨을 적음 → 레전드 이름은 시리즈 이름(= `color.field` 값의 문자열)과 정확히 일치해야 표시된다. 어긋난 항목은 렌더러가 실존 시리즈 이름으로 자동 보정하지만, 애초에 적지 않는 것이 정답.
+- ✅ `"type": "normal"` 같은 근사 표기 → 자동 정규화된다 (에러 아님). 단 `banana` 처럼 의미 없는 값은 검증 에러.
 - ❌ Legend 버튼이 비활성 → `encoding.color` 채널이 없거나 그룹(시리즈)이 1개 이하. `color.field` 가 있고 데이터에 실제로 2종 이상의 값이 있어야 활성화된다.
 - ❌ heatmap 의 `color` 를 레전드 컨트롤에 쓰려 함 → heatmap 의 color 는 셀 수치값(`quantitative`)이라 시리즈 분할이 아님. 레전드 컨트롤 비대상.
 - ❌ 레전드 Filter 로 숨긴 그룹이 Undo 후에도 유지됨 → Hide(눈 토글)와 Filter(데이터 제외)는 다른 동작. Hide 는 ECharts `legend.selected` 시각 토글, Filter 는 parquet 행 제외 재집계.

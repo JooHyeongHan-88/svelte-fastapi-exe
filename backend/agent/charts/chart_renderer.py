@@ -12,7 +12,7 @@ polars 로 parquet 을 읽어 encoding 채널에 따라 ECharts option JSON 을 
     line      : x(quantitative|temporal) + y(quantitative) + color optional
     scatter   : x(quantitative) + y(quantitative) + color optional
     box       : y(quantitative) [+ x(nominal) for grouped boxplot] + color optional
-    histogram : x(quantitative, bin=True) → bin count
+    histogram : x(quantitative, bin=True) → bin count [+ color(nominal) for grouped bins]
     heatmap   : x(nominal) + y(nominal) + color(quantitative)
     ecdf      : x(quantitative) [+ color(nominal) for grouped curves] → 누적분포 계단선
 
@@ -111,6 +111,7 @@ def render_spec_to_echarts(
 
         if chart.extra_option:
             option = _deep_merge(option, chart.extra_option)
+            option = _restore_mismatched_legend(option)
 
         legend_cfg = _legend_for_chart(legend_by_chart, idx)
         if legend_cfg:
@@ -514,7 +515,12 @@ def _render_box(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
 
 
 def _render_histogram(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
-    """histogram 렌더러 — x.bin=True 인 quantitative 컬럼을 빈으로 나눠 카운트."""
+    """histogram 렌더러 — x.bin=True 인 quantitative 컬럼을 빈으로 나눠 카운트.
+
+    encoding.color 가 있으면 color field 값별로 시리즈를 분리한다 (그룹 분포 비교).
+    빈 경계는 전체 데이터 범위에서 한 번만 계산해 모든 그룹이 공유한다 — 그룹마다
+    빈을 따로 잡으면 같은 x 축 위에서 막대가 비교 불가능해지기 때문.
+    """
     enc = chart.encoding
     if enc.x is None:
         raise ValueError("histogram 은 x encoding 이 필요하다")
@@ -523,21 +529,40 @@ def _render_histogram(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
     if enc.x.type != "quantitative":
         raise ValueError("histogram 의 x.type 은 quantitative 여야 한다")
 
-    _ensure_columns(df, [enc.x.field])
+    _ensure_columns(df, [enc.x.field] + ([enc.color.field] if enc.color else []))
 
-    series = df[enc.x.field].drop_nulls()
-    if series.len() == 0:
+    all_values = df[enc.x.field].drop_nulls()
+    if all_values.len() == 0:
         raise ValueError("histogram: 데이터가 비어 있다")
 
     bin_count = 10  # 향후 spec 으로 노출 가능. 현재는 합리적 기본값.
-    bins = _equal_width_bins(series, bin_count)
-    counts = _bin_counts(series, bins)
-
+    bins = _equal_width_bins(all_values, bin_count)
     bin_labels = [f"[{bins[i]:.2f}, {bins[i + 1]:.2f})" for i in range(len(bins) - 1)]
+
+    series_list: list[dict[str, Any]]
+    if enc.color is not None:
+        groups = df[enc.color.field].unique(maintain_order=True).to_list()
+        series_list = [
+            {
+                "name": str(group_value),
+                "type": "bar",
+                "data": _bin_counts(
+                    df.filter(pl.col(enc.color.field) == group_value)[
+                        enc.x.field
+                    ].drop_nulls(),
+                    bins,
+                ),
+            }
+            for group_value in groups
+        ]
+    else:
+        series_list = [
+            {"name": "count", "type": "bar", "data": _bin_counts(all_values, bins)}
+        ]
 
     option: dict[str, Any] = {
         "tooltip": {"trigger": "axis"},
-        "legend": {"data": ["count"]},
+        "legend": {"data": [s["name"] for s in series_list]},
         "toolbox": {"feature": _TOOLBOX_FEATURE},
         "xAxis": {
             "type": "category",
@@ -548,13 +573,7 @@ def _render_histogram(chart: ChartV1, df: pl.DataFrame) -> dict[str, Any]:
             "type": "value",
             "name": (enc.y.title if enc.y else "count") or "count",
         },
-        "series": [
-            {
-                "name": "count",
-                "type": "bar",
-                "data": counts,
-            }
-        ],
+        "series": series_list,
     }
     return option
 
@@ -912,6 +931,49 @@ def _reorder_series_by_name(
         if name in by_name:
             result.extend(by_name.pop(name))
     return result
+
+
+def _restore_mismatched_legend(option: dict[str, Any]) -> dict[str, Any]:
+    """extra_option 병합으로 legend.data 가 실제 시리즈 이름과 어긋나면 보정한다.
+
+    ECharts 레전드는 series.name 과 문자열이 정확히 일치하는 항목만 표시한다.
+    LLM 이 extra_option.legend.data 에 임의 라벨(예: 컬럼 값 '5' 대신 'lambda_5')을
+    넣으면 레전드가 통째로 사라지는데 이는 항상 의도 밖이다 — 실존 시리즈 이름과의
+    교집합만 남기고, 하나도 안 남으면 시리즈 이름 전체로 복원한다. show 등 다른
+    legend 키는 건드리지 않는다.
+
+    Args:
+        option: ``_deep_merge`` 가 반환한 병합 사본 (in-place 수정 안전).
+
+    Returns:
+        legend.data 가 보정된 option (보정 불필요 시 그대로).
+    """
+    legend = option.get("legend")
+    series = option.get("series")
+    if not isinstance(legend, dict) or not isinstance(series, list):
+        return option
+    data = legend.get("data")
+    if not isinstance(data, list):
+        return option
+    valid_names = list(
+        dict.fromkeys(
+            s.get("name")
+            for s in series
+            if isinstance(s, dict) and s.get("name") is not None
+        )
+    )
+    if not valid_names:
+        return option
+    matched = [name for name in data if name in valid_names]
+    if matched == data:
+        return option
+    logger.warning(
+        "extra_option.legend.data 가 시리즈 이름과 불일치해 보정함: %r -> %r",
+        data,
+        matched or valid_names,
+    )
+    legend["data"] = matched or valid_names
+    return option
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

@@ -55,6 +55,15 @@ def base_dir(tmp_path: Path) -> Path:
     )
     heat.write_parquet(tmp_path / "heat.parquet")
 
+    # long(un-pivot) 형식 — 그룹 컬럼 + 값 컬럼 (포아송 lambda 시나리오 축소판).
+    long_form = pl.DataFrame(
+        {
+            "lambda": [5, 5, 5, 8, 8, 10, 10, 10],
+            "value": [3.0, 5.0, 6.0, 7.0, 9.0, 9.0, 11.0, 13.0],
+        }
+    )
+    long_form.write_parquet(tmp_path / "long.parquet")
+
     return tmp_path
 
 
@@ -190,6 +199,114 @@ def test_histogram_bin_quantitative(base_dir: Path) -> None:
     assert len(option["xAxis"]["data"]) == 10  # bin_count
     counts = option["series"][0]["data"]
     assert sum(counts) == 5  # 전체 샘플 수
+
+
+def test_histogram_color_splits_groups_with_shared_bins(base_dir: Path) -> None:
+    """color 채널이 있으면 그룹별 시리즈로 분리되고 빈 경계는 전체 범위를 공유한다.
+
+    실 LLM 회귀 케이스 — long 형식 데이터에 color 를 줬는데 전체 데이터가 단일
+    'count' 시리즈로 합쳐져 레전드 구분이 사라지던 버그.
+    """
+    result = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "long.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                        "color": {"field": "lambda", "type": "nominal"},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )
+    option = result[0]["option"]
+    assert [s["name"] for s in option["series"]] == ["5", "8", "10"]
+    assert option["legend"]["data"] == ["5", "8", "10"]
+    # 모든 그룹이 같은 빈 라벨(전체 범위 기준)을 공유하고 카운트 총합 = 전체 행 수.
+    assert len(option["xAxis"]["data"]) == 10
+    assert all(len(s["data"]) == 10 for s in option["series"])
+    assert sum(sum(s["data"]) for s in option["series"]) == 8
+
+
+def test_histogram_without_color_keeps_single_series(base_dir: Path) -> None:
+    """color 없는 histogram 은 기존처럼 단일 count 시리즈를 유지한다."""
+    result = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "long.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )
+    option = result[0]["option"]
+    assert [s["name"] for s in option["series"]] == ["count"]
+    assert sum(option["series"][0]["data"]) == 8
+
+
+def test_extra_option_legend_mismatch_restored(base_dir: Path) -> None:
+    """extra_option.legend.data 가 시리즈 이름과 전부 어긋나면 실제 이름으로 복원된다.
+
+    실 LLM 회귀 케이스 — legend.data 에 'lambda_5' 식 임의 라벨을 넣어 deep-merge
+    가 렌더러 파생 레전드를 덮어쓰면 ECharts 레전드가 통째로 사라지던 버그.
+    """
+    result = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "long.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                        "color": {"field": "lambda", "type": "nominal"},
+                    },
+                    "extra_option": {
+                        "legend": {
+                            "show": True,
+                            "data": ["lambda_5", "lambda_8", "lambda_10"],
+                        },
+                    },
+                }
+            ],
+        },
+        base_dir,
+    )
+    option = result[0]["option"]
+    assert option["legend"]["data"] == ["5", "8", "10"]
+    assert option["legend"]["show"] is True  # 병합된 다른 legend 키는 보존
+
+
+def test_extra_option_legend_partial_match_filtered(base_dir: Path) -> None:
+    """legend.data 의 일부만 일치하면 일치 항목만 남긴다 (의도적 부분 노출 존중)."""
+    result = _render(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "data": {"source": "long.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                        "color": {"field": "lambda", "type": "nominal"},
+                    },
+                    "extra_option": {"legend": {"data": ["8", "lambda_5"]}},
+                }
+            ],
+        },
+        base_dir,
+    )
+    assert result[0]["option"]["legend"]["data"] == ["8"]
 
 
 def test_heatmap_three_channels(base_dir: Path) -> None:

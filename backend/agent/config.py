@@ -55,9 +55,12 @@ LLM_MAX_TOKENS: int | None = int(_max_tok_raw) if _max_tok_raw else None
 
 # Agent harness 한 턴에서 허용하는 provider→tool→provider 반복 횟수 상한.
 # parquet→spec→chart 3-레이어 파이프라인을 쓰는 에이전트(예: 복합 시나리오 E 의
-# 오케스트레이터)는 단일 턴에서 6회 반복이 필요하다. 5 는 여유가 0 이라 한 번만
-# 라운드트립이 추가돼도 [max_iterations] 로 중단됐다 — headroom 확보를 위해 8.
-MAX_AGENT_ITERATIONS: int = int(os.environ.get("APP_MAX_AGENT_ITERATIONS", "8"))
+# 오케스트레이터)는 단일 턴에서 6회 반복이 필요하다. 실 LLM 은 여기에 중간 산출물
+# 재구성(wide→long unpivot)·spec self-correct 같은 우회 라운드트립이 2~4회 더
+# 끼어드는 것이 관측됐고, 8 은 마지막 사용자 노출 단계(display_*) 직전에 소진됐다
+# — 12 로 상향. 남은 2회 시점에 harness 가 wind-down 지시를 주입하므로(R7) 상한에
+# 닿기 전에 마무리 유도가 먼저 발동한다.
+MAX_AGENT_ITERATIONS: int = int(os.environ.get("APP_MAX_AGENT_ITERATIONS", "12"))
 
 # 한 사용자 turn 에서 오케스트레이터 + 모든 (재귀) 서브 에이전트 합산 provider 호출 상한.
 # 무한 위임 루프와 자원 과다 소모를 차단하기 위한 budget.

@@ -234,6 +234,120 @@ def test_missing_parquet_error_lists_session_candidates() -> None:
     assert "real_data.parquet" in result.content
 
 
+def test_encoding_type_and_mark_aliases_coerced() -> None:
+    """'normal'·'Histogram' 같은 근사 표기는 정식 값으로 정규화된다.
+
+    실 LLM 회귀 케이스 — 사소한 표기 차이가 ValidationError → self-correct
+    라운드트립으로 반복 예산을 태우던 시나리오.
+    """
+    from agent.charts.chart_spec import ChartSpecV1
+
+    spec = ChartSpecV1.model_validate(
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "Histogram",
+                    "data": {"source": "d.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "Quantitative"},
+                        "color": {"field": "lambda", "type": "normal"},
+                        "y": {
+                            "field": "value",
+                            "type": "numeric",
+                            "aggregate": "avg",
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    chart = spec.charts[0]
+    assert chart.mark == "histogram"
+    assert chart.encoding.x is not None and chart.encoding.x.type == "quantitative"
+    assert chart.encoding.color is not None and chart.encoding.color.type == "nominal"
+    assert chart.encoding.y is not None
+    assert chart.encoding.y.type == "quantitative"
+    assert chart.encoding.y.aggregate == "mean"
+
+
+def test_unknown_encoding_type_still_rejected() -> None:
+    """alias 매핑에 없는 진짜 오류 값은 여전히 검증 에러로 드러난다."""
+    import pytest
+    from pydantic import ValidationError
+
+    from agent.charts.chart_spec import ChartSpecV1
+
+    with pytest.raises(ValidationError):
+        ChartSpecV1.model_validate(
+            {
+                "version": "1",
+                "charts": [
+                    {
+                        "mark": "bar",
+                        "data": {"source": "d.parquet"},
+                        "encoding": {
+                            "x": {"field": "a", "type": "banana"},
+                            "y": {"field": "b", "type": "quantitative"},
+                        },
+                    }
+                ],
+            }
+        )
+
+
+def test_poisson_legend_scenario_end_to_end() -> None:
+    """실 LLM 회귀 시나리오 — 'normal' 타입 + 어긋난 extra_option.legend.data 로도
+    그룹 분리 히스토그램이 첫 호출에 렌더된다 (포아송 lambda 레전드 케이스)."""
+    import uuid
+
+    result_store.set_session_context(f"poisson{uuid.uuid4().hex[:8]}", "포아송테스트")
+    slot = result_store.turn_slot()
+    _write_parquet(
+        slot,
+        "poisson_long.parquet",
+        pl.DataFrame(
+            {
+                "lambda": [5] * 4 + [8] * 4 + [10] * 4,
+                "value": [3.0, 4.0, 5.0, 6.0, 6.0, 7.0, 8.0, 9.0, 8.0, 9.0, 11.0, 13.0],
+            }
+        ),
+    )
+    spec_path = _write_spec(
+        slot,
+        {
+            "version": "1",
+            "charts": [
+                {
+                    "mark": "histogram",
+                    "title": "포아송 분포",
+                    "data": {"source": "poisson_long.parquet"},
+                    "encoding": {
+                        "x": {"field": "value", "type": "quantitative", "bin": True},
+                        "color": {"field": "lambda", "type": "normal"},
+                    },
+                    "extra_option": {
+                        "tooltip": {"trigger": "item"},
+                        "legend": {
+                            "show": True,
+                            "data": ["lambda_5", "lambda_8", "lambda_10"],
+                        },
+                    },
+                }
+            ],
+        },
+        filename="poisson.spec.json",
+    )
+
+    result = _chart(source=_rel_source(slot, spec_path.name))
+
+    assert result.is_error is False, result.content
+    rendered = json.loads((slot / "poisson.json").read_text(encoding="utf-8"))
+    option = rendered[0]["option"]
+    assert [s["name"] for s in option["series"]] == ["5", "8", "10"]
+    assert option["legend"]["data"] == ["5", "8", "10"]
+
+
 def test_rendered_is_overwritten_on_re_run() -> None:
     """동일 spec 으로 두 번 호출하면 rendered 가 deterministic 하게 재생성된다."""
     slot = _setup()

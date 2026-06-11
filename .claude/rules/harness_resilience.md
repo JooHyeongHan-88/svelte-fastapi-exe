@@ -193,6 +193,51 @@ manifest(`_artifacts.jsonl`)에 기록되지 않았다 → 다음 턴 `# Session
 
 ---
 
+## 반복 예산 임박 wind-down (`backend/agent/harness.py`, R7)
+
+`_run_agent_turn` 루프 최상단이 매 iteration `remaining_calls = min(반복 잔여,
+budget 잔여)` 를 계산해, 임계(`_WIND_DOWN_REMAINING_CALLS = 2`) 이하로 떨어지는
+시점에 `[System]` 마무리 지시문을 **messages 에만 1회** 주입한다 (히스토리 비영속
+— fallback 메시지와 동일 정책).
+
+- **이유**: 실 LLM 은 실패 없이 진행 중이어도 우회 라운드트립(wide→long unpivot,
+  spec self-correct)으로 예산을 소진한다. 경고 없이 상한에 닿으면 마지막 사용자
+  노출 단계(display_chart 등)가 hard-cut 되어 "작업은 다 했는데 결과가 안 보이는"
+  턴이 된다. 지시문은 "새 분석 금지, 저장된 산출물 즉시 표시, 다음 응답은 도구 없이
+  요약"을 명시해 남은 호출을 마무리에 쓰게 한다.
+- 잔여 1회면 "도구 호출 금지·최종 답변 작성" 변형 문구로 전환한다.
+- 오케스트레이터·서브 에이전트 공용 (`_run_agent_turn` 공유 경로). budget 이 먼저
+  마르는 서브 에이전트는 시작 직후에도 발화할 수 있다 — 의도된 동작.
+- LLM 이 지시를 무시하고 도구를 계속 부르면 기존 for-else fallback (F6) 이 그대로
+  안전망으로 동작한다.
+- 기본 반복 상한도 8→12 로 상향 (`MAX_AGENT_ITERATIONS`) — 8 은 실 LLM 의 우회
+  라운드트립 포함 시 display_* 직전에 소진되는 것이 관측됐다.
+
+테스트: `backend/tests/test_harness_wind_down.py`
+
+---
+
+## 차트 spec 관용 파싱 + 레전드 보정 (`agent/charts/`, R8)
+
+실 LLM 의 차트 spec 근사 오류가 self-correct 라운드트립(=반복 예산)을 태우거나
+조용히 깨진 차트(레전드 미구분·소실)를 만들던 세 경로를 모델/렌더러 레벨에서 흡수한다:
+
+| 경로 | 처리 |
+|---|---|
+| `encoding.type: "normal"` 등 근사 표기 | `chart_spec.py` 의 `field_validator(mode="before")` 가 alias 정규화 (`normal`→`nominal`, `avg`→`mean`, `hist`→`histogram` 등, 대소문자 무관). 매핑 밖 값은 여전히 ValidationError |
+| histogram + `encoding.color` | `_render_histogram` 이 그룹별 시리즈로 분리 (이전엔 color 무시 → 전체 데이터 단일 시리즈로 합쳐져 레전드 미구분). 빈 경계는 전체 범위에서 1회 계산해 그룹이 공유 — 그룹 간 비교 가능 |
+| `extra_option.legend.data` 임의 라벨 | deep-merge 후 `_restore_mismatched_legend` 가 실존 시리즈 이름과 교집합만 유지, 전부 어긋나면 시리즈 이름으로 복원 (ECharts 는 series.name 불일치 레전드 항목을 표시하지 않음) |
+
+`display_chart` 의 ValidationError 회신은 첫 오류만이 아니라 최대 3건을 포함한다
+(`_SPEC_ERROR_DETAIL_LIMIT`) — 오류 하나 고칠 때마다 재호출하는 낭비 방지.
+도구 description 에도 "color 는 long 형식 전제, wide 컬럼은 unpivot, legend.data
+직접 작성 금지" 가이드를 추가해 우회 라운드트립 자체를 줄인다.
+
+테스트: `backend/tests/test_chart_renderer.py` (histogram color·legend 보정),
+`backend/tests/test_display_chart_spec.py` (alias·포아송 e2e 회귀)
+
+---
+
 ## 에러 메시지 안전화 (F12)
 
 - `run_turn()` 최상위 `except Exception`: `str(exc)` → `f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."` — API 키·URL 노출 방지.

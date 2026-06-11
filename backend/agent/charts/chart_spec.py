@@ -17,11 +17,52 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 EncodingType = Literal["quantitative", "nominal", "temporal"]
 MarkType = Literal["bar", "line", "scatter", "box", "histogram", "heatmap", "ecdf"]
 AggregateFn = Literal["count", "mean", "sum", "min", "max"]
+
+# 실 LLM 이 자주 쓰는 근사 표기를 정식 값으로 정규화하는 관용 매핑 (Postel's law).
+# 사소한 표기 차이('normal' 등)가 ValidationError → self-correct 라운드트립으로
+# 반복 예산 1회를 태우는 것을 막는다. 의미가 모호한 값은 매핑하지 않고
+# Pydantic Literal 검증 에러에 맡긴다 (진짜 오류는 그대로 드러나야 함).
+_ENCODING_TYPE_ALIASES: dict[str, str] = {
+    "normal": "nominal",
+    "category": "nominal",
+    "categorical": "nominal",
+    "ordinal": "nominal",
+    "string": "nominal",
+    "numeric": "quantitative",
+    "number": "quantitative",
+    "value": "quantitative",
+    "float": "quantitative",
+    "int": "quantitative",
+    "integer": "quantitative",
+    "time": "temporal",
+    "date": "temporal",
+    "datetime": "temporal",
+    "timestamp": "temporal",
+}
+
+_MARK_ALIASES: dict[str, str] = {
+    "hist": "histogram",
+    "point": "scatter",
+    "boxplot": "box",
+}
+
+_AGGREGATE_ALIASES: dict[str, str] = {
+    "avg": "mean",
+    "average": "mean",
+}
+
+
+def _normalize_alias(value: Any, aliases: dict[str, str]) -> Any:
+    """문자열 값을 소문자 정규화 후 alias 매핑을 적용한다 (비문자열은 그대로)."""
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower()
+    return aliases.get(normalized, normalized)
 
 
 class EncodingChannel(BaseModel):
@@ -34,6 +75,16 @@ class EncodingChannel(BaseModel):
     aggregate: Annotated[AggregateFn | None, "선택적 집계 함수"] = None
     bin: Annotated[bool, "histogram 의 x: 빈 분할 활성화"] = False
     title: Annotated[str, "축/범례 레이블 (생략 시 field 명)"] = ""
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _coerce_type_alias(cls, value: Any) -> Any:
+        return _normalize_alias(value, _ENCODING_TYPE_ALIASES)
+
+    @field_validator("aggregate", mode="before")
+    @classmethod
+    def _coerce_aggregate_alias(cls, value: Any) -> Any:
+        return _normalize_alias(value, _AGGREGATE_ALIASES)
 
 
 class Encoding(BaseModel):
@@ -73,6 +124,11 @@ class ChartV1(BaseModel):
         dict[str, Any] | None,
         "ECharts option 추가 필드 (기본 option 에 deep-merge). 선택 사항.",
     ] = None
+
+    @field_validator("mark", mode="before")
+    @classmethod
+    def _coerce_mark_alias(cls, value: Any) -> Any:
+        return _normalize_alias(value, _MARK_ALIASES)
 
     @model_validator(mode="after")
     def _default_histogram_bin(self) -> ChartV1:

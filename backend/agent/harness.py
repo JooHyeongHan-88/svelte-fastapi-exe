@@ -105,6 +105,36 @@ _TERMINAL_STATUSES: frozenset[TodoStatus] = frozenset(
     {TodoStatus.COMPLETED, TodoStatus.FAILED, TodoStatus.SKIPPED}
 )
 
+# 남은 provider 호출(반복 상한·turn budget 중 작은 쪽)이 이 수 이하로 떨어지면
+# LLM 에 마무리(wind-down)를 지시한다. 2 = '마지막 도구 실행 1회 + 최종 요약 1회'
+# — 이미 저장된 산출물을 display_* 로 사용자에게 노출할 최소 여유.
+_WIND_DOWN_REMAINING_CALLS = 2
+
+
+def _build_wind_down_message(remaining_calls: int) -> str:
+    """반복 예산 임박 시 LLM 컨텍스트에 주입할 마무리 지시문을 생성한다 (R7).
+
+    실패 없이 진행 중인데 예산만 소진돼 사용자 노출 단계(display_*)가 hard-cut
+    되는 것을 막는다. fallback 메시지와 동일하게 turn-local — 히스토리 비영속.
+
+    Args:
+        remaining_calls: 이번 호출을 포함해 남은 provider 호출 수.
+
+    Returns:
+        role=user 로 주입할 [System] 지시문.
+    """
+    if remaining_calls <= 1:
+        return (
+            "[System] 이번 응답이 이 턴의 마지막 provider 호출입니다. 도구를 호출하지 "
+            "말고, 지금까지 완료한 작업과 산출물을 정리한 최종 답변을 작성하세요."
+        )
+    return (
+        f"[System] 이 턴의 반복 예산이 거의 소진되었습니다 (남은 호출 {remaining_calls}회). "
+        "새로운 분석·데이터 생성을 시작하지 마세요. 이미 저장된 산출물이 있으면 지금 즉시 "
+        "display_chart/display_markdown 등으로 사용자에게 표시하고 complete_todo 로 plan 을 "
+        "정리한 뒤, 다음 응답에서 도구 호출 없이 최종 요약을 작성하세요."
+    )
+
 
 # ---------------------------------------------------------------------------
 # TurnBudget — 한 사용자 턴 단위 provider 호출 상한 + 연속 호출 가드
@@ -416,9 +446,25 @@ async def _run_agent_turn(
     assistant_buffer: list[str] = []
     pending_tool_calls: list[ToolCall] = []
     history_calls: set[tuple[str, str, str]] = set()
+    wind_down_notified = False
 
     for iteration in range(max_iterations):
-        del iteration
+        # R7: 남은 호출 여유가 임계 이하로 떨어지면 상한 도달로 hard-cut 되기 전에
+        # 마무리를 지시한다 — 진행은 성공 중인데 예산만 소진돼 사용자 노출 단계
+        # (display_*)가 잘리는 시나리오 방지. messages 에만 추가 (히스토리 비영속).
+        remaining_calls = min(
+            max_iterations - iteration, budget.max_calls - budget.used
+        )
+        if not wind_down_notified and 0 < remaining_calls <= _WIND_DOWN_REMAINING_CALLS:
+            messages.append(
+                Message(role="user", content=_build_wind_down_message(remaining_calls))
+            )
+            wind_down_notified = True
+            logger.info(
+                "agent %s wind-down notified (remaining_calls=%d)",
+                agent_id,
+                remaining_calls,
+            )
 
         if not budget.try_consume():
             yield ErrorEvent(

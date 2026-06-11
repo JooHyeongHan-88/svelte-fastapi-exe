@@ -57,6 +57,10 @@ _DATA_URI_SIZE_WARN_BYTES = 4_000_000
 _PARQUET_HINT_LIMIT = 5
 _MANIFEST_SCAN_LIMIT = 30
 
+# spec ValidationError 회신에 포함할 상세 오류 수 — 첫 건만 보여주면 LLM 이
+# 오류를 하나 고칠 때마다 재호출을 반복한다 (반복 예산 낭비).
+_SPEC_ERROR_DETAIL_LIMIT = 3
+
 
 def _resolve_image_source(source: str) -> tuple[str, str | None]:
     """소스 문자열을 프론트엔드가 사용할 URL 로 정규화한다.
@@ -250,6 +254,12 @@ async def display_image(
         "box 는 y 필수, heatmap 은 x·y·color 모두 필수(color.type=quantitative), "
         "ecdf 는 quantitative x. "
         "encoding.type: quantitative (수치축) | nominal (범주축) | temporal (시간축). "
+        "encoding.color 로 그룹(legend)을 나누려면 데이터가 long 형식이어야 한다 — "
+        "그룹 컬럼 1개 + 값 컬럼 1개 (예: columns=[group, value]). 그룹별 wide 컬럼"
+        "(group_a/group_b/... 식 컬럼 분리)은 parquet 저장 전에 unpivot 으로 변환하라. "
+        "histogram·ecdf·bar·line·scatter 모두 color 를 주면 그룹별 시리즈가 자동 분리되고 "
+        "레전드 이름은 color.field 컬럼의 실제 값에서 생성된다 (extra_option 으로 legend.data "
+        "를 따로 적지 말 것). "
         "data.source 는 같은 폴더의 parquet 파일명(상대) 또는 이전 턴 parquet 을 재사용할 때 "
         "'result/...' 전체 상대 경로. "
         "When NOT to use: 데이터가 텍스트/표 형태일 때(그 경우 save_artifact + display_markdown)."
@@ -290,10 +300,14 @@ async def display_chart(
     try:
         spec = ChartSpecV1.model_validate(raw_spec)
     except ValidationError as exc:
+        details = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+            for err in exc.errors()[:_SPEC_ERROR_DETAIL_LIMIT]
+        )
         return ToolResult(
             content=(
-                f"[display_chart 오류] ChartSpecV1 검증 실패: {exc.error_count()} 건. "
-                f"첫 오류: {exc.errors()[0]['msg']} at {'.'.join(str(p) for p in exc.errors()[0]['loc'])}"
+                f"[display_chart 오류] ChartSpecV1 검증 실패 ({exc.error_count()}건): "
+                f"{details}"
             ),
             is_error=True,
         )

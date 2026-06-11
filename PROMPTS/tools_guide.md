@@ -21,11 +21,13 @@
 
 - `display_image`·`display_markdown` 은 디스크에 **이미 존재하는 파일**만 표시할 수 있다. 없으면 먼저 `save_artifact` 또는 다른 저장 도구로 만든다.
 - `display_chart` 는 디스크의 spec 파일 기반이다. 표준 체인: `save_artifact(kind='parquet', source='$df')` → `save_artifact(kind='json', filename='*.spec.json', content=<ChartSpecV1>)` → `display_chart(source=반환된 spec 경로)`. 이전 턴 parquet 을 재사용하려면 spec 의 `data.source` 에 `# Session Artifacts` 섹션의 `result/...` 전체 경로를 그대로 적는다.
+- **그룹(legend) 분리 차트는 long 형식 데이터가 전제다**: `encoding.color` 를 쓰려면 parquet 에 그룹 컬럼 1개 + 값 컬럼 1개가 있어야 한다 (예: columns=[`group`, `value`]). 그룹별 wide 컬럼(`a_5`/`a_8`/... 식 분리)은 차트로 그룹 구분이 불가능하므로 **parquet 저장 전에** long 으로 unpivot 한다. 레전드 이름은 `color.field` 값에서 자동 생성된다 — `extra_option` 에 `legend.data` 를 직접 적지 않는다.
 - 차트 타입 선택 가이드:
   - 두 변수 상관관계 → `scatter`
   - 시간에 따른 추세 → `line`
   - 범주 간 크기 비교 → `bar`
-  - 분포 형태 → `histogram` 또는 `box`
+  - 분포 형태 → `histogram` 또는 `box` (둘 다 `color` 로 그룹별 분포 비교 가능)
+  - 누적분포 비교 → `ecdf`
   - 2차원 밀도 → `heatmap`
 
 ## 4. SKILL 의미 기반 활성화 (activate_skill)
