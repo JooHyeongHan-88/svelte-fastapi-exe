@@ -8,7 +8,8 @@ const KEY_ARTIFACT_PANEL_OPEN = "chat:artifactPanelOpen:v1";
 const KEY_SIDEBAR_WIDTH = "chat:sidebarWidth:v1";
 
 const ARTIFACT_WIDTH_MIN = 320;
-const ARTIFACT_WIDTH_MAX = 800;
+// 데이터 칩 head 테이블처럼 와이드 콘텐츠를 위해 1000 — viewport 60% 캡은 별도 유지.
+const ARTIFACT_WIDTH_MAX = 1000;
 const ARTIFACT_WIDTH_DEFAULT = 420;
 
 const SIDEBAR_WIDTH_MIN = 180;

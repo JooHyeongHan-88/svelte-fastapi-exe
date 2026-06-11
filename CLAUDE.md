@@ -39,6 +39,7 @@ uv run python -m pytest backend/tests/test_artifact_tool.py -v         # save_ar
 uv run python -m pytest backend/tests/test_artifact_parquet.py -v      # parquet 파이프라인
 uv run python -m pytest backend/tests/test_artifact_io.py -v           # list_artifacts·load_artifact·경로 해석
 uv run python -m pytest backend/tests/test_artifact_manifest.py -v     # 세션 manifest·Session Artifacts 섹션
+uv run python -m pytest backend/tests/test_artifact_preview_api.py -v  # /api/artifact preview·csv (데이터 칩)
 uv run python -m pytest backend/tests/test_harness_timeout.py -v       # _execute_tool (async)
 uv run python -m pytest backend/tests/test_harness_subagent.py -v      # 서브에이전트 격리
 uv run python -m pytest backend/tests/test_harness_parallel.py -v      # 서브에이전트 병렬 디스패치

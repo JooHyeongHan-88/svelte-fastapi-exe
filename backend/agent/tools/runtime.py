@@ -160,7 +160,7 @@ def _snapshot_slot_files(slot: Path | None) -> frozenset[str]:
 
 def _register_new_slot_artifacts(
     slot: Path | None, pre_existing: frozenset[str]
-) -> None:
+) -> list[dict[str, Any]]:
     """exec_code 가 artifact_dir() 로 직접 쓴 신규 파일을 세션 manifest 에 등록한다.
 
     save_artifact 를 거치지 않은 파일은 manifest 에 기록되지 않아 다음 턴의
@@ -171,9 +171,14 @@ def _register_new_slot_artifacts(
     Args:
         slot: 이번 실행에서 쓰인 턴 슬롯 (미사용이면 None).
         pre_existing: 실행 전 슬롯에 이미 있던 파일명 집합.
+
+    Returns:
+        등록한 신규 파일 메타 목록 (``{path, kind, size, filename}``) —
+        ToolResult.data.new_artifacts 로 프론트에 전달돼 데이터 칩이 된다.
     """
     if slot is None or not slot.exists():
-        return
+        return []
+    registered: list[dict[str, Any]] = []
     for file in sorted(slot.iterdir()):
         if not file.is_file() or file.name in pre_existing:
             continue
@@ -189,15 +194,25 @@ def _register_new_slot_artifacts(
             size = file.stat().st_size
         except OSError:
             size = 0
+        kind = file.suffix.lstrip(".")
         append_manifest_entry(
             {
                 "ts": slot.name,
                 "path": relative_path,
-                "kind": file.suffix.lstrip("."),
+                "kind": kind,
                 "size": size,
                 "description": "exec_code 생성",
             }
         )
+        registered.append(
+            {
+                "path": relative_path,
+                "kind": kind,
+                "size": size,
+                "filename": file.name,
+            }
+        )
+    return registered
 
 
 def _format_variable_summary(value: Any, *, max_rows: int = 5) -> str:
@@ -640,7 +655,9 @@ async def exec_code(
             )
 
     # artifact_dir() 로 직접 쓴 파일을 manifest 에 등록 — 다음 턴 재발견 보장.
-    _register_new_slot_artifacts(artifact_dir_provider.used_slot, pre_slot_files)
+    new_artifacts = _register_new_slot_artifacts(
+        artifact_dir_provider.used_slot, pre_slot_files
+    )
 
     # 신규 또는 reference 가 바뀐 변수만 namespace 에 저장.
     # 모듈/함수/클래스는 직렬화 비용 대비 가치가 낮아 제외.
@@ -694,6 +711,7 @@ async def exec_code(
             "stdout": stdout_text,
             "saved": [r.name for r in saved],
             "skipped": skipped,
+            "new_artifacts": new_artifacts,
         },
     )
 

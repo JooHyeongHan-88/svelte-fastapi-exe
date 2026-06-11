@@ -11,11 +11,11 @@ import { postChartFilter, getChartFilterState } from "./api.js";
 /**
  * 새 아티팩트 칩 객체를 만든다 (메시지에 직접 임베드할 형태).
  *
- * @param {"image"|"chart"|"markdown"} kind
- * @param {object} payload  - ToolResultEvent.data (kind 필드 포함)
+ * @param {"image"|"chart"|"markdown"|"data"} kind
+ * @param {object} payload  - ToolResultEvent.data (data 칩은 {path, filename, ...})
  * @returns {{
  *   id: string,
- *   kind: "image"|"chart"|"markdown",
+ *   kind: "image"|"chart"|"markdown"|"data",
  *   label: string,
  *   payload: object,
  *   createdAt: number,
@@ -50,8 +50,12 @@ export function openArtifact(id) {
  * 칩이 가리키는 산출물의 'result/...' 참조 경로를 돌려준다 (없으면 null).
  *
  * 백엔드 load_artifact / display_* 도구가 그대로 해석할 수 있는 형태로 환원한다.
- * data URI·외부 URL·workspace/assets 경로는 load_artifact 대상이 아니므로 null
- * (호출부가 '참조' 버튼을 숨긴다).
+ * data URI·외부 URL·workspace/assets 경로는 load_artifact 대상이 아니므로 제외하고,
+ * 인용 가능한 경로가 하나도 없으면 null (호출부가 '참조' 버튼을 숨긴다).
+ * 다중 이미지 갤러리는 인용 가능한 모든 항목을 줄바꿈으로 이어 반환한다 —
+ * 첫 항목만 반환하면 나머지가 조용히 누락돼 "이 산출물로 작업해줘" 의도를 깬다.
+ * 구분자가 줄바꿈인 이유: 세션 폴더명이 사용자 메시지 제목 기반이라 경로 자체에
+ * 공백이 들어갈 수 있어 공백 구분은 경로 경계가 모호해진다.
  *
  * @param {{kind:string, payload:object}} chip
  * @returns {string|null}
@@ -60,6 +64,7 @@ export function artifactRefPath(chip) {
   if (!chip) return null;
   if (chip.kind === "chart") {
     // display_chart 가 ToolResult.data.spec 에 'result/...charts.spec.json' 을 영속.
+    // parquet 은 spec 의 data.source 로 연계 발견되므로 spec 하나가 인용 단위.
     const spec = chip.payload?.spec;
     return typeof spec === "string" && spec.startsWith("result/") ? spec : null;
   }
@@ -68,7 +73,13 @@ export function artifactRefPath(chip) {
   }
   if (chip.kind === "image") {
     const items = Array.isArray(chip.payload?.items) ? chip.payload.items : [];
-    return _resultUrlToRel(items[0]?.src);
+    const paths = items.map((it) => _resultUrlToRel(it?.src)).filter(Boolean);
+    return paths.length > 0 ? paths.join("\n") : null;
+  }
+  if (chip.kind === "data") {
+    // save_artifact / exec_code 가 반환한 'result/...' 경로가 payload 에 그대로 영속.
+    const path = chip.payload?.path;
+    return typeof path === "string" && path.startsWith("result/") ? path : null;
   }
   return null;
 }
@@ -174,6 +185,15 @@ function _artifactLabel(kind, payload) {
   }
   if (kind === "markdown") {
     return payload.title || "마크다운 문서";
+  }
+  if (kind === "data") {
+    const name = payload?.filename || "데이터";
+    // save_artifact 경유는 rows/columns 를 알지만 exec_code 직접 쓰기는 모른다 —
+    // 그 경우 패널의 preview fetch 가 정확한 형태를 보여준다.
+    if (Number.isFinite(payload?.rows) && Number.isFinite(payload?.columns)) {
+      return `${name} · ${payload.rows.toLocaleString()}×${payload.columns}`;
+    }
+    return name;
   }
   return "아티팩트";
 }

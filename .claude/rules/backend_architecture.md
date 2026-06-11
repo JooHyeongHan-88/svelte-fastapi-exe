@@ -180,7 +180,18 @@ run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)
 
 ### 세션 manifest + Session Artifacts 프롬프트 섹션
 
-`save_artifact` 성공 시 세션 루트의 `_artifacts.jsonl` 에 한 줄 append (`append_manifest_entry`, OSError 는 삼킴). `exec_code` 가 `artifact_dir()` 로 직접 쓴 파일도 실행 전/후 슬롯 diff 로 자동 등록된다 (`_register_new_slot_artifacts` — save_artifact 선행분·파생물 `DERIVED_ARTIFACT_FILENAMES` 제외, → harness_resilience.md R6). `run_turn` 의 시스템 프롬프트 합성이 `_render_session_artifacts_section` 으로 최근 N개(기본 10) 산출물을 `# Session Artifacts` 섹션으로 주입한다 (manifest 우선, 없으면 디스크 스캔 fallback). **세션 복원이 tool 메시지를 버려도**(OpenAI 와이어 규약상 고아 tool 메시지 복원 불가) 디스크 manifest 가 진실원천이라 과거 산출물 재발견이 끊기지 않는다.
+`save_artifact` 성공 시 세션 루트의 `_artifacts.jsonl` 에 한 줄 append (`append_manifest_entry`, OSError 는 삼킴). `exec_code` 가 `artifact_dir()` 로 직접 쓴 파일도 실행 전/후 슬롯 diff 로 자동 등록된다 (`_register_new_slot_artifacts` — save_artifact 선행분·파생물 `DERIVED_ARTIFACT_FILENAMES` 제외, → harness_resilience.md R6). 이 diff 의 등록 entry 목록은 `exec_code` 의 `ToolResult.data.new_artifacts` 로도 반환돼 프론트 데이터 칩(parquet) 생성에 쓰인다. `run_turn` 의 시스템 프롬프트 합성이 `_render_session_artifacts_section` 으로 최근 N개(기본 10) 산출물을 `# Session Artifacts` 섹션으로 주입한다 (manifest 우선, 없으면 디스크 스캔 fallback). **세션 복원이 tool 메시지를 버려도**(OpenAI 와이어 규약상 고아 tool 메시지 복원 불가) 디스크 manifest 가 진실원천이라 과거 산출물 재발견이 끊기지 않는다.
+
+### parquet 미리보기·CSV 라우터 (`backend/api/artifact.py`)
+
+프론트 데이터 칩 패널(ArtifactData) 전용 HTTP 경계. 경로 해석은 `resolve_result_path` 로 일원화 (containment + parquet 확장자 검사).
+
+| 엔드포인트 | 동작 |
+|---|---|
+| `GET /api/artifact/preview?path=&rows=10` | head(N) 미리보기 — `scan_parquet` 으로 total_rows 만 집계(전체 로드 없음) + `read_parquet(n_rows)`. NaN/inf → null, 비원시 타입 → str (브라우저 JSON.parse 안전) |
+| `GET /api/artifact/csv?path=` | 전체 데이터 CSV 변환 첨부 응답 — 한글 파일명 대응 RFC 5987 `filename*` |
+
+테스트: `backend/tests/test_artifact_preview_api.py`
 
 ### namespace LRU spill (휘발성 완화)
 

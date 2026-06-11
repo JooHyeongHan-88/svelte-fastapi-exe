@@ -14,8 +14,9 @@
   import ArtifactImage from "./ArtifactImage.svelte";
   import ArtifactChart from "./ArtifactChart.svelte";
   import ArtifactMarkdown from "./ArtifactMarkdown.svelte";
+  import ArtifactData from "./ArtifactData.svelte";
 
-  const KIND_ICON = { image: "🖼️", chart: "📊", markdown: "📝" };
+  const KIND_ICON = { image: "🖼️", chart: "📊", markdown: "📝", data: "🗂️" };
 
   // 활성 세션의 모든 메시지에서 칩을 평탄화 → payload 가 메시지에 영속되어 있으므로
   // 세션 복귀 후에도 동일한 칩 목록을 그대로 복원할 수 있다.
@@ -137,6 +138,8 @@
           <ArtifactChart payload={activeArtifact.payload} />
         {:else if activeArtifact.kind === "markdown"}
           <ArtifactMarkdown payload={activeArtifact.payload} />
+        {:else if activeArtifact.kind === "data"}
+          <ArtifactData payload={activeArtifact.payload} />
         {:else}
           <div class="unknown-kind">알 수 없는 아티팩트 유형</div>
         {/if}

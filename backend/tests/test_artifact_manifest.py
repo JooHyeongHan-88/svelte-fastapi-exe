@@ -165,6 +165,13 @@ def test_exec_code_artifact_dir_files_recorded_in_manifest() -> None:
     assert entries[0]["kind"] == "txt"
     assert entries[0]["description"] == "exec_code 생성"
 
+    # 프론트 데이터 칩 생성용 메타 — ToolResult.data 로도 신규 파일이 노출된다.
+    new_artifacts = result.data["new_artifacts"]
+    assert len(new_artifacts) == 1
+    assert new_artifacts[0]["filename"] == "direct.txt"
+    assert new_artifacts[0]["kind"] == "txt"
+    assert new_artifacts[0]["path"].endswith("direct.txt")
+
 
 def test_exec_code_does_not_rerecord_save_artifact_files() -> None:
     """같은 턴에 save_artifact 가 먼저 만든 파일은 diff 에서 제외 — 중복 기록 없음.
@@ -192,6 +199,10 @@ def test_exec_code_does_not_rerecord_save_artifact_files() -> None:
     assert len(entries) == 2, paths
     assert any(p.endswith("a.md") for p in paths)
     assert any(p.endswith("b.txt") for p in paths)
+
+    # new_artifacts 도 같은 diff 기준 — save_artifact 선행분(a.md)은 제외된다.
+    new_names = [a["filename"] for a in exec_result.data["new_artifacts"]]
+    assert new_names == ["b.txt"]
 
 
 # ---------------------------------------------------------------------------

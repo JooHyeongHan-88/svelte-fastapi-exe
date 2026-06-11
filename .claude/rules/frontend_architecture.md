@@ -31,6 +31,9 @@ components/
   ArtifactPanel.svelte  우측 아티팩트 패널 — 탭 바(칩) + 활성 칩 콘텐츠 렌더링
   ArtifactImage.svelte  이미지 갤러리 — payload.items[] 기반, IntersectionObserver lazy load
   ArtifactChart.svelte  ECharts 그리드 — 페이지당 6개 페이지네이션, {#key page} remount
+  ArtifactData.svelte   parquet 데이터 칩 패널 — GET /api/artifact/preview 로 head(10) 테이블
+                        (횡 스크롤·sticky th·dtype 부기) + CSV 다운로드(showSaveFilePicker
+                        저장 위치 선택, 미지원 시 앵커 다운로드 폴백)
   ChartCell.svelte      단일 ECharts 인스턴스 자가 관리 — onMount init·onDestroy dispose·ResizeObserver
   ArtifactLightbox.svelte  전체화면 확대 모달 — drag-to-resize 핸들(우하단), 좌우 키 네비게이션,
                            filter 툴바(brush Filter/Filter All/Undo/Redo/Reset + Legend 토글),
@@ -261,9 +264,18 @@ ArtifactChart (그리드)        ArtifactLightbox (라이트박스)
 
 아티팩트 칩(메시지 버블)과 패널 헤더에 보조 버튼이 있어, 산출물의 `result/...` 경로를 입력창에 삽입한다 — "이 산출물로 작업해줘" 류 후속 요청을 클릭으로 지정하는 UX. 백엔드 `load_artifact`/`display_*` 가 그대로 해석하는 경로이므로 [backend_architecture.md](backend_architecture.md)의 산출물 재발견 도구와 직결된다.
 
-- `artifactRefPath(chip)` — 칩 종류별 참조 경로 환원: chart는 `payload.spec`(이미 `result/...`), markdown/image는 `/result/...` URL → `result/...` (data URI·외부 URL·workspace/assets는 `null` → 버튼 숨김).
+- `artifactRefPath(chip)` — 칩 종류별 참조 경로 환원: chart는 `payload.spec`(이미 `result/...`; parquet 은 spec 의 `data.source` 로 연계 발견되므로 spec 하나가 인용 단위), markdown은 `/result/...` URL → `result/...`, data는 `payload.path` 그대로. image는 **인용 가능한 모든 items 경로를 줄바꿈으로 이어 반환** (다중 이미지 갤러리 전체 인용; 경로에 공백이 들어갈 수 있어 공백 구분은 모호). data URI·외부 URL·workspace/assets 는 제외, 인용 가능한 경로가 하나도 없으면 `null` → 버튼 숨김.
 - `insertArtifactReference(chipId)` — `ui.composerSeed` 에 경로를 써넣는다. `MessageBubble` 의 칩은 `event.stopPropagation()` 으로 패널 열기(`openArtifact`)와 분리한 별도 `@` 버튼, `ArtifactPanel` 은 헤더의 `@ 참조` 버튼.
 - **Composer seed 는 replace→append 로 변경됨**: `value ? value.trimEnd() + " " + seed : seed`. 기존 입력 뒤에 공백으로 이어 붙는다. `rewindToMessage` 는 빈 composer 에서 발동하므로 동작 불변.
+
+## 데이터 칩 (kind: "data") — parquet 중간 산출물 인용
+
+전처리 중간 데이터(parquet)가 디스크에 저장될 때 칩을 만들어 후속 턴에서 인용할 수 있게 한다.
+
+- **생성 경로** (`chatActions.svelte.js` `_dataArtifactPayloads`): ① `save_artifact` 성공 + `data.kind === "parquet"` → payload `{path, filename, size, rows, columns}`. ② `exec_code` 결과의 `data.new_artifacts[]` 중 parquet → `{path, filename, size}` (rows/cols 는 패널 preview fetch 가 보충). parquet 만 칩이 된다 — 중간 데이터 영속 포맷 통일 방향.
+- **자동 오픈 없음**: display_* 칩과 달리 패널을 열지 않는다 (`addChip(..., { open: false })`) — 전처리 중 빈번한 중간 저장마다 패널이 튀는 것을 방지.
+- **패널 콘텐츠**: `ArtifactData.svelte` 가 `GET /api/artifact/preview` 로 head(10) 테이블 + 메타(rows×cols·size·경로)를 렌더. CSV 버튼은 `GET /api/artifact/csv` 를 showSaveFilePicker(저장 위치 선택) 또는 앵커 다운로드로 저장.
+- 패널 리사이즈 상한 `ARTIFACT_WIDTH_MAX = 1000` (storage.js) — 와이드 테이블 대응. viewport 60% 캡은 별도 유지.
 
 ## 테마 시스템
 

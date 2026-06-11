@@ -95,6 +95,35 @@ export async function postChartFilter(body) {
 }
 
 /**
+ * parquet 산출물의 head(N) 미리보기 + 메타데이터를 조회한다 (데이터 칩 패널).
+ *
+ * @param {string} path  parquet 산출물 경로 (result/...)
+ * @returns {Promise<{
+ *   path: string, filename: string, size: number, total_rows: number,
+ *   schema: Array<{name: string, dtype: string}>,
+ *   head: { columns: string[], rows: any[][] },
+ * }>}
+ */
+export async function getArtifactPreview(path) {
+  const r = await fetch(`/api/artifact/preview?path=${encodeURIComponent(path)}`);
+  if (!r.ok) {
+    const detail = await r.text().catch(() => "");
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+/**
+ * parquet 전체를 CSV 로 내려받는 엔드포인트 URL (데이터 칩 다운로드 버튼).
+ *
+ * @param {string} path  parquet 산출물 경로 (result/...)
+ * @returns {string}
+ */
+export function artifactCsvUrl(path) {
+  return `/api/artifact/csv?path=${encodeURIComponent(path)}`;
+}
+
+/**
  * 라이트박스 오픈 시 undo/redo 초기 상태를 조회한다 (재렌더 없음).
  *
  * @param {string} spec  charts.spec.json 경로 (result/...)

@@ -315,12 +315,16 @@ export async function sendMessage(text) {
         const msg = s.messages.at(-1);
         if (!msg || msg.role !== "assistant") return;
 
-        // 아티팩트 칩 추가 콜백 — 항상 message 레벨 (서브에이전트 내부 도구도 동일)
-        const addChip = (toolEv) => {
-          const chip = makeArtifactChip(toolEv.data.kind, toolEv.data);
+        // 아티팩트 칩 추가 콜백 — 항상 message 레벨 (서브에이전트 내부 도구도 동일).
+        // open: 시각화 칩은 패널 자동 오픈, 데이터 칩은 칩만 추가 (중간 저장마다
+        // 패널이 튀지 않도록).
+        const addChip = (kind, payload, { open = true } = {}) => {
+          const chip = makeArtifactChip(kind, payload);
           msg.artifactChips = [...(msg.artifactChips ?? []), chip];
-          ui.activeArtifactId = chip.id;
-          ui.artifactPanelOpen = true;
+          if (open) {
+            ui.activeArtifactId = chip.id;
+            ui.artifactPanelOpen = true;
+          }
         };
 
         // 최상위 scope 의 activeSkills 세터
@@ -667,6 +671,32 @@ function _isArtifactToolResult(ev) {
   );
 }
 
+/**
+ * parquet 중간 산출물 → 데이터 칩 payload 목록.
+ * save_artifact 직접 저장과 exec_code 의 artifact_dir() 직접 쓰기(new_artifacts)
+ * 양쪽을 커버한다. parquet 만 칩이 된다 (중간 데이터 영속 포맷 통일 방향).
+ *
+ * @param {{name?: string, is_error?: boolean, data?: object}} ev tool_result 이벤트
+ * @returns {Array<{path: string, filename?: string, size?: number, rows?: number, columns?: number}>}
+ */
+function _dataArtifactPayloads(ev) {
+  if (ev.is_error || !ev.data) return [];
+  if (
+    ev.name === "save_artifact" &&
+    ev.data.kind === "parquet" &&
+    typeof ev.data.path === "string"
+  ) {
+    const { path, filename, size, rows, columns } = ev.data;
+    return [{ path, filename, size, rows, columns }];
+  }
+  if (ev.name === "exec_code" && Array.isArray(ev.data.new_artifacts)) {
+    return ev.data.new_artifacts
+      .filter((a) => a && a.kind === "parquet" && typeof a.path === "string")
+      .map(({ path, filename, size }) => ({ path, filename, size }));
+  }
+  return [];
+}
+
 // ---------- segments 헬퍼 ----------
 
 /** 짧은 고유 ID 생성 (세그먼트 key 용). */
@@ -733,7 +763,7 @@ function _findSubagentForEvent(segments, ev) {
  * Args:
  *   segments: 누적 대상 배열 (in-place 변경)
  *   ev: 이벤트 객체 — { type, ...payload }
- *   addArtifactChip: 아티팩트 칩 추가 콜백 (ev) => void | null
+ *   addArtifactChip: 아티팩트 칩 추가 콜백 (kind, payload, {open}) => void | null
  *   setActiveSkills: 해당 scope 의 activeSkills 갱신 (skills[]) => void | null
  */
 function _applyEvent(segments, ev, addArtifactChip, setActiveSkills) {
@@ -779,8 +809,13 @@ function _applyEvent(segments, ev, addArtifactChip, setActiveSkills) {
           segments[i].status = ev.is_error ? "error" : "ok";
           segments[i].detail = ev.result ?? null;
           segments[i].data = ev.data ?? null;
-          if (_isArtifactToolResult(ev) && addArtifactChip) {
-            addArtifactChip(ev);
+          if (addArtifactChip) {
+            if (_isArtifactToolResult(ev)) {
+              addArtifactChip(ev.data.kind, ev.data, { open: true });
+            }
+            for (const payload of _dataArtifactPayloads(ev)) {
+              addArtifactChip("data", payload, { open: false });
+            }
           }
           break;
         }

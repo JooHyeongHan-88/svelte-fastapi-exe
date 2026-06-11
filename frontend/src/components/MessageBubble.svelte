@@ -15,7 +15,7 @@
   import { formatAbsoluteTime, formatDuration } from "../lib/format.js";
   import TurnStatus from "./TurnStatus.svelte";
 
-  const ARTIFACT_ICON = { image: "🖼️", chart: "📊" };
+  const ARTIFACT_ICON = { image: "🖼️", chart: "📊", data: "🗂️" };
 
   let { message } = $props();
 
