@@ -20,6 +20,9 @@
 
 ## App 생명주기 (EXE 기동 시)
 
+0. `core.server_socket.create_server_socket()` → APP_PORT 또는 APP_NAME 해시(47100–48999) 기반 고정 포트에 바인딩.  
+   같은 앱이 이미 실행 중이면 `ServerAlreadyRunning` 예외 → 기존 인스턴스 탭 열고 `sys.exit(0)` (단일 인스턴스).  
+   포트 점유 시 +1..+4 후보 체인 자동 폴백. 전수 실패 시 동적 포트 최후수단.
 1. `backend/main.py` → `uvicorn.Config + Server` 생성, `browser.server`에 보관  
    (Windows `os.kill(SIGTERM)`은 lifespan shutdown을 실행하지 않으므로 `server.should_exit = True` 경로만 사용)
 2. watchdog + open_browser 데몬 스레드 시작 → `server.run()`
@@ -61,8 +64,9 @@
 
 - **frozen(EXE)** 에서만 활성. dev는 Vite proxy 때문에 origin이 달라 자동 패스.
 - `Origin` 헤더 있으면 `ALLOWED_ORIGIN`(`http://{HOST}:{실제 바인딩 포트}`)과 일치 확인.
-  포트는 기동 시 OS 가 동적 할당하므로(`create_server_socket` → `set_runtime_port`),
+  포트는 `core.server_socket.create_server_socket()` → `set_runtime_port()`로 기동 시 갱신되므로,
   `deps.py` 는 import 스냅샷이 아니라 `config.ALLOWED_ORIGIN` 을 매 요청 참조한다.
+  단일 인스턴스 프로브(`_probe_same_app`)도 Origin/sec-fetch-site 없이 stdlib urllib 로 요청해 이 가드를 통과한다.
 - 없으면 `sec-fetch-site`가 `same-origin` / `none` 이어야 통과
 
 ---

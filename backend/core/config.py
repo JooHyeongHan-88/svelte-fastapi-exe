@@ -1,5 +1,4 @@
 import os
-import socket
 import sys
 from pathlib import Path
 
@@ -48,22 +47,20 @@ ASSETS_DIR = WEB_DIR / "assets"
 # 불가"를 보장하는 보안 경계다. 0.0.0.0 등으로 바꾸면 LAN 에 노출되는 footgun 이 되므로
 # Origin 가드와 함께 로컬 전용을 강제한다.
 #
-# 포트는 고정하지 않는다. 사용자 PC 의 다른 프로세스가 특정 포트를 점유하고 있어도
-# 충돌하지 않도록, 기동 시 OS 가 빈 포트를 할당하게 한다 (create_server_socket).
-#   - frozen EXE: port 0 바인딩 → OS 가 임의의 빈 포트 할당
-#   - dev:        DEV_PORT 고정 — Vite dev server(vite.config.js)가 /api 를 이 포트로
-#                 프록시하므로 dev 에서는 반드시 사전 합의된 고정값이어야 한다.
-#                 충돌 시 .env 의 APP_DEV_PORT 한 값으로 양쪽(여기 + vite.config.js)을 맞춘다.
+# frozen EXE 는 APP_PORT 또는 APP_NAME 해시(47100–48999)로 결정된 고정 포트를 쓴다.
+# 고정 포트로 localStorage origin 이 실행마다 일정해져 대화 기록이 보존된다.
+# 같은 포트가 점유 중이면 +1..+4 후보 체인으로 폴백한다 (core.server_socket).
+# dev 는 Vite dev server 가 /api 를 이 포트로 프록시하므로 DEV_PORT 고정.
 # ---------------------------------------------------------------------------
 
 HOST: str = "127.0.0.1"
 
 # dev 백엔드 포트. vite.config.js 가 같은 APP_DEV_PORT 를 읽어 프록시 타겟을 맞춘다.
-# frozen 에서는 무시된다(OS 가 동적 할당). 기본 8765, 충돌 시에만 .env 에서 변경.
+# frozen 에서는 무시된다(고정 포트는 core.server_socket 이 결정). 기본 8765, 충돌 시에만 .env 에서 변경.
 DEV_PORT: int = int(os.environ.get("APP_DEV_PORT", "8765"))
 
 # 실제 바인딩된 포트로 런타임에 갱신된다. import 시점 기본값은 dev 고정 포트이며,
-# frozen 은 main.py 가 create_server_socket() 으로 빈 포트를 잡은 뒤 덮어쓴다.
+# main.py 가 create_server_socket() 안의 set_runtime_port() 로 덮어쓴다.
 # frontend 는 절대 URL 을 박지 않고 상대 경로(/api/...)만 쓰므로, 자신을 띄워준
 # origin(=실제 포트)으로 자동 따라온다 → 정적 빌드 재생성이 필요 없다.
 PORT: int = DEV_PORT
@@ -82,26 +79,6 @@ def set_runtime_port(port: int) -> None:
     global PORT, ALLOWED_ORIGIN
     PORT = port
     ALLOWED_ORIGIN = f"http://{HOST}:{PORT}"
-
-
-def create_server_socket() -> socket.socket:
-    """uvicorn 에 그대로 넘길 바인딩된 리스닝 소켓을 생성한다.
-
-    frozen 에서는 port 0 으로 바인딩해 OS 가 빈 포트를 즉시 할당하게 한다. 우리가 직접
-    바인딩한 소켓을 uvicorn 에 전달하므로, "빈 포트를 찾은 뒤 다시 bind 하는" 사이에
-    다른 프로세스가 그 포트를 가로채는 경합(TOCTOU)이 발생하지 않는다.
-
-    바인딩 직후 set_runtime_port() 로 실제 포트를 전역에 반영한다.
-
-    Returns:
-        socket.socket: (HOST, 실제 포트)에 바인딩된 소켓. server.run(sockets=[...]) 에 전달한다.
-    """
-    target_port = 0 if getattr(sys, "frozen", False) else DEV_PORT
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((HOST, target_port))
-    set_runtime_port(sock.getsockname()[1])
-    return sock
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 import mimetypes
+import sys
 import threading
+import webbrowser
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -20,8 +22,8 @@ from core.config import (
     RESULT_DIR,
     WEB_DIR,
     WORKSPACE_DIR,
-    create_server_socket,
 )
+from core.server_socket import ServerAlreadyRunning, create_server_socket
 
 # Windows Python 환경에 따라 mimetypes 레지스트리가 누락된 확장자를 보정한다.
 mimetypes.add_type("application/javascript", ".js")
@@ -100,10 +102,15 @@ if WEB_DIR.exists():
 
 
 if __name__ == "__main__":
-    # 포트를 직접 바인딩한 소켓을 uvicorn 에 넘긴다 (frozen 은 OS 할당 빈 포트).
+    # 포트를 직접 바인딩한 소켓을 uvicorn 에 넘긴다.
     # 실제 포트는 create_server_socket() 안에서 set_runtime_port() 로 전역에 반영되므로
     # open_browser / Origin 가드가 동일 포트를 참조한다.
-    sock = create_server_socket()
+    try:
+        sock = create_server_socket()
+    except ServerAlreadyRunning as exc:
+        # 같은 앱이 이미 실행 중 — 새 서버를 띄우는 대신 기존 탭을 열고 종료한다.
+        webbrowser.open(exc.url)
+        sys.exit(0)
     config = uvicorn.Config(app, timeout_graceful_shutdown=5)
     server = uvicorn.Server(config)
     browser.server = server

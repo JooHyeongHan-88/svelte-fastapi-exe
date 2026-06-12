@@ -95,6 +95,7 @@ a = Analysis(
         'core.browser',
         'core.updater',
         'core.version',
+        'core.server_socket',
         'agent',
         'agent.config',
         'agent.harness',

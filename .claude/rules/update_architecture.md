@@ -23,7 +23,8 @@
 ## Release 스크립트 — PowerShell 5.1 주의점
 
 - `param()` 블록은 **반드시 첫 실행문** (앞에 `[Console]::OutputEncoding=` 두면 파싱 에러)
-- JSON·`_version.py`는 **BOM 없는 UTF-8** — `[System.IO.File]::WriteAllText(path, content, (New-Object System.Text.UTF8Encoding $false))` 사용  
+- `latest.json`은 **BOM 없는 UTF-8** — `[System.IO.File]::WriteAllText(path, content, (New-Object System.Text.UTF8Encoding $false))` 사용  
   (`Set-Content -Encoding utf8`은 BOM 붙어 `Invoke-RestMethod` 파싱 실패)
+- `backend/_version.py`는 gitignored 생성물. **App.spec이 Analysis 전에** `tomllib`으로 pyproject.toml 파싱 후 자동 생성한다. release.ps1은 더 이상 이 파일을 쓰지 않는다.
 - `Write-Host` 한글 깨짐 → 스크립트 출력은 영어 유지
 - 저장소 업로드 순서: **EXE 먼저 → latest.json 마지막** (클라이언트가 404 EXE 보지 않도록)
