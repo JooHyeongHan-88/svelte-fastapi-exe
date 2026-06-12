@@ -34,7 +34,7 @@ function s_boot(pres) {
   // 좌: 기동 7단계
   s.addText("EXE 더블클릭 → 첫 화면까지  (main.py)", { x: 0.7, y: 1.7, w: 6, h: 0.32, fontFace: T.KR, fontSize: 13, bold: true, color: T.INK, margin: 0 });
   const steps = [
-    ["소켓 바인딩", "frozen은 port 0 → OS가 빈 포트 할당 (경합 없음)"],
+    ["소켓 바인딩", "frozen은 APP_NAME 해시 기반 고정 포트 (47100–48999) — 재기동 후 대화 기록 보존"],
     ["도구 자기등록", "import 시 @register_tool 데코레이터가 레지스트리 채움"],
     ["레지스트리 로드", "PROMPTS·SKILLS·AGENTS 메타 1회 + 교차 검증"],
     ["라우터 등록", "/api/* — SPA catch-all보다 먼저 (순서 중요)"],

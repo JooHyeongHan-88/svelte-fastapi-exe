@@ -24,7 +24,9 @@
 `backend/main.py`가 엔트리포인트. 기동 순서:
 
 ```
-① 소켓 바인딩      create_server_socket() — frozen은 port 0 → OS가 빈 포트 할당
+① 소켓 바인딩      create_server_socket() — frozen은 APP_PORT 또는 APP_NAME 해시 기반 고정 포트 바인딩
+                   (고정 포트로 재기동 후에도 localStorage origin 일치 → 대화 기록 보존)
+                   같은 앱이 이미 실행 중이면 기존 탭을 열고 즉시 종료 (단일 인스턴스)
                    (TOCTOU 없음: 우리가 바인딩한 소켓을 uvicorn에 그대로 전달)
 ② 도구 자기등록     import agent.tools → @register_tool 데코레이터가 ToolRegistry 채움
 ③ 레지스트리 로드   PromptRegistry · SkillRegistry · AgentRegistry 메타 1회 로드
@@ -101,7 +103,7 @@ dev 모드에서 `build/web/`이 없으면 ⑤의 SPA 서빙과 ⑥이 생략된
 
 | 파일 | 역할 |
 |---|---|
-| `config.py` | **모든 경로·포트의 단일 진실 공급원.** frozen/dev 분기(`_project_root`), 동적 포트 바인딩, presence 상수, `.env` 로드 |
+| `config.py` | **모든 경로·포트의 단일 진실 공급원.** frozen/dev 분기(`_project_root`), presence 상수, `.env` 로드. 포트 바인딩은 `core.server_socket`이 담당 |
 | `browser.py` | presence 연결 카운트(스레드 안전), watchdog, 브라우저 자동 오픈, 서버 종료 제어 |
 | `result_store.py` | 산출물 폴더 슬롯 발급(`result/<세션>/<시각>/`), 경로 해석·containment 검증(`resolve_result_path`), 세션 manifest |
 | `updater.py` | latest.json 확인(캐시·검증) → 다운로드 → sha256 → 스테이징 → Updater.exe 기동 |

@@ -28,7 +28,7 @@
 |---|---|
 | **설치 과정 없는 배포** — IT 지원 없이 파일 복사만으로 실행 | PyInstaller onefile 단일 EXE (Python 런타임·웹 자산 전부 내장) |
 | **보안 경계** — 외부 네트워크에 절대 노출되지 않는 로컬 앱 | `127.0.0.1` 루프백 고정 바인딩 + Origin 가드 (코드 고정, env로도 변경 불가) |
-| **포트 충돌 없음** — 사용자 PC 환경을 가정하지 않음 | 기동 시 OS가 빈 포트를 동적 할당, 프론트는 상대 경로(`/api/...`)만 사용 |
+| **포트 충돌 없음** — 사용자 PC 환경을 가정하지 않음 | APP_NAME 해시로 고정 포트 배정 (47100–48999) — 재기동 후에도 localStorage 대화 기록 보존. 충돌 시 +1..+4 폴백 체인 |
 | **수동 재배포 제거** — 버전 업그레이드 자동화 | 앱 내장 업데이트 체크 + sha256 검증 + Updater.exe 자가 교체 |
 | **코드 수정 없는 에이전트 확장** — 도메인 로직과 앱 코드 분리 | `PROMPTS/` `SKILLS/` `AGENTS/` 마크다운 파일 + `.env` 한 줄로 동작 정의 |
 
@@ -50,7 +50,7 @@
                │
 ③ 배포      release/MyAgent.exe  +  release/latest.json  →  Nexus 업로드
                │
-④ 실행      사용자가 EXE 더블클릭  →  FastAPI 기동(동적 포트)  →  기본 브라우저 자동 오픈
+④ 실행      사용자가 EXE 더블클릭  →  FastAPI 기동(고정 포트)  →  기본 브라우저 자동 오픈
                │
 ⑤ 업데이트   앱이 Nexus의 latest.json 확인  →  새 EXE 다운로드·검증  →  Updater.exe가 자가 교체
 ```
@@ -67,7 +67,7 @@
 ┌────────────────────────────────────────────────────┐
 │  MyAgent.exe  (PyInstaller onefile)                │
 │  ┌──────────────────────────────────────────────┐  │
-│  │  FastAPI + uvicorn   127.0.0.1:<동적 포트>     │  │
+│  │  FastAPI + uvicorn   127.0.0.1:<고정 포트>     │  │
 │  │   ├─ /              → 내장 web/ (Svelte SPA)  │  │
 │  │   ├─ /api/*         → REST + SSE 스트리밍     │  │
 │  │   ├─ /result/*      → 에이전트 산출물 파일     │  │
@@ -80,7 +80,7 @@
 
 생명주기는 **브라우저 탭과 연동**된다:
 
-1. EXE 기동 → OS가 빈 포트 할당 → uvicorn 시작 → 브라우저 자동 오픈
+1. EXE 기동 → APP_NAME 해시 기반 고정 포트 바인딩 → uvicorn 시작 → 브라우저 자동 오픈
 2. 브라우저가 `/api/presence` SSE 연결을 유지 = **생존 신호**
 3. 탭을 닫으면 연결이 끊기고, 짧은 유예(grace) 후 watchdog이 **서버를 스스로 종료**
 
@@ -187,7 +187,7 @@ svelte-fastapi-exe/
 | | dev (개발) | frozen (배포 EXE) |
 |---|---|---|
 | 화면 | Vite dev server (`localhost:5173`, HMR) | EXE에 내장된 `web/` 정적 파일 |
-| 백엔드 포트 | `.env`의 `APP_DEV_PORT` 고정 (기본 8765) | OS가 빈 포트를 동적 할당 |
+| 백엔드 포트 | `.env`의 `APP_DEV_PORT` 고정 (기본 8765) | `APP_PORT` 또는 APP_NAME 해시 기반 고정 포트 (`core.server_socket`) |
 | API 연결 | Vite가 `/api`를 백엔드로 프록시 | 같은 origin이라 프록시 불필요 |
 | PROMPTS/SKILLS 수정 | **핫리로드** (다음 턴부터 반영) | 빌드 시점에 박제 (재빌드 필요) |
 | 종료 방식 | Ctrl+C | 탭 닫기 → watchdog 자동 종료 |
@@ -207,7 +207,7 @@ cd frontend; npm run dev           # 터미널 2 — http://localhost:5173
 ```
 [사전 검사]  git working tree clean 확인 (-Force 로 우회 가능) · .env 로드
      │
-① 버전 동기화      pyproject.toml 의 version → backend/_version.py 생성
+① 버전 확인          pyproject.toml version 읽기 (App.spec이 빌드 시 _version.py 생성)
 ② Frontend 빌드    npm run build → build/web/
 ③ Updater 빌드     PyInstaller(Updater.spec) → build/updater/Updater.exe
 ④ App EXE 빌드     PyInstaller(App.spec) → release/{AppName}.exe
@@ -281,7 +281,8 @@ frozen EXE는 빌드 시 박제된 `.env`를 `override=False`로 읽으므로, *
 | 변수 | 기본값 | 의미 |
 |---|---|---|
 | `APP_NAME` | `MyAgent` | EXE 파일명, `%APPDATA%` 하위 폴더명, settings.json 경로. **앱 이름 변경은 이 값 하나만 바꾸면 끝** |
-| `APP_DEV_PORT` | `8765` | dev 전용 백엔드 포트 (Vite 프록시 타겟과 공유). frozen은 동적 할당이라 무관 |
+| `APP_PORT` | (APP_NAME 해시) | **frozen 전용** 고정 포트. 기본값 `47100 + sha256(APP_NAME) % 1900`. `0`이면 동적 할당. 충돌 시 +1..+4 폴백 체인 — `core.server_socket` |
+| `APP_DEV_PORT` | `8765` | dev 전용 백엔드 포트 (Vite 프록시 타겟과 공유). frozen은 `APP_PORT` 또는 APP_NAME 해시 기반 고정 포트를 쓴다 |
 
 **생명주기 (presence/watchdog)**
 

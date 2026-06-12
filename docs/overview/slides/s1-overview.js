@@ -41,7 +41,7 @@ function s_goals(pres) {
   const goals = [
     ["설치 과정 없는 배포", "파일 복사만으로 실행", "PyInstaller onefile 단일 EXE — Python 런타임·웹 자산 전부 내장"],
     ["보안 경계", "외부 네트워크 노출 차단", "127.0.0.1 루프백 고정 바인딩 + Origin 가드 (env로도 변경 불가)"],
-    ["포트 충돌 없음", "사용자 PC 환경 무가정", "기동 시 OS가 빈 포트 동적 할당, 프론트는 상대 경로만 사용"],
+    ["포트 충돌 없음", "사용자 PC 환경 무가정", "APP_NAME 해시로 고정 포트 배정(47100–48999) — 재기동 후에도 대화 기록이 보존된다"],
     ["수동 재배포 제거", "버전 업그레이드 자동화", "내장 업데이트 체크 + sha256 검증 + Updater.exe 자가 교체"],
     ["코드 수정 없는 확장", "도메인 로직과 앱 분리", "PROMPTS / SKILLS / AGENTS 마크다운 + .env 한 줄로 동작 정의"],
   ];
@@ -78,7 +78,7 @@ function s_bigpicture(pres) {
     ["개발", ["frontend/ (Svelte)", "backend/ (FastAPI)", "PROMPTS·SKILLS·AGENTS"]],
     ["빌드", ["release.ps1 한 줄", "npm build + PyInstaller", "→ release/MyAgent.exe"]],
     ["배포", ["Nexus 업로드", "EXE + latest.json", "(EXE 먼저, json 마지막)"]],
-    ["실행", ["EXE 더블클릭", "FastAPI 동적 포트 기동", "브라우저 자동 오픈"]],
+    ["실행", ["EXE 더블클릭", "FastAPI 고정 포트 기동", "브라우저 자동 오픈"]],
     ["업데이트", ["latest.json 확인", "다운로드 + sha256 검증", "Updater가 자가 교체"]],
   ];
   steps.forEach((st, i) => {
@@ -119,7 +119,7 @@ function s_runtime(pres) {
     x: 1.2, y: 2.38, w: 5.1, h: 0.28, fontFace: T.MONO, fontSize: 10.5, bold: true, color: T.INK, margin: 0,
   });
   codeBlock(pres, s, 1.2, 2.74, 5.1, 1.82, [
-    { t: "FastAPI + uvicorn  127.0.0.1:<동적 포트>", c: T.CODE_ACC, b: true },
+    { t: "FastAPI + uvicorn  127.0.0.1:<고정 포트>", c: T.CODE_ACC, b: true },
     { t: " ├ /            → 내장 web/ (Svelte SPA)" },
     { t: " ├ /api/*       → REST + SSE 스트리밍" },
     { t: " ├ /result/*    → 에이전트 산출물" },
@@ -138,7 +138,7 @@ function s_runtime(pres) {
     x: 7.15, y: 1.7, w: 5.4, h: 0.32, fontFace: T.KR, fontSize: 13, bold: true, color: T.INK, margin: 0,
   });
   const life = [
-    "EXE 기동 → 빈 포트 할당 → 브라우저 자동 오픈",
+    "EXE 기동 → 고정 포트 바인딩 → 브라우저 자동 오픈",
     "브라우저의 SSE 연결(presence) 유지 = 생존 신호",
     "탭 닫음 → 유예 후 watchdog이 서버 자가 종료",
   ];
@@ -262,7 +262,7 @@ function s_devfrozen(pres) {
   header(s, "PART 1 · 전체 흐름", "개발 모드 vs 패키징 모드", { sub: "같은 코드가 두 모드로 동작 — 분기 기준은 sys.frozen (PyInstaller 여부) 하나" });
   table(pres, s, 0.7, 1.85, 11.95, ["", "dev (개발)", "frozen (배포 EXE)"], [
     [{ t: "화면", b: true }, "Vite dev server (localhost:5173, HMR)", "EXE에 내장된 web/ 정적 파일"],
-    [{ t: "백엔드 포트", b: true }, ".env의 APP_DEV_PORT 고정 (기본 8765)", "OS가 빈 포트를 동적 할당"],
+    [{ t: "백엔드 포트", b: true }, ".env의 APP_DEV_PORT 고정 (기본 8765)", "APP_NAME 해시 기반 고정 포트 (core.server_socket)"],
     [{ t: "API 연결", b: true }, "Vite가 /api 를 백엔드로 프록시", "같은 origin — 프록시 불필요"],
     [{ t: "PROMPTS/SKILLS 수정", b: true }, { t: "핫리로드 (다음 턴부터 반영)", b: true, c: T.ACC_DK }, "빌드 시점 박제 — 재빌드 필요"],
     [{ t: "종료 방식", b: true }, "Ctrl + C", "탭 닫기 → watchdog 자동 종료"],
@@ -278,7 +278,7 @@ function s_build(pres) {
   const s = lightSlide(pres);
   header(s, "PART 1 · 전체 흐름", "빌드 & 릴리즈 파이프라인", { sub: "pwsh packaging/release.ps1 한 줄이 전체를 수행 — 사전 검사: git clean 확인 + .env 로드" });
   const steps = [
-    ["버전 동기화", "pyproject.toml → backend/_version.py"],
+    ["버전 확인", "pyproject.toml 직독 (App.spec이 빌드 시 _version.py 생성)"],
     ["Frontend 빌드", "npm run build → build/web/"],
     ["Updater 빌드", "PyInstaller → build/updater/Updater.exe"],
     ["App EXE 빌드", "PyInstaller → release/{AppName}.exe"],
@@ -358,7 +358,7 @@ function s_env(pres) {
   ], { x: 6.85, y: 1.88, w: 5.5, h: 1.35, fontFace: T.KR, margin: 0, lineSpacingMultiple: 1.25 });
   table(pres, s, 0.7, 3.62, 11.95, ["변수", "기본값", "의미"], [
     [{ t: "APP_NAME", mono: true, s: 9.5 }, "MyAgent", "EXE 파일명·%APPDATA% 폴더 — 앱 이름 변경은 이 값 하나"],
-    [{ t: "APP_DEV_PORT", mono: true, s: 9.5 }, "8765", "dev 전용 백엔드 포트 (frozen은 동적 할당이라 무관)"],
+    [{ t: "APP_DEV_PORT", mono: true, s: 9.5 }, "8765", "dev 전용 백엔드 포트 (frozen은 APP_NAME 해시 기반 고정 포트 사용)"],
     [{ t: "APP_LLM_PROVIDER", mono: true, s: 9.5 }, "mock", "최초 기동 시 settings.json 시드 (mock·dtgpt·openai_compatible)"],
     [{ t: "APP_MAX_AGENT_ITERATIONS", mono: true, s: 9.5 }, "8", "한 턴당 provider→도구 반복 상한"],
     [{ t: "APP_MAX_AGENT_CALLS_PER_TURN", mono: true, s: 9.5 }, "20", "오케스트레이터+서브 합산 LLM 호출 예산"],
