@@ -49,6 +49,21 @@ export function formatDuration(ms) {
   return `${formatElapsed(ms)} 소요`;
 }
 
+// 바이트 → 사람이 읽는 용량: "320 KB", "1.2 MB". 0 이하/비유한 값은 ""(미표시).
+// 100 이상이거나 B 단위면 정수, 그 외엔 소수 1자리로 압축한다.
+export function formatBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = n;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  const shown = value >= 100 || i === 0 ? Math.round(value) : value.toFixed(1);
+  return `${shown} ${units[i]}`;
+}
+
 export function autoTitle(firstUserMessage) {
   const cleaned = (firstUserMessage ?? "").trim().replace(/\s+/g, " ");
   if (!cleaned) return "새 대화";

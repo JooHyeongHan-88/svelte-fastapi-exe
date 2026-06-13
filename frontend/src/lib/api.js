@@ -57,6 +57,39 @@ export async function deleteConversation(clientId) {
   }
 }
 
+/**
+ * 세션(client_id[:8]) → 산출물 총 bytes 맵을 조회한다 (사이드바 용량 표시).
+ * 실패해도 UI 진행을 막지 않으므로 빈 맵으로 폴백한다.
+ *
+ * @returns {Promise<Record<string, number>>}
+ */
+export async function getArtifactUsage() {
+  try {
+    const r = await fetch("/api/artifact/usage");
+    if (!r.ok) return {};
+    const data = await r.json();
+    return data.usage ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * client_id 에 속한 모든 산출물 폴더를 삭제한다 (세션 삭제 시 동반 호출).
+ * 대화 히스토리 삭제(deleteConversation)와 별개 경계 — best-effort.
+ *
+ * @param {string} clientId
+ */
+export async function deleteArtifactsForSession(clientId) {
+  try {
+    await fetch(`/api/artifact/session?client_id=${encodeURIComponent(clientId)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    // 백엔드 다운 중일 수도 — UI 진행은 막지 않는다.
+  }
+}
+
 export async function restoreConversation(clientId, messages) {
   // 백엔드 LLM context 가 비어있을 때(EXE 재시작, 세션 전환) localStorage 히스토리를 다시 주입.
   // 매 턴 호출하지 않고, 세션 활성화 시점에 한 번만 호출.

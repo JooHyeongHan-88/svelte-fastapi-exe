@@ -23,7 +23,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from api.deps import require_local_origin
-from core.result_store import resolve_result_path, to_result_relative
+from core.result_store import (
+    delete_session_artifacts,
+    resolve_result_path,
+    session_usage_by_client,
+    to_result_relative,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +194,25 @@ async def artifact_reveal(req: RevealRequest) -> dict[str, str]:
         raise HTTPException(status_code=500, detail=f"폴더 열기 실패: {exc}") from exc
 
     return {"path": to_result_relative(folder)}
+
+
+@router.get("/artifact/usage")
+async def artifact_usage() -> dict[str, dict[str, int]]:
+    """세션(client_id[:8]) → 산출물 총 bytes 맵을 반환한다.
+
+    좌측 사이드바가 세션별 디스크 사용량을 표시하는 데 쓴다. 프론트는 세션 id 의
+    앞 8자로 이 맵을 조회한다 (세션 폴더명 접미사와 동일 규약).
+    """
+    return {"usage": session_usage_by_client()}
+
+
+@router.delete("/artifact/session")
+async def delete_artifact_session(
+    client_id: Annotated[str, Query(min_length=1, description="세션 식별자(UUID)")],
+) -> dict[str, Any]:
+    """client_id 에 속한 모든 산출물 폴더를 삭제한다 (세션 삭제 시 동반 호출).
+
+    대화 히스토리 삭제(DELETE /api/conversation)와 분리된 산출물 정리 경계다.
+    """
+    removed, freed = delete_session_artifacts(client_id)
+    return {"ok": True, "removed_dirs": removed, "freed_bytes": freed}

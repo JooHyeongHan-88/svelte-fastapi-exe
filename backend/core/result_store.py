@@ -15,6 +15,7 @@ import contextvars
 import json
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,9 @@ _current_turn_slot: contextvars.ContextVar[Path | None] = contextvars.ContextVar
 _ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _TITLE_MAX_LEN = 30
 _RESULT_PREFIX = "result/"
+# 세션 폴더명 `{title}-{cid8}` 의 말미 cid8(uuid hex 8자) 추출용. 제목에 '-' 가
+# 들어가도 끝에서만 매칭하므로 안전하다. 사이드바 용량 집계가 이 키로 세션을 묶는다.
+_CID_SUFFIX_RE = re.compile(r"-([0-9a-f]{8})$")
 # 세션 산출물 목록(manifest). 세션 루트(타임스탬프 폴더의 형제)에 위치한다.
 _MANIFEST_FILENAME = "_artifacts.jsonl"
 # 파생 산출물 — 원본(spec·parquet)에서 재생성 가능하므로 manifest·스캔 목록에서 제외.
@@ -211,6 +215,80 @@ def iter_session_dirs(client_id: str) -> list[Path]:
         for path in RESULT_DIR.glob(f"*{suffix}")
         if path.is_dir() and path.name.endswith(suffix)
     )
+
+
+def _directory_size_bytes(path: Path) -> int:
+    """디렉터리 하위 모든 파일 크기의 합(bytes)을 반환한다.
+
+    심볼릭 링크·권한 오류로 stat 이 실패하는 항목은 건너뛴다 (디스크 용량 추정이
+    목적이라 정확도보다 견고함이 우선).
+
+    Args:
+        path: 크기를 잴 디렉터리 절대 Path.
+
+    Returns:
+        하위 파일 크기 합. 디렉터리가 없거나 비어 있으면 0.
+    """
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                total += child.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def session_usage_by_client() -> dict[str, int]:
+    """RESULT_DIR 을 1회 스캔해 ``cid8 -> 산출물 총 bytes`` 맵을 만든다.
+
+    세션 rename 으로 같은 client_id 가 ``{title}-{cid8}`` 폴더를 여러 개 남겨도
+    cid8 키로 합산한다. 사이드바가 세션별 디스크 사용량을 표시하는 데 쓴다.
+
+    Returns:
+        cid8(uuid hex 8자) → 총 bytes 딕셔너리. RESULT_DIR 이 없으면 빈 dict.
+    """
+    usage: dict[str, int] = {}
+    if not RESULT_DIR.exists():
+        return usage
+    for path in RESULT_DIR.iterdir():
+        if not path.is_dir():
+            continue
+        match = _CID_SUFFIX_RE.search(path.name)
+        if not match:
+            continue
+        cid8 = match.group(1)
+        usage[cid8] = usage.get(cid8, 0) + _directory_size_bytes(path)
+    return usage
+
+
+def delete_session_artifacts(client_id: str) -> tuple[int, int]:
+    """client_id 에 속한 모든 세션 산출물 폴더를 삭제한다.
+
+    세션 삭제 시 그 대화에서 생성된 산출물(차트·parquet·namespace spill 등)을 함께
+    정리해 디스크 누적을 막는다. rename 으로 폴더가 여럿이면 전부 지운다.
+
+    Args:
+        client_id: 세션 식별자 (UUID).
+
+    Returns:
+        (삭제한 폴더 수, 해제된 bytes) 튜플.
+    """
+    removed = 0
+    freed = 0
+    result_root = RESULT_DIR.resolve()
+    for sdir in iter_session_dirs(client_id):
+        # iter_session_dirs 는 RESULT_DIR 하위만 돌려주지만, rmtree 는 되돌릴 수 없으니
+        # resolve 후 containment 를 한 번 더 확인한다 (이중 방어).
+        try:
+            sdir.resolve().relative_to(result_root)
+        except ValueError:
+            logger.warning("산출물 삭제 건너뜀 — RESULT_DIR 밖 경로: %s", sdir)
+            continue
+        freed += _directory_size_bytes(sdir)
+        shutil.rmtree(sdir, ignore_errors=True)
+        removed += 1
+    return removed, freed
 
 
 def append_manifest_entry(entry: dict[str, Any]) -> None:

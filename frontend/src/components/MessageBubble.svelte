@@ -66,7 +66,23 @@
           {/each}
         </div>
       {/if}
-      {#if message.content}
+      <!-- 인용 pill 을 본문 텍스트 흐름 안에 인라인으로 렌더 (parts 우선) -->
+      {#if message.parts && message.parts.length > 0}
+        <div class="user-content">{#each message.parts as part, i (i)}{#if part.type === "ref"}<span class="ref-pill" title={part.path}><ArtifactIcon kind="file" size={12} /><span class="ref-pill-label">{part.label}</span></span>{:else}{part.value}{/if}{/each}</div>
+      {:else if message.refs && message.refs.length > 0}
+        <!-- (구) refs 폴백 — 트레이형 pill + 본문 -->
+        <div class="ref-pill-bar">
+          {#each message.refs as ref (ref.path)}
+            <span class="ref-pill" title={ref.path}>
+              <ArtifactIcon kind="file" size={12} />
+              <span class="ref-pill-label">{ref.label}</span>
+            </span>
+          {/each}
+        </div>
+        {#if message.content}
+          <div class="user-content">{message.content}</div>
+        {/if}
+      {:else if message.content}
         <div class="user-content">{message.content}</div>
       {/if}
 
@@ -264,6 +280,37 @@
     word-wrap: break-word;
     font-size: 15px; /* 채팅 본문(.markdown 15px)과 톤 일치 */
     line-height: 1.6;
+  }
+
+  /* ── 산출물 인용 pill — 본문과 구분되는 액센트 톤 (입력창 pill 과 시각 일관) ── */
+  .ref-pill-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .ref-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 240px;
+    vertical-align: baseline;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius-sm);
+    padding: 0 6px;
+    margin: 0 1px;
+    line-height: 1.5;
+  }
+
+  .ref-pill-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ── 스킬 뱃지 바 ── */

@@ -45,15 +45,25 @@ export const ui = $state({
   /** @type {string[]} */
   composerSkills: [],
 
-  // Composer textarea 에 외부에서 텍스트를 주입하기 위한 일회용 슬롯.
-  // rewindToMessage() 가 잘라낸 user 메시지 본문을 여기에 쓰면 Composer 가
-  // $effect 로 감지해 value 에 복사 후 즉시 비워진다.
-  composerSeed: "",
+  // 입력창(contenteditable)에 커서 위치로 산출물 인용 pill 을 삽입하라는 일회용 신호.
+  // artifactActions.insertArtifactReference 가 채우면 Composer 의 $effect 가 소비 후 null 로 비운다.
+  // nonce 로 같은 파일을 연속 삽입해도 매번 감지되게 한다.
+  /** @type {null | { items: Array<{ path: string, label: string }>, nonce: number }} */
+  composerInsertRef: null,
+
+  // 입력창 내용을 parts 로 통째 재구성하라는 일회용 신호 (rewindToMessage 가 되돌린 시점 복원).
+  /** @type {null | { parts: Array<{ type: "text"|"ref", value?: string, path?: string, label?: string }>, nonce: number }} */
+  composerSetParts: null,
 
   // 아티팩트 패널 — 활성 칩 id 와 패널 가시성만 휘발 상태로 둔다.
   // 산출물 payload 는 메시지 안 (message.artifactChips[].payload) 에 영속.
   activeArtifactId: /** @type {string|null} */ (null),
   artifactPanelOpen: false,
+
+  // 세션별 산출물 총 용량 — { client_id[:8]: bytes }. 사이드바 SessionItem 이
+  // 세션 id 앞 8자로 조회해 작고 연한 텍스트로 표시한다. refreshArtifactUsage() 가 갱신.
+  /** @type {Record<string, number>} */
+  artifactUsage: {},
 
   // 사용자가 마우스 드래그로 조절한 우측 아티팩트 패널 너비 (px). initApp 에서 로드.
   artifactWidth: 420,

@@ -15,6 +15,8 @@ import {
 import {
   chat,
   deleteConversation,
+  deleteArtifactsForSession,
+  getArtifactUsage,
   restoreConversation,
   checkUpdate,
   applyUpdate,
@@ -129,9 +131,56 @@ function newSession() {
   };
 }
 
+// parts(텍스트+인용 pill 의 순서 있는 배열) → LLM 와이어 본문. 각 pill 자리에 실제
+// result/... 경로를 인라인으로 박아 LLM 이 "이 파일의 그 컬럼" 같은 위치 의존 지시를
+// 그대로 이해하게 한다. text 는 값 그대로, ref 는 path 로 치환해 이어붙인다.
+function _wireFromParts(parts) {
+  return (parts ?? [])
+    .map((p) => (p.type === "ref" ? p.path : (p.value ?? "")))
+    .join("");
+}
+
+// parts → 사람이 읽는 표시 문자열 (ref 는 파일명 라벨). 제목 생성·레거시 폴백용.
+function _displayFromParts(parts) {
+  return (parts ?? [])
+    .map((p) => (p.type === "ref" ? p.label : (p.value ?? "")))
+    .join("");
+}
+
+// parts 정규화 — 인접 text 병합·빈 text 제거·ref 형태 보존. pill 주위 공백은 의미가 있어 유지한다.
+function _normalizeParts(parts) {
+  const out = [];
+  for (const p of parts ?? []) {
+    if (!p) continue;
+    if (p.type === "ref" && p.path) {
+      out.push({ type: "ref", path: p.path, label: p.label || p.path });
+    } else if (p.type === "text" && p.value) {
+      const last = out[out.length - 1];
+      if (last && last.type === "text") last.value += p.value;
+      else out.push({ type: "text", value: p.value });
+    }
+  }
+  return out;
+}
+
+// (구) refs 모델 폴백 — 직전 구현으로 localStorage 에 남은 메시지 호환. content 뒤에 경로를 잇는다.
+function _mergeRefPaths(content, refs) {
+  const paths = (refs ?? []).map((r) => r?.path).filter(Boolean);
+  if (paths.length === 0) return content ?? "";
+  return [content, ...paths].filter(Boolean).join("\n");
+}
+
+// 메시지 1건의 백엔드 전송 본문. parts(신규) 우선, refs(구) 차선, 그 외 content 평문.
+function _backendContent(m) {
+  if (Array.isArray(m.parts) && m.parts.length > 0) return _wireFromParts(m.parts);
+  if (m.refs && m.refs.length > 0) return _mergeRefPaths(m.content, m.refs);
+  return m.content ?? "";
+}
+
 function toBackendMessages(uiMessages) {
   // UI 모델 → backend Message 스키마. segments/id/createdAt 은 백엔드에 보내지 않음.
-  return uiMessages.map((m) => ({ role: m.role, content: m.content }));
+  // user 메시지의 인용은 _backendContent 가 경로로 합성해 LLM context 에 포함시킨다.
+  return uiMessages.map((m) => ({ role: m.role, content: _backendContent(m) }));
 }
 
 export async function createSession() {
@@ -171,7 +220,9 @@ export async function deleteSession(id) {
   if (idx === -1) return;
 
   ui.sessions = ui.sessions.filter((s) => s.id !== id);
+  // 대화 히스토리와 함께 그 세션에서 생성된 산출물 폴더도 정리한다 (디스크 누적 방지).
   await deleteConversation(id);
+  await deleteArtifactsForSession(id);
 
   if (ui.activeSessionId === id) {
     const next = ui.sessions[0] ?? null;
@@ -188,6 +239,7 @@ export async function deleteSession(id) {
   }
 
   flushSave();
+  refreshArtifactUsage();
 }
 
 export function renameSession(id, newTitle) {
@@ -206,12 +258,18 @@ export function renameSession(id, newTitle) {
 
 // ---------- 메시지 전송 ----------
 
-export async function sendMessage(text) {
-  const displayContent = text.trim();
-  const hasSkills = ui.composerSkills.length > 0;
+export async function sendMessage(input) {
+  // 입력은 parts 배열(텍스트+인용 pill 순서 보존). 하위호환으로 문자열도 받아 단일 text part 로 감싼다.
+  const parts = Array.isArray(input)
+    ? _normalizeParts(input)
+    : _normalizeParts([{ type: "text", value: String(input ?? "") }]);
 
-  // 텍스트가 없어도 skill chip 이 부착돼 있으면 전송을 허용한다.
-  if ((!displayContent && !hasSkills) || ui.streaming) return;
+  const displayContent = _displayFromParts(parts).trim();
+  const hasSkills = ui.composerSkills.length > 0;
+  const hasRefs = parts.some((p) => p.type === "ref");
+
+  // 텍스트가 없어도 skill chip 이나 산출물 인용이 부착돼 있으면 전송을 허용한다.
+  if ((!displayContent && !hasSkills && !hasRefs) || ui.streaming) return;
 
   // 활성 세션이 없으면 즉석 생성 (첫 메시지 시나리오).
   if (!ui.activeSessionId) {
@@ -238,11 +296,14 @@ export async function sendMessage(text) {
 
   const now = Date.now();
   const forced = hasSkills ? [...ui.composerSkills] : null;
+  const firstRefLabel = parts.find((p) => p.type === "ref")?.label ?? "";
 
   const userMsg = {
     id: crypto.randomUUID(),
     role: "user",
+    // content 는 라벨 인라인 표시 문자열(제목·레거시 폴백용). 백엔드 본문은 parts→경로로 따로 합성.
     content: displayContent,
+    parts, // 인용 pill 의 위치를 보존하는 구조 필드 (버블 인라인 렌더·복원용)
     appliedSkills: forced,
     toolStatus: null,
     createdAt: now,
@@ -270,7 +331,9 @@ export async function sendMessage(text) {
   session.updatedAt = now;
 
   if (!session.titleEdited && session.messages.filter((m) => m.role === "user").length === 1) {
-    session.title = autoTitle(displayContent || (forced ? forced.join(", ") : "새 대화"));
+    const titleSeed =
+      displayContent || (forced ? forced.join(", ") : "") || firstRefLabel || "새 대화";
+    session.title = autoTitle(titleSeed);
   }
 
   ui.sessions = [...ui.sessions];
@@ -282,8 +345,9 @@ export async function sendMessage(text) {
   const forceSkills = forced;
   ui.composerSkills = [];
 
-  // LLM 에 전달할 실제 메시지 — 본문이 비어 있으면 skill 이름으로 대체.
-  const llmContent = displayContent || (forceSkills ? forceSkills.join(", ") : "");
+  // LLM 에 전달할 실제 메시지 — parts 의 pill 자리에 경로를 인라인 합성한다
+  // (toBackendMessages 복원과 동일 와이어 본문). 본문이 비면 skill 이름으로 대체.
+  const llmContent = _wireFromParts(parts) || (forceSkills ? forceSkills.join(", ") : "");
 
   currentAbortController = new AbortController();
   const abortSignal = currentAbortController.signal;
@@ -467,6 +531,8 @@ export async function sendMessage(text) {
     currentAbortController = null;
     ui.sessions = [...ui.sessions];
     flushSave();
+    // 이번 턴에 산출물이 생겼을 수 있으므로 사이드바 용량을 갱신한다.
+    refreshArtifactUsage();
   }
 }
 
@@ -482,7 +548,15 @@ export async function rewindToMessage(messageId) {
   const target = session.messages[index];
   if (target.role !== "user") return;
 
-  const capturedContent = target.content ?? "";
+  // 인용 pill 위치까지 그대로 되살린다. parts 가 없으면(레거시·refs) 평문으로 복원.
+  const capturedParts =
+    Array.isArray(target.parts) && target.parts.length > 0
+      ? target.parts.map((p) =>
+          p.type === "ref"
+            ? { type: "ref", path: p.path, label: p.label }
+            : { type: "text", value: p.value ?? "" },
+        )
+      : [{ type: "text", value: target.content ?? "" }];
 
   session.messages = session.messages.slice(0, index);
   session.updatedAt = Date.now();
@@ -493,7 +567,7 @@ export async function rewindToMessage(messageId) {
 
   await restoreConversation(session.id, toBackendMessages(session.messages));
 
-  ui.composerSeed = capturedContent;
+  ui.composerSetParts = { parts: capturedParts, nonce: Date.now() + Math.random() };
 }
 
 // 진행 중인 응답 스트리밍을 중지한다. ESC 키 핸들러가 호출한다.
@@ -509,6 +583,15 @@ export function stopStreaming() {
     ui.sessions = [...ui.sessions];
     flushSave();
   }
+}
+
+// ---------- 산출물 용량 ----------
+
+// 세션별 산출물 총 용량 맵을 백엔드에서 가져와 사이드바 표시값을 갱신한다.
+// 초기화·턴 종료·세션 삭제 시점에 호출 (best-effort — 실패 시 기존 값 유지).
+export async function refreshArtifactUsage() {
+  const usage = await getArtifactUsage();
+  ui.artifactUsage = usage;
 }
 
 // ---------- 초기화 ----------
@@ -553,6 +636,8 @@ export async function initApp() {
   listSkills().then((skills) => {
     ui.availableSkills = skills;
   });
+
+  refreshArtifactUsage();
 
   getAppInfo()
     .then(({ name, version }) => {

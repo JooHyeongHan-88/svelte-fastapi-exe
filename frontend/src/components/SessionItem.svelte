@@ -1,6 +1,7 @@
 <script>
   import { ui } from "../lib/state.svelte.js";
   import { selectSession, deleteSession, renameSession } from "../lib/chatActions.svelte.js";
+  import { formatBytes } from "../lib/format.js";
 
   let { session } = $props();
 
@@ -9,6 +10,10 @@
   let inputEl = $state(null);
 
   let isActive = $derived(ui.activeSessionId === session.id);
+
+  // 이 세션 산출물 총 용량 — 세션 id 앞 8자(폴더 접미사)로 조회. 0 이면 라벨이 ""(미표시).
+  let usageBytes = $derived(ui.artifactUsage[session.id.slice(0, 8)] ?? 0);
+  let usageLabel = $derived(formatBytes(usageBytes));
 
   function onSelect() {
     if (editing) return;
@@ -48,7 +53,11 @@
 
   function onDelete(e) {
     e.stopPropagation();
-    if (confirm(`"${session.title}" 대화를 삭제할까요?`)) {
+    const note =
+      usageBytes > 0
+        ? `\n\n이 대화에서 생성된 산출물(${usageLabel})도 함께 삭제됩니다.`
+        : "\n\n이 대화에서 생성된 산출물도 함께 삭제됩니다.";
+    if (confirm(`"${session.title}" 대화를 삭제할까요?${note}`)) {
       deleteSession(session.id);
     }
   }
@@ -73,6 +82,9 @@
     />
   {:else}
     <span class="title">{session.title}</span>
+    {#if usageLabel}
+      <span class="size" title="이 대화의 산출물 용량">{usageLabel}</span>
+    {/if}
     <div class="actions">
       <button class="icon-btn" title="이름 변경" onclick={startEdit} aria-label="rename">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -121,15 +133,27 @@
     font-size: 13.5px;
   }
 
+  .size {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--fg-subtle);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
   .actions {
     display: flex;
     gap: 2px;
+    /* idle 일 땐 폭을 접어 용량이 우측에 붙고, hover/active 시 버튼이 옆에서 펼쳐진다. */
+    max-width: 0;
+    overflow: hidden;
     opacity: 0;
-    transition: opacity var(--dur-fast) ease;
+    transition: opacity var(--dur-fast) ease, max-width var(--dur-fast) ease;
   }
 
   .row:hover .actions,
   .row.active .actions {
+    max-width: 60px;
     opacity: 1;
   }
 

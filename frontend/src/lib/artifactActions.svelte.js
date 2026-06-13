@@ -89,18 +89,33 @@ export function artifactRefPath(chip) {
 }
 
 /**
- * 칩의 참조 경로를 Composer 입력창에 삽입한다 ("이 산출물로 작업해줘" UX).
- * 패널 열기(openArtifact)와 독립적으로 동작하므로 호출부가 stopPropagation 해야 한다.
+ * 칩의 참조 경로를 Composer 입력창 커서 위치에 인라인 pill 로 삽입하라고 신호한다
+ * ("이 산출물로 작업해줘" UX). 패널 열기(openArtifact)와 독립적으로 동작하므로
+ * 호출부가 stopPropagation 해야 한다. 이미지 갤러리처럼 경로가 여러 개면(줄바꿈 구분)
+ * 각 경로를 개별 pill 로 삽입한다.
+ *
+ * 실제 DOM 삽입은 Composer 가 contenteditable 에서 수행한다 — 액션 레이어는 신호만 둔다.
  *
  * @param {string} chipId
  */
 export function insertArtifactReference(chipId) {
   const chip = _findChip(chipId);
   if (!chip) return;
-  const path = artifactRefPath(chip);
-  if (!path) return;
-  // Composer 의 $effect 가 composerSeed 를 감지해 textarea 끝에 append 한다.
-  ui.composerSeed = path;
+  const ref = artifactRefPath(chip);
+  if (!ref) return;
+  const items = ref
+    .split("\n")
+    .filter(Boolean)
+    .map((path) => ({ path, label: _refLabel(path) }));
+  if (items.length === 0) return;
+  ui.composerInsertRef = { items, nonce: Date.now() + Math.random() };
+}
+
+/** 경로 끝 세그먼트(파일명/폴더명)만 추출 — 인용 pill 라벨용. */
+function _refLabel(path) {
+  const clean = String(path).replace(/\/+$/, "");
+  const seg = clean.slice(clean.lastIndexOf("/") + 1);
+  return seg || clean;
 }
 
 /**
