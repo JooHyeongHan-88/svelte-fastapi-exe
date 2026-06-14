@@ -104,6 +104,32 @@ def test_dataset_points_are_json_safe(client: TestClient) -> None:
     assert {p["key"] for p in points} == {"A", "B"}
 
 
+def test_dataset_desc_optional_when_column_absent(
+    client: TestClient, ts_dir: Path
+) -> None:
+    # desc 컬럼(item_desc)이 없는 parquet 도 큐레이션 진입이 막히지 않고 desc=None 으로 동작.
+    pl.DataFrame(
+        {
+            "item_id": ["A", "B"],
+            "rank": [1, 2],
+            "tkout_time": [datetime(2026, 6, 14, 0, 10), datetime(2026, 6, 14, 0, 20)],
+            "category": ["POR", "NEW"],
+            "value": [80, 90],
+        }
+    ).write_parquet(ts_dir / "nodesc.parquet")
+
+    resp = client.get(
+        "/api/ext/evaluator/dataset",
+        params={"path": f"result/{_SESSION}/{_TS}/nodesc.parquet"},
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert items == [
+        {"key": "A", "sort": 1, "desc": None},
+        {"key": "B", "sort": 2, "desc": None},
+    ]
+
+
 def test_dataset_missing_column_returns_422(client: TestClient) -> None:
     resp = client.get(
         "/api/ext/evaluator/dataset", params={"path": _REL, "select": "ghost"}
@@ -293,6 +319,34 @@ def test_export_records_manifest_entry(client: TestClient, ts_dir: Path) -> None
     assert len(entries) == 1
     assert entries[0]["kind"] == "parquet"
     assert entries[0]["path"].endswith("sample.curated.parquet")
+
+
+def test_export_applies_point_exclusions_to_data(
+    client: TestClient, ts_dir: Path
+) -> None:
+    # A 의 0·2번 point(소스 행 순서)를 차트 Filter 로 제외 → 실제 행이 데이터에서 빠진다.
+    # A 행 순서: pos0(POR,80) pos1(POR,82) pos2(NEW,90) pos3(NEW,93). [0,2] 제외 → 82·93 만 남음.
+    resp = client.post(
+        "/api/ext/evaluator/export",
+        json={"path": _REL, "selected": ["A", "B"], "excluded": {"A": [0, 2]}},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["rows"] == 6  # A 2행(제외 후) + B 4행
+
+    curated = pl.read_parquet(ts_dir / "sample.curated.parquet")
+    a_values = sorted(curated.filter(pl.col("item_id") == "A")["value"].to_list())
+    assert a_values == [82, 93]  # 80·90 은 제외됨
+    assert curated.filter(pl.col("item_id") == "B").height == 4  # B 는 그대로
+
+
+def test_export_all_points_excluded_returns_422(client: TestClient) -> None:
+    # 선택은 했지만 Filter 로 전 행을 제외하면 남는 행이 없어 422.
+    resp = client.post(
+        "/api/ext/evaluator/export",
+        json={"path": _REL, "selected": ["A"], "excluded": {"A": [0, 1, 2, 3]}},
+    )
+    assert resp.status_code == 422
 
 
 def test_export_empty_selected_returns_422(client: TestClient) -> None:

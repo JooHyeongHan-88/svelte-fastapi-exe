@@ -58,11 +58,13 @@ class ColumnMapping(BaseModel):
     x: Annotated[str, "차트 x 기준 컬럼(예: tkout_time)"] = "tkout_time"
     y: Annotated[str, "차트 y 기준 컬럼(예: value)"] = "value"
     legend: Annotated[str, "레전드 기준 컬럼(예: category)"] = "category"
-    desc: Annotated[str, "선택 기준 설명 컬럼(예: item_desc)"] = "item_desc"
+    # desc 는 선택적 — 데이터에 설명 컬럼이 없을 수 있으므로 required_columns 에서 제외하고
+    # 부재 시 desc=None 으로 폴백한다(_resolve_desc_expr).
+    desc: Annotated[str, "선택 기준 설명 컬럼(예: item_desc) — 없어도 됨"] = "item_desc"
 
     def required_columns(self) -> list[str]:
-        """존재해야 하는 컬럼 전체 목록."""
-        return [self.select, self.sort, self.x, self.y, self.legend, self.desc]
+        """반드시 존재해야 하는 컬럼 목록 (desc 제외 — desc 는 선택적)."""
+        return [self.select, self.sort, self.x, self.y, self.legend]
 
 
 class CurationState(BaseModel):
@@ -87,13 +89,18 @@ class StateSaveRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    """POST /export 본문 — 선택키(최종 리스트 순서대로)와 컬럼 매핑."""
+    """POST /export 본문 — 선택키(최종 리스트 순서대로)·컬럼 매핑·차트 Filter 제외."""
 
     path: Annotated[str, "소스 parquet 경로 (result/...)"]
     selected: Annotated[
         list[str], "내보낼 선택키 목록 — 최종 리스트 순서대로(= 재계산될 rank 순서)"
     ]
     mapping: ColumnMapping = Field(default_factory=ColumnMapping)
+    excluded: Annotated[
+        dict[str, list[int]],
+        "차트 Filter 로 제외한 행 — 선택키별 0-based point 인덱스(소스 행 순서 기준)."
+        " 분석용 최종 데이터에서 실제로 행을 제거한다(시각 전용 레전드 설정은 미반영).",
+    ] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +162,24 @@ def _require_columns(df: pl.DataFrame, columns: list[str]) -> None:
             status_code=422,
             detail=f"parquet 에 없는 컬럼: {missing} (보유 컬럼: {df.columns})",
         )
+
+
+def _resolve_desc_expr(df: pl.DataFrame, desc_column: str) -> pl.Expr:
+    """desc 컬럼 expr 을 만든다 — 컬럼이 없으면 null 리터럴로 폴백한다.
+
+    desc 는 선택적 역할이라 매핑이 비었거나 그 컬럼이 데이터에 없을 수 있다. 그럴 때
+    422 로 막지 않고 모든 항목의 desc 를 None 으로 처리해 큐레이션 진입을 보장한다.
+
+    Args:
+        df: 소스 DataFrame.
+        desc_column: 매핑된 desc 컬럼명(빈 문자열일 수 있음).
+
+    Returns:
+        ``desc`` alias 가 붙은 polars Expr (실 컬럼 또는 null 리터럴).
+    """
+    if desc_column and desc_column in df.columns:
+        return pl.col(desc_column).alias("desc")
+    return pl.lit(None).alias("desc")
 
 
 def _state_sidecar_path(target: Path) -> Path:
@@ -306,7 +331,7 @@ async def get_dataset(
         df.select(
             pl.col(mapping.select).cast(pl.String).alias("key"),
             pl.col(mapping.sort).alias("sort"),
-            pl.col(mapping.desc).alias("desc"),
+            _resolve_desc_expr(df, mapping.desc),
         )
         .group_by("key")
         .agg(
@@ -451,13 +476,45 @@ async def save_state(req: StateSaveRequest) -> dict[str, Any]:
     return {"ok": True, "path": to_result_relative(sidecar)}
 
 
+def _apply_point_exclusions(
+    df: pl.DataFrame, key_alias: str, excluded: dict[str, list[int]]
+) -> pl.DataFrame:
+    """차트 Filter 로 제외한 행(선택키별 0-based point 인덱스)을 데이터에서 제거한다.
+
+    프론트의 ``pointsByKey`` 인덱스는 '소스 행 순서로 같은 선택키 내 누적 위치'다. 그와
+    정확히 대응하도록 ``__pos__`` 를 키별 행 순번으로 계산한 뒤 anti-join 으로 빼낸다.
+    차트 Filter 는 '이 행을 최종 분석 데이터에서 뺀다'는 결정이므로(시각 전용 레전드
+    설정과 달리) 메타데이터가 아니라 실제 행을 삭제해 결과 parquet 에 반영한다.
+
+    Args:
+        df: ``key_alias`` · ``__pos__`` 컬럼이 부착된 DataFrame.
+        key_alias: 선택키 문자열 컬럼명.
+        excluded: 선택키 → 제외할 0-based 위치 목록.
+
+    Returns:
+        제외가 적용된 DataFrame (보조 컬럼은 호출부가 정리).
+    """
+    pairs = [(key, pos) for key, positions in excluded.items() for pos in positions]
+    if not pairs:
+        return df
+    drop_df = pl.DataFrame(
+        {
+            key_alias: [key for key, _ in pairs],
+            "__pos__": [int(pos) for _, pos in pairs],
+        },
+        schema={key_alias: pl.String, "__pos__": pl.Int64},
+    )
+    return df.join(drop_df, on=[key_alias, "__pos__"], how="anti")
+
+
 @router.post("/export")
 async def export_curated(req: ExportRequest) -> dict[str, Any]:
-    """선택 항목만 필터 + [Sort 기준] 정수 재계산 → 새 parquet 으로 저장한다 (내보내기).
+    """선택 항목만 필터 + 차트 Filter 제외 반영 + [Sort 기준] 재계산 → 새 parquet (내보내기).
 
     ``selected`` 는 최종 리스트 순서대로의 선택키이며, 그 순서대로 sort 컬럼을 1..N
-    정수로 덮어쓴다(같은 선택키의 모든 행이 동일 정수). 결과는 소스와 같은 폴더의
-    ``<stem>.curated.parquet`` 으로 쓰고 세션 manifest 에 기록한다.
+    정수로 덮어쓴다(같은 선택키의 모든 행이 동일 정수). ``excluded`` 의 행은 분석용
+    최종 데이터에서 **실제로 제거**한다(차트 Filter = 데이터 결정). 결과는 소스와 같은
+    폴더의 ``<stem>.curated.parquet`` 으로 쓰고 세션 manifest 에 기록한다.
     """
     if not req.selected:
         raise HTTPException(status_code=422, detail="선택된 항목이 없습니다.")
@@ -467,24 +524,31 @@ async def export_curated(req: ExportRequest) -> dict[str, Any]:
     df = _read_parquet(target)
     _require_columns(df, [mapping.select, mapping.sort])
 
+    # 선택키 문자열 + 키별 행 순번(프론트 pointsByKey 인덱스와 정합)을 부착한다.
+    df = df.with_columns(
+        pl.col(mapping.select).cast(pl.String).alias("__key__")
+    ).with_columns(
+        pl.int_range(0, pl.len()).over("__key__").cast(pl.Int64).alias("__pos__")
+    )
+
     # 선택키 → 새 정수 rank. 리스트 순서가 곧 rank 순서.
     rank_map = {key: index + 1 for index, key in enumerate(req.selected)}
+    selected_df = df.filter(pl.col("__key__").is_in(req.selected))
+    filtered_df = _apply_point_exclusions(selected_df, "__key__", req.excluded)
     curated = (
-        df.with_columns(pl.col(mapping.select).cast(pl.String).alias("__key__"))
-        .filter(pl.col("__key__").is_in(req.selected))
-        .with_columns(
+        filtered_df.with_columns(
             pl.col("__key__")
             .replace_strict(rank_map, return_dtype=pl.Int64)
             .alias(mapping.sort)
         )
-        .drop("__key__")
+        .drop("__key__", "__pos__")
         .sort(mapping.sort)
     )
 
     if curated.is_empty():
         raise HTTPException(
             status_code=422,
-            detail="선택키와 일치하는 행이 없습니다 — 매핑/선택을 확인하세요.",
+            detail="남는 행이 없습니다 — 선택/Filter 제외를 확인하세요.",
         )
 
     out = target.with_name(f"{target.stem}{_CURATED_SUFFIX}")

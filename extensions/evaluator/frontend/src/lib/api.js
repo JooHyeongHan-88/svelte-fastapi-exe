@@ -56,7 +56,14 @@ export function saveState(path, selected, order) {
   return postJson("/state", { path, selected, order });
 }
 
-/** 선택 항목만 필터 + rank 재계산 → 새 parquet (내보내기). */
-export function exportCurated(path, selected, mapping = {}) {
-  return postJson("/export", { path, selected, mapping });
+/**
+ * 선택 항목만 필터 + 차트 Filter 제외 반영 + rank 재계산 → 새 parquet (내보내기).
+ *
+ * @param {string} path
+ * @param {string[]} selected  최종 리스트 순서대로의 선택키
+ * @param {object} mapping
+ * @param {Record<string, number[]>} excluded  선택키별 제외 point 인덱스(차트 Filter)
+ */
+export function exportCurated(path, selected, mapping = {}, excluded = {}) {
+  return postJson("/export", { path, selected, mapping, excluded });
 }

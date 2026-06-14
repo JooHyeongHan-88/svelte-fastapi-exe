@@ -8,7 +8,9 @@
     saveState,
     exportCurated,
   } from "./lib/api.js";
-  import ScatterChart from "./lib/ScatterChart.svelte";
+  import ChartGrid from "./lib/ChartGrid.svelte";
+  import ChartLightbox from "./lib/ChartLightbox.svelte";
+  import { currentSnapshot } from "./lib/chartState.svelte.js";
 
   const MAPPING_KEYS = ["select", "sort", "x", "y", "legend", "desc"];
 
@@ -23,8 +25,9 @@
   let items = $state([]); // [{key, sort, desc}]
   let pointsByKey = $state({}); // key -> [{x,y,legend}]
   let order = $state([]); // 표시 순서의 키 배열
-  let selected = $state([]); // 체크된 키(order 의 부분집합)
-  let cursor = $state(0); // 하이라이트된 항목 인덱스
+  let selected = $state([]); // 체크된 키(order 의 부분집합 — 내보내기 대상)
+  let cursor = $state(0); // 키보드 하이라이트된 항목 인덱스
+  let displaySelection = $state([]); // 차트로 표시 중인 키 집합(Ctrl+클릭 다중 선택)
   let sourceLoading = $state(false); // 탭 전환 시 활성 소스 로딩
   let sourceError = $state(null); // 활성 소스 로드 실패 (탭 단위)
 
@@ -32,6 +35,14 @@
   let exporting = $state(false);
   let status = $state(null); // {kind: "ok"|"err", text}
   let exportInfo = $state(null); // {path, rows, items}
+
+  // 좌측 패널 너비(드래그 조절).
+  let sidebarWidth = $state(320);
+  let resizingSidebar = $state(false);
+
+  // 차트 확대 라이트박스.
+  let lightboxOpen = $state(false);
+  let lightboxIndex = $state(0);
 
   // 소스 추가/변경 picker.
   let pickerOpen = $state(false);
@@ -48,15 +59,30 @@
 
   // 파생 상태
   let activePath = $derived(sources[activeIdx] ?? "");
-  let currentKey = $derived(order[cursor] ?? null);
-  let currentItem = $derived(
-    currentKey ? items.find((i) => i.key === currentKey) : null,
-  );
-  let currentPoints = $derived(currentKey ? (pointsByKey[currentKey] ?? []) : []);
   let selectedOrdered = $derived(order.filter((k) => selected.includes(k)));
-  let chartTitle = $derived(
-    currentItem ? `${currentItem.key} — ${currentItem.desc ?? ""}` : "",
+
+  // 표시 선택된 키들의 차트 스펙(리스트 순서 유지). chartState 식별자는 소스 경로로
+  // 네임스페이스해 소스 간 같은 키가 필터 상태를 공유하지 않게 한다.
+  let displayCharts = $derived(
+    order
+      .filter((k) => displaySelection.includes(k))
+      .map((k) => {
+        const item = items.find((i) => i.key === k);
+        const desc = item?.desc;
+        return {
+          key: `${activePath}::${k}`,
+          title: desc ? `${k} — ${desc}` : k,
+          points: pointsByKey[k] ?? [],
+          xName: mapping.x,
+          yName: mapping.y,
+        };
+      }),
   );
+
+  // 표시 차트가 줄어 라이트박스 인덱스가 범위를 벗어나면 닫는다.
+  $effect(() => {
+    if (lightboxOpen && lightboxIndex >= displayCharts.length) lightboxOpen = false;
+  });
 
   function fileName(p) {
     return p ? p.split("/").pop() : "";
@@ -128,16 +154,23 @@
     pointsByKey = pmap;
 
     const itemKeys = items.map((i) => i.key);
-    // 저장된 순서가 현재 아이템 집합과 정확히 일치할 때만 복원, 아니면 sort 순서 유지.
+    const savedSelected = Array.isArray(st.selected) ? st.selected : [];
     const savedOrder = Array.isArray(st.order) ? st.order : [];
-    const valid =
+    // 저장된 순서가 현재 아이템 집합과 정확히 일치할 때만 복원, 아니면 sort 순서 유지.
+    const validOrder =
       savedOrder.length === itemKeys.length &&
       savedOrder.every((k) => itemKeys.includes(k));
-    order = valid ? savedOrder : itemKeys;
-    selected = (Array.isArray(st.selected) ? st.selected : []).filter((k) =>
-      itemKeys.includes(k),
-    );
+    order = validOrder ? savedOrder : itemKeys;
+
+    // 저장된 상태가 전혀 없으면(신규 소스) 기본으로 전부 선택(체크)한다.
+    const noSaved = savedSelected.length === 0 && savedOrder.length === 0;
+    selected = noSaved
+      ? [...itemKeys]
+      : savedSelected.filter((k) => itemKeys.includes(k));
+
     cursor = 0;
+    // 기본 표시 차트는 첫 항목 1개 — Ctrl+클릭으로 다중 표시.
+    displaySelection = itemKeys.length > 0 ? [order[0]] : [];
   }
 
   function stashCurrent() {
@@ -149,6 +182,7 @@
       order: [...order],
       selected: [...selected],
       cursor,
+      displaySelection: [...displaySelection],
     };
   }
 
@@ -159,11 +193,13 @@
     order = [...s.order];
     selected = [...s.selected];
     cursor = s.cursor;
+    displaySelection = [...(s.displaySelection ?? [])];
     sourceError = null;
   }
 
   // 활성 소스(sources[activeIdx])를 작업 상태로 적재 — stash 우선, 없으면 fetch.
   async function loadActiveSource() {
+    lightboxOpen = false;
     const p = sources[activeIdx];
     if (!p) return;
     if (stash[p]) {
@@ -182,6 +218,7 @@
       order = [];
       selected = [];
       cursor = 0;
+      displaySelection = [];
     } finally {
       sourceLoading = false;
     }
@@ -292,6 +329,8 @@
   function moveCursor(delta) {
     if (order.length === 0) return;
     cursor = Math.max(0, Math.min(order.length - 1, cursor + delta));
+    // 키보드 이동은 단일 표시로 전환(다중은 Ctrl+클릭 전용).
+    displaySelection = [order[cursor]];
   }
 
   function toggleSelected(key) {
@@ -299,6 +338,18 @@
       ? selected.filter((k) => k !== key)
       : [...selected, key];
     status = null;
+  }
+
+  // 항목 클릭 → 차트 표시. Ctrl/⌘+클릭이면 표시 집합에 토글, 아니면 단일 표시.
+  function selectDisplay(index, key, e) {
+    cursor = index;
+    if (e && (e.ctrlKey || e.metaKey)) {
+      displaySelection = displaySelection.includes(key)
+        ? displaySelection.filter((k) => k !== key)
+        : [...displaySelection, key];
+    } else {
+      displaySelection = [key];
+    }
   }
 
   function moveItem(index, delta) {
@@ -312,6 +363,42 @@
     status = null;
   }
 
+  function openLightbox(i) {
+    lightboxIndex = i;
+    lightboxOpen = true;
+  }
+  function closeLightbox() {
+    lightboxOpen = false;
+  }
+  function lightboxNext() {
+    if (displayCharts.length <= 1) return;
+    lightboxIndex = (lightboxIndex + 1) % displayCharts.length;
+  }
+  function lightboxPrev() {
+    if (displayCharts.length <= 1) return;
+    lightboxIndex = (lightboxIndex - 1 + displayCharts.length) % displayCharts.length;
+  }
+
+  // ── 좌측 패널 리사이즈 ───────────────────────────────────────────
+  function onSidebarResizeDown(e) {
+    if (e.button !== 0) return;
+    resizingSidebar = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  }
+  function onSidebarResizeMove(e) {
+    if (!resizingSidebar) return;
+    // .body 좌측 경계 = 창 좌측(앱 전체폭)이므로 clientX 가 곧 사이드바 너비.
+    const max = Math.min(640, window.innerWidth - 360);
+    sidebarWidth = Math.max(220, Math.min(max, e.clientX));
+  }
+  function onSidebarResizeUp(e) {
+    if (!resizingSidebar) return;
+    resizingSidebar = false;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+  }
+
+  // ── 저장 / 내보내기 ───────────────────────────────────────────────
   async function onSave() {
     saving = true;
     status = null;
@@ -325,6 +412,35 @@
     }
   }
 
+  // result/<session>/<ts>/file → <session> (내보내기 알림의 세션 상관키).
+  function sessionFromPath(p) {
+    const parts = String(p).split("/");
+    const i = parts.indexOf("result");
+    return i >= 0 && parts.length > i + 1 ? parts[i + 1] : "";
+  }
+
+  // 내보내기 산출물을 같은 출처(same-origin)인 메인 앱 탭에 알린다. 메인 앱이
+  // 구독해 parquet 데이터 칩으로 사용자에게 인폼한다(BroadcastChannel 미지원 무시).
+  function broadcastExport(info) {
+    try {
+      const ch = new BroadcastChannel("evaluator:exports");
+      ch.postMessage(info);
+      ch.close();
+    } catch {
+      // 구형 브라우저 등 미지원 환경 — 알림만 생략, 내보내기 자체는 성공.
+    }
+  }
+
+  // 선택 항목별로 차트 Filter 제외 인덱스를 모은다 — 내보내기 시 실제 행 제거에 반영.
+  function collectExclusions() {
+    const excluded = {};
+    for (const key of selectedOrdered) {
+      const snap = currentSnapshot(`${activePath}::${key}`);
+      if (snap?.excluded?.length) excluded[key] = [...snap.excluded];
+    }
+    return excluded;
+  }
+
   async function onExport() {
     if (selectedOrdered.length === 0) {
       status = { kind: "err", text: "선택된 항목이 없습니다." };
@@ -333,9 +449,23 @@
     exporting = true;
     status = null;
     try {
-      const res = await exportCurated(activePath, selectedOrdered, mapping);
+      const res = await exportCurated(
+        activePath,
+        selectedOrdered,
+        mapping,
+        collectExclusions(),
+      );
       exportInfo = { path: res.path, rows: res.rows, items: res.items };
       status = { kind: "ok", text: "내보내기 완료" };
+      broadcastExport({
+        type: "export",
+        session: sessionFromPath(res.path),
+        path: res.path,
+        filename: res.filename,
+        rows: res.rows,
+        columns: res.columns,
+        at: Date.now(),
+      });
     } catch (e) {
       status = { kind: "err", text: e?.message || String(e) };
     } finally {
@@ -344,6 +474,7 @@
   }
 
   function handleKey(e) {
+    if (lightboxOpen) return; // 라이트박스가 자체 키 처리
     if (pickerOpen && e.key === "Escape") {
       closePicker();
       return;
@@ -359,7 +490,8 @@
     } else if (e.key === " ") {
       if (tag === "button") return; // 버튼 포커스 시 space 는 버튼 활성화에 양보
       e.preventDefault();
-      if (currentKey) toggleSelected(currentKey);
+      const key = order[cursor];
+      if (key) toggleSelected(key);
     }
   }
 </script>
@@ -374,19 +506,11 @@
       <span class="sub">데이터 큐레이션</span>
     </div>
     {#if sources.length > 1}
-      <button
-        class="add-src"
-        onclick={() => openPicker("add")}
-        title="세션 산출물에서 소스 추가"
-      >
+      <button class="add-src" onclick={() => openPicker("add")} title="세션 산출물에서 소스 추가">
         + 소스 추가
       </button>
     {:else}
-      <button
-        class="add-src"
-        onclick={() => openPicker("change")}
-        title="세션 산출물에서 다른 소스로 변경"
-      >
+      <button class="add-src" onclick={() => openPicker("change")} title="세션 산출물에서 다른 소스로 변경">
         소스 변경
       </button>
     {/if}
@@ -402,11 +526,7 @@
           <button class="tab-label" title={src} onclick={() => switchSource(i)}>
             {fileName(src)}
           </button>
-          <button
-            class="tab-x"
-            title="소스 제거"
-            onclick={() => removeSource(i)}>×</button
-          >
+          <button class="tab-x" title="소스 제거" onclick={() => removeSource(i)}>×</button>
         </div>
       {/each}
     </div>
@@ -426,7 +546,7 @@
       </div>
     </div>
   {:else}
-    <div class="body">
+    <div class="body" class:resizing-x={resizingSidebar}>
       {#if sourceLoading}
         <div class="center muted">소스 불러오는 중…</div>
       {:else if sourceError}
@@ -438,8 +558,8 @@
           </div>
         </div>
       {:else}
-        <!-- 좌측: 선택 기준 리스트 -->
-        <aside class="sidebar">
+        <!-- 좌측: 선택 기준 리스트 (드래그로 너비 조절) -->
+        <aside class="sidebar" style="width: {sidebarWidth}px">
           <div class="list-head">
             <span>선택 기준 ({mapping.select})</span>
             <span class="count">{selectedOrdered.length} / {items.length}</span>
@@ -450,31 +570,23 @@
               <li
                 class="row"
                 class:active={index === cursor}
+                class:displayed={displaySelection.includes(key)}
                 class:checked={selected.includes(key)}
               >
                 <div class="reorder">
-                  <button
-                    class="mini"
-                    title="위로"
-                    disabled={index === 0}
-                    onclick={() => moveItem(index, -1)}>↑</button
-                  >
-                  <button
-                    class="mini"
-                    title="아래로"
-                    disabled={index === order.length - 1}
-                    onclick={() => moveItem(index, 1)}>↓</button
-                  >
+                  <button class="mini" title="위로" disabled={index === 0} onclick={() => moveItem(index, -1)}>↑</button>
+                  <button class="mini" title="아래로" disabled={index === order.length - 1} onclick={() => moveItem(index, 1)}>↓</button>
                 </div>
                 <input
                   type="checkbox"
                   checked={selected.includes(key)}
                   onchange={() => toggleSelected(key)}
                 />
-                <button class="meta" onclick={() => (cursor = index)}>
+                <button class="meta" onclick={(e) => selectDisplay(index, key, e)} title="클릭: 차트 표시 · Ctrl/⌘+클릭: 여러 항목 동시 표시">
                   <div class="key-line">
                     <span class="rank">#{item?.sort ?? "–"}</span>
                     <span class="key">{key}</span>
+                    {#if displaySelection.includes(key)}<span class="shown-dot" title="표시 중"></span>{/if}
                   </div>
                   {#if item?.desc}
                     <div class="desc">{item.desc}</div>
@@ -484,22 +596,25 @@
             {/each}
           </ul>
           <p class="hint muted small">
-            ↑/↓ 항목 이동 · Space 선택 토글 · 행의 ↑↓ 로 순서 변경
+            ↑/↓ 이동 · Space 선택 · 클릭 차트표시 · Ctrl+클릭 다중표시 · 행 ↑↓ 순서변경
           </p>
         </aside>
 
-        <!-- 본문: 선택 항목 scatter -->
+        <!-- 너비 조절 핸들 -->
+        <div
+          class="col-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="좌측 패널 너비 조절"
+          onpointerdown={onSidebarResizeDown}
+          onpointermove={onSidebarResizeMove}
+          onpointerup={onSidebarResizeUp}
+          onpointercancel={onSidebarResizeUp}
+        ></div>
+
+        <!-- 본문: 표시 선택된 항목들의 차트 그리드 -->
         <main class="content">
-          {#if currentKey}
-            <ScatterChart
-              points={currentPoints}
-              title={chartTitle}
-              xName={mapping.x}
-              yName={mapping.y}
-            />
-          {:else}
-            <div class="center muted">표시할 항목이 없습니다.</div>
-          {/if}
+          <ChartGrid charts={displayCharts} onopen={openLightbox} />
         </main>
       {/if}
     </div>
@@ -520,15 +635,21 @@
         <button class="btn" onclick={onSave} disabled={saving}>
           {saving ? "저장 중…" : "저장하기"}
         </button>
-        <button
-          class="btn primary"
-          onclick={onExport}
-          disabled={exporting || selectedOrdered.length === 0}
-        >
+        <button class="btn primary" onclick={onExport} disabled={exporting || selectedOrdered.length === 0}>
           {exporting ? "내보내는 중…" : "내보내기"}
         </button>
       </div>
     </footer>
+  {/if}
+
+  {#if lightboxOpen}
+    <ChartLightbox
+      charts={displayCharts}
+      index={lightboxIndex}
+      onclose={closeLightbox}
+      onnext={lightboxNext}
+      onprev={lightboxPrev}
+    />
   {/if}
 
   {#if pickerOpen}
@@ -543,9 +664,7 @@
       <div class="picker" role="dialog" aria-label={pickerTitle}>
         <div class="picker-head">
           <strong>{pickerTitle}</strong>
-          <button class="picker-close" onclick={closePicker} aria-label="닫기"
-            >×</button
-          >
+          <button class="picker-close" onclick={closePicker} aria-label="닫기">×</button>
         </div>
         <div class="picker-main">
           <!-- 좌: 후보 리스트 -->
@@ -553,9 +672,7 @@
             {#if catalogLoading}
               <li class="muted small pad">불러오는 중…</li>
             {:else if catalog.length === 0}
-              <li class="muted small pad">
-                이 세션에서 발견된 parquet 후보가 없습니다.
-              </li>
+              <li class="muted small pad">이 세션에서 발견된 parquet 후보가 없습니다.</li>
             {:else}
               {#each catalog as c (c.path)}
                 {@const added = sources.includes(c.path)}
@@ -580,9 +697,7 @@
           <!-- 우: 미리보기 + 액션 -->
           <div class="preview-pane">
             {#if !pickedPath}
-              <div class="center muted small">
-                왼쪽에서 소스를 선택하면 미리보기가 표시됩니다.
-              </div>
+              <div class="center muted small">왼쪽에서 소스를 선택하면 미리보기가 표시됩니다.</div>
             {:else if previewLoading}
               <div class="center muted small">미리보기 불러오는 중…</div>
             {:else if previewError}
@@ -597,9 +712,7 @@
               {@const isCurrent = pickedPath === activePath}
               <div class="pv-meta">
                 <span class="pv-name" title={preview.path}>{preview.filename}</span>
-                <span class="muted small"
-                  >{preview.total_rows}행 × {preview.schema.length}열</span
-                >
+                <span class="muted small">{preview.total_rows}행 × {preview.schema.length}열</span>
               </div>
               <div class="pv-table-scroll">
                 <table class="pv-table">
@@ -635,16 +748,11 @@
                   {#if isCurrent}
                     <span class="muted small">현재 소스입니다.</span>
                   {:else}
-                    <button
-                      class="btn primary"
-                      onclick={() => changeSource(pickedPath)}
-                    >
+                    <button class="btn primary" onclick={() => changeSource(pickedPath)}>
                       {added ? "이 탭으로 전환" : "이 소스로 변경"}
                     </button>
                     {#if !added}
-                      <button class="btn" onclick={() => addSource(pickedPath)}>
-                        새 탭으로 추가
-                      </button>
+                      <button class="btn" onclick={() => addSource(pickedPath)}>새 탭으로 추가</button>
                     {/if}
                   {/if}
                 {:else}
@@ -778,15 +886,30 @@
     display: flex;
     min-height: 0;
   }
+  .body.resizing-x {
+    cursor: col-resize;
+    user-select: none;
+  }
 
   .sidebar {
-    width: 320px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
     background: var(--panel);
     border-right: 1px solid var(--border);
     min-height: 0;
+  }
+  .col-resizer {
+    flex-shrink: 0;
+    width: 6px;
+    margin: 0 -3px;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 5;
+    touch-action: none;
+  }
+  .col-resizer:hover {
+    background: var(--accent-soft-strong);
   }
   .list-head {
     display: flex;
@@ -820,9 +943,12 @@
   .row:hover {
     background: var(--panel-2);
   }
-  .row.active {
+  .row.displayed {
     background: var(--accent-soft);
     border-color: var(--accent-border);
+  }
+  .row.active {
+    border-color: var(--accent);
   }
   .row.checked .key {
     color: var(--accent);
@@ -881,6 +1007,13 @@
   }
   .key {
     font-weight: 600;
+  }
+  .shown-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    align-self: center;
   }
   .desc {
     font-size: 12px;

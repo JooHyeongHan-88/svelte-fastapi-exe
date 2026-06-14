@@ -15,6 +15,10 @@ lib/
   storage.js            localStorage CRUD (세션, activeId, 테마)
   markdown.js           renderMarkdown(text) — marked + DOMPurify + hljs
   format.js             autoTitle, relativeTimeBucket, formatElapsed, formatDuration
+  evaluatorBridge.svelte.js  evaluator 확장 탭의 BroadcastChannel("evaluator:exports")
+                        구독 — 내보내기 알림 시 해당 세션 마지막 어시스턴트 메시지에
+                        parquet 데이터 칩 부착(initApp 시작·teardown 정리). 별도 탭이라
+                        SSE 가 아닌 BroadcastChannel 경유 (→ extensions_architecture.md)
 
 components/
   Sidebar.svelte        세션 목록 + 새 대화 버튼 + 테마 토글 + 설정 아이콘 + ModelPicker

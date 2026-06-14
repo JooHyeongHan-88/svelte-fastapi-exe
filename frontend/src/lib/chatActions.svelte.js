@@ -48,6 +48,10 @@ import {
   makeArtifactChip,
   resetArtifactPanelState,
 } from "./artifactActions.svelte.js";
+import {
+  startEvaluatorBridge,
+  stopEvaluatorBridge,
+} from "./evaluatorBridge.svelte.js";
 
 const SAVE_DEBOUNCE_MS = 200;
 const UPDATE_POLL_MS = 500;
@@ -639,6 +643,9 @@ export async function initApp() {
 
   refreshArtifactUsage();
 
+  // evaluator 확장 탭의 내보내기 알림을 구독해 데이터 칩으로 인폼한다.
+  startEvaluatorBridge();
+
   getAppInfo()
     .then(({ name, version }) => {
       ui.appName = name;
@@ -722,6 +729,7 @@ export function closeUpdateModal() {
 
 export function teardown() {
   closePresence();
+  stopEvaluatorBridge();
   flushSave();
 }
 
