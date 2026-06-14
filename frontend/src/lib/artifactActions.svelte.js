@@ -118,6 +118,44 @@ function _refLabel(path) {
   return seg || clean;
 }
 
+/** 큐레이션 요약을 사람이 읽는 한 줄 맥락 문구로 만든다(후속 프롬프트 머리말). */
+function _curationFollowupText(summary) {
+  const base = "이 큐레이션 결과로 이어서 작업해줘";
+  if (!summary || typeof summary !== "object") return `${base}: `;
+  const facts = [];
+  if (Number.isFinite(summary.total) && Number.isFinite(summary.selected)) {
+    facts.push(`후보 ${summary.total}개 중 ${summary.selected}개 선택`);
+  }
+  if (Number.isFinite(summary.excluded_rows) && summary.excluded_rows > 0) {
+    facts.push(`${summary.excluded_rows}행 제외`);
+  }
+  const note = typeof summary.note === "string" ? summary.note.trim() : "";
+  let text = base;
+  if (facts.length > 0) text += ` (${facts.join(", ")})`;
+  if (note) text += ` [메모: ${note}]`;
+  return `${text}: `;
+}
+
+/**
+ * 큐레이션 결과(데이터 칩)로 이어서 작업하도록 컴포저에 후속 프롬프트를 시드한다.
+ * 결정 요약(보존 N/M·제외·메모)을 머리말 텍스트로, 큐레이션 parquet 경로를 인용 pill
+ * 로 넣어, 사용자가 검토 후 전송하면 에이전트가 사람의 큐레이션 맥락을 안고 이어서
+ * 작업한다. 기존 composerSetParts 신호를 그대로 재사용한다(Composer 가 소비).
+ *
+ * @param {{path?:string, filename?:string, summary?:object}} payload
+ */
+export function seedCurationFollowup(payload) {
+  const path = payload?.path;
+  if (typeof path !== "string" || !path.startsWith("result/")) return;
+  ui.composerSetParts = {
+    parts: [
+      { type: "text", value: _curationFollowupText(payload?.summary) },
+      { type: "ref", path, label: _refLabel(path) },
+    ],
+    nonce: Date.now() + Math.random(),
+  };
+}
+
 /**
  * 활성 칩의 산출물이 저장된 폴더를 OS 파일 탐색기(Windows Explorer)에서 연다.
  * 이미지 갤러리는 과거 산출물 재표시가 섞일 수 있어 항목들이 서로 다른 턴 폴더에

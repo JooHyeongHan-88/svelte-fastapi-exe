@@ -82,16 +82,28 @@ def _validate_sources(sources: list[str]) -> tuple[list[str], str | None]:
     return resolved, None
 
 
+def _is_valid_mapping_value(value: object) -> bool:
+    """매핑 값이 허용 형식인지 검사한다 — 문자열 또는 문자열 리스트.
+
+    레전드 등 일부 역할은 다중 컬럼(list[str])을 받을 수 있으므로(확장 툴이 합성해
+    해석), str 뿐 아니라 list[str] 도 허용한다.
+    """
+    if isinstance(value, str):
+        return True
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def _validate_mapping(
-    mapping: dict[str, str] | None,
-) -> tuple[dict[str, str], str | None]:
+    mapping: dict[str, str | list[str]] | None,
+) -> tuple[dict[str, str | list[str]], str | None]:
     """컬럼 역할 매핑을 검증한다 (선택 인자).
 
     역할 키의 의미는 확장 툴이 해석하므로 여기서 키 집합을 강제하지 않는다 — 평탄한
-    문자열→문자열 딕셔너리인지만 확인한다.
+    ``{문자열: 문자열|문자열리스트}`` 딕셔너리인지만 확인한다. 리스트 값은 다중 컬럼
+    역할(예: legend 다중 합성)을 위해 허용한다.
 
     Args:
-        mapping: ``{역할: 컬럼명}`` 딕셔너리 또는 None.
+        mapping: ``{역할: 컬럼명}`` 또는 ``{역할: [컬럼명, ...]}`` 딕셔너리, 또는 None.
 
     Returns:
         (검증된 매핑(없으면 빈 dict), None) 성공 / ({}, 오류 메시지) 실패.
@@ -99,11 +111,12 @@ def _validate_mapping(
     if mapping is None:
         return {}, None
     if not isinstance(mapping, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()
+        isinstance(k, str) and _is_valid_mapping_value(v) for k, v in mapping.items()
     ):
         return {}, (
-            "mapping 은 {역할: 컬럼명} 형식의 문자열 딕셔너리여야 합니다 "
-            '(예: {"select": "item_id", "sort": "rank"}).'
+            "mapping 은 {역할: 컬럼명} 형식의 딕셔너리여야 합니다 "
+            "(값은 문자열 또는 문자열 리스트; 예: "
+            '{"select": "item_id", "legend": ["category", "region"]}).'
         )
     return mapping, None
 
@@ -170,6 +183,8 @@ def _write_text(target: Path, text: str) -> str | None:
         "mapping 은 컬럼 역할→컬럼명 딕셔너리로, 확장 툴이 해석한다(생략 시 툴 기본값). "
         "evaluator 의 역할 키: select(리스트 항목 키)·sort(정수 순위)·x·y(scatter 축)·"
         "legend(시리즈 그룹)·desc(보조 설명). "
+        "mark 는 기본 차트 종류(선택) — evaluator 는 "
+        "scatter/line/bar/box/histogram/ecdf/heatmap 을 받으며 생략 시 scatter. "
         "이 도구는 마크다운 카드 칩 1개를 패널에 표시하며, 사용자가 카드의 링크를 "
         "클릭하면 큐레이션 도구가 새 탭에서 열린다."
     ),
@@ -189,11 +204,17 @@ async def open_curation(
         "검토할 parquet 의 'result/...' 경로 리스트 (1개 이상). save_artifact 가 반환한 경로를 그대로 전달.",
     ],
     mapping: Annotated[
-        dict[str, str] | None,
-        "컬럼 역할→컬럼명 딕셔너리 (확장 툴이 해석). 생략 시 툴 기본값. "
+        dict[str, str | list[str]] | None,
+        "컬럼 역할→컬럼명 딕셔너리 (확장 툴이 해석). 생략 시 툴 기본값. 값은 문자열 "
+        "또는 문자열 리스트(다중 컬럼 역할, 예: legend 다중 합성). "
         '예: {"select": "item_id", "sort": "rank", "x": "tkout_time", "y": "value", '
-        '"legend": "category", "desc": "item_desc"}.',
+        '"legend": ["category", "region"], "desc": "item_desc"}.',
     ] = None,
+    mark: Annotated[
+        str,
+        "기본 차트 종류 (확장 툴이 해석, 생략 가능). evaluator 는 "
+        "scatter/line/bar/box/histogram/ecdf/heatmap 중 하나. 사용자가 도구 안에서 바꿀 수 있다.",
+    ] = "",
     title: Annotated[str, "카드 제목 (패널 헤더·카드 제목에 표시)"] = "",
 ) -> ToolResult:
     """큐레이션 확장 도구 진입 카드를 패널에 표시한다.
@@ -205,6 +226,7 @@ async def open_curation(
         tool: 확장 툴 이름 (/ext/<tool>/ 세그먼트).
         sources: 검토할 parquet 의 'result/...' 경로 목록.
         mapping: 컬럼 역할 매핑 (선택, 확장 툴이 해석).
+        mark: 기본 차트 종류 (선택, 확장 툴이 해석 — 비면 번들에서 생략).
         title: 카드 제목 (선택).
 
     Returns:
@@ -233,6 +255,10 @@ async def open_curation(
     slot = turn_slot()
 
     bundle = {"tool": tool_name, "sources": resolved_sources, "mapping": clean_mapping}
+    # mark 는 제네릭 통과값 — 호스트는 해석하지 않고 번들에 그대로 실어 확장이 처리한다.
+    mark_name = (mark or "").strip()
+    if mark_name:
+        bundle["mark"] = mark_name
     bundle_path = slot / f"{tool_name}{_BUNDLE_SUFFIX}"
     write_error = _write_text(
         bundle_path, json.dumps(bundle, ensure_ascii=False, indent=2)

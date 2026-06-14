@@ -1,16 +1,19 @@
 <script>
-  import { onMount, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import * as echarts from "echarts";
-  import { buildScatterOption } from "./chartOption.js";
+  import { buildChartOption } from "./chartOption.js";
   import { currentSnapshot } from "./chartState.svelte.js";
 
-  // 단일 ECharts scatter 의 생명주기를 자가 관리한다(메인 앱 ChartCell 패턴 복사).
-  // points + 뷰 스냅샷(currentSnapshot)으로 option 을 만들고, brush 환원용 row_ids 를
-  // onchart 콜백으로 라이트박스에 넘긴다.
+  // 단일 ECharts 차트의 생명주기를 자가 관리한다(메인 앱 ChartCell 패턴 복사).
+  // points + 뷰 스냅샷(currentSnapshot) + mark(차트 종류)로 option 을 만들고, brush
+  // 환원용 row_ids 를 onchart 콜백으로 라이트박스에 넘긴다.
   let {
     chartKey,
     points = [],
     title = "",
+    mark = "scatter",
+    roles = { x: true, y: true, legend: true },
+    aggregate = "mean",
     xName = "x",
     yName = "y",
     embedded = true,
@@ -23,58 +26,62 @@
   let resizeObserver = null;
   let renderError = $state(null);
 
-  // 뷰 스냅샷을 반응적으로 읽어 option 을 파생한다 — 필터/레전드 변경 시 자동 재구성.
+  // 뷰 스냅샷·mark·매핑을 반응적으로 읽어 option 을 파생한다 — 변경 시 자동 재구성.
   // 제목은 감싼 패널(.cell-title / 라이트박스 헤더)이 표시하므로 차트에 넣지 않는다.
   let built = $derived(
-    buildScatterOption(points, currentSnapshot(chartKey), { xName, yName }),
+    buildChartOption(mark, points, currentSnapshot(chartKey), {
+      xName,
+      yName,
+      roles,
+      aggregate,
+    }),
   );
+
+  // 매핑 누락 등으로 차트를 못 그리는 경우(option=null) 안내 문구.
+  let buildError = $derived(built?.error ?? null);
 
   function emitChart() {
     if (chart && typeof onchart === "function") onchart(chart, built.row_ids);
   }
 
-  function initChart() {
-    if (!container) return;
-    if (chart) {
-      chart.dispose();
-      chart = null;
-    }
-    renderError = null;
-    try {
-      chart = echarts.init(container, null, { renderer: "canvas" });
-      chart.setOption(built.option);
-      emitChart();
-    } catch (err) {
-      chart?.dispose();
-      chart = null;
-      renderError = err?.message ?? "알 수 없는 오류";
-    }
-  }
-
-  onMount(() => {
-    initChart();
-    resizeObserver = new ResizeObserver(() => chart?.resize());
-    if (container) resizeObserver.observe(container);
-  });
-
-  onDestroy(() => {
+  function disposeChart() {
     resizeObserver?.disconnect();
+    resizeObserver = null;
     chart?.dispose();
     chart = null;
-  });
+  }
 
-  // option 이 바뀌면(필터/레전드/페이지 내 셀 재사용) 차트 갱신 + row_ids 재통지.
-  $effect(() => {
-    if (!chart || !built?.option) return;
+  // container 와 유효한 option 이 모두 준비됐을 때만 init/갱신한다. 차트 종류·매핑
+  // 변경으로 option 이 null↔valid 를 오갈 수 있어 init 을 효과 안에서 일원화한다.
+  function renderInto() {
+    if (!container || !built?.option) return;
     try {
+      if (!chart) {
+        chart = echarts.init(container, null, { renderer: "canvas" });
+        resizeObserver = new ResizeObserver(() => chart?.resize());
+        resizeObserver.observe(container);
+      }
       chart.setOption(built.option, { notMerge: true });
       renderError = null;
       emitChart();
     } catch (err) {
-      chart.dispose();
-      chart = null;
+      disposeChart();
       renderError = err?.message ?? "알 수 없는 오류";
     }
+  }
+
+  onDestroy(disposeChart);
+
+  // built(점·mark·매핑·스냅샷)·container 변화에 반응. 그릴 수 없으면 기존 차트를
+  // 폐기해 stale 캔버스가 남지 않게 한다(매핑 누락으로 안내 문구를 띄울 때).
+  $effect(() => {
+    void built;
+    void container;
+    if (buildError || !built?.option || !container) {
+      if (chart) disposeChart();
+      return;
+    }
+    renderInto();
   });
 
   function handleClick() {
@@ -82,6 +89,7 @@
   }
 
   let clickable = $derived(typeof onclick === "function");
+  let errorText = $derived(renderError ?? buildError);
 </script>
 
 <div class="chart-cell" class:embedded class:standalone={!embedded}>
@@ -89,10 +97,14 @@
     <div class="cell-title" {title}>{title}</div>
   {/if}
 
-  {#if renderError}
+  {#if errorText}
     <div class="cell-error">
-      <span>차트를 그릴 수 없습니다.</span>
-      <small>{renderError}</small>
+      {#if renderError}
+        <span>차트를 그릴 수 없습니다.</span>
+        <small>{renderError}</small>
+      {:else}
+        <span class="needs-mapping">{buildError}</span>
+      {/if}
     </div>
   {:else if clickable}
     <button type="button" class="cell-btn" onclick={handleClick} aria-label={title || "차트 확대"}>
@@ -168,5 +180,9 @@
     font-size: 10px;
     color: var(--muted);
     word-break: break-all;
+  }
+  /* 매핑 누락은 에러가 아니라 안내 — 차분한 muted 색으로 표시. */
+  .cell-error .needs-mapping {
+    color: var(--muted);
   }
 </style>

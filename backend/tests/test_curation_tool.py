@@ -119,6 +119,29 @@ def test_mapping_optional_defaults_to_empty() -> None:
     assert data["mapping"] == {}
 
 
+def test_bundle_records_mark_when_given() -> None:
+    # 기본 차트 종류(mark)를 주면 번들에 그대로 통과 기록된다(확장이 해석).
+    _setup()
+    src = _make_parquet()
+    result = _open(tool="evaluator", sources=[src], mapping=_MAPPING, mark="bar")
+
+    assert result.is_error is False, result.content
+    bundle = result_store.turn_slot() / "evaluator.bundle.json"
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    assert data["mark"] == "bar"
+
+
+def test_mark_omitted_when_empty() -> None:
+    # mark 를 안 주면 번들에 mark 키 자체가 없다(프론트가 기본값 적용).
+    _setup()
+    src = _make_parquet()
+    _open(tool="evaluator", sources=[src], mapping=_MAPPING)
+
+    bundle = result_store.turn_slot() / "evaluator.bundle.json"
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    assert "mark" not in data
+
+
 def test_multiple_sources_all_recorded() -> None:
     _setup()
     src1 = _make_parquet("candidates.parquet")
@@ -170,10 +193,32 @@ def test_rejects_bad_tool_name() -> None:
         assert "tool" in result.content
 
 
+def test_accepts_list_valued_legend_mapping() -> None:
+    # 다중 컬럼 legend 는 list[str] 값으로 허용되고 번들에 그대로 기록된다.
+    _setup()
+    src = _make_parquet()
+    mapping = {"select": "item_id", "legend": ["category", "region"]}
+    result = _open(tool="evaluator", sources=[src], mapping=mapping)
+
+    assert result.is_error is False, result.content
+    bundle = result_store.turn_slot() / "evaluator.bundle.json"
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    assert data["mapping"]["legend"] == ["category", "region"]
+
+
 def test_rejects_non_string_mapping() -> None:
     _setup()
     src = _make_parquet()
     result = _open(tool="evaluator", sources=[src], mapping={"select": 123})
+    assert result.is_error is True
+    assert "mapping" in result.content
+
+
+def test_rejects_non_string_list_mapping() -> None:
+    # legend 가 리스트라도 원소가 문자열이 아니면 거부한다.
+    _setup()
+    src = _make_parquet()
+    result = _open(tool="evaluator", sources=[src], mapping={"legend": [1, 2]})
     assert result.is_error is True
     assert "mapping" in result.content
 

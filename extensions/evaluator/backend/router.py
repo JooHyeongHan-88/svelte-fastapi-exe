@@ -24,7 +24,7 @@ from typing import Annotated, Any
 
 import polars as pl
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.deps import require_local_origin
 from core.result_store import resolve_result_path, to_result_relative
@@ -49,26 +49,64 @@ _MANIFEST_FILENAME = "_artifacts.jsonl"
 
 
 class ColumnMapping(BaseModel):
-    """parquet 컬럼 → 큐레이션 역할 매핑. 미지정 시 예시 데이터 컬럼명을 기본값으로 쓴다."""
+    """parquet 컬럼 → 큐레이션 역할 매핑. 미지정 시 예시 데이터 컬럼명을 기본값으로 쓴다.
+
+    역할 구분:
+        - 공통(차트 무관): select·sort·legend·desc — 어느 차트 종류든 필요.
+        - 차트별(mark 가변): x·y — 차트 종류에 따라 필요 여부가 달라진다.
+
+    legend 는 **다중 컬럼**을 허용한다(Tableau 의 Color 셸프처럼 여러 차원을 합성).
+    x/y 는 차트 종류에 따라 비어 있을 수 있으므로(예: histogram 은 x 만, box 는 y 만)
+    빈 문자열을 '미매핑'으로 취급해 required_columns 에서 제외한다.
+
+    프론트엔드는 차트별 옵션(mark·집계함수 등)을 같은 매핑 객체에 실어 보낼 수 있으므로
+    ``extra="ignore"`` 로 미지의 키를 조용히 흘려보낸다(export 검증을 깨지 않기 위함).
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     select: Annotated[str, "선택 기준 컬럼(예: item_id)"] = "item_id"
     sort: Annotated[str, "Sort 기준 컬럼(예: rank) — 내보내기 시 정수 재계산 대상"] = (
         "rank"
     )
-    x: Annotated[str, "차트 x 기준 컬럼(예: tkout_time)"] = "tkout_time"
-    y: Annotated[str, "차트 y 기준 컬럼(예: value)"] = "value"
-    legend: Annotated[str, "레전드 기준 컬럼(예: category)"] = "category"
+    x: Annotated[str, "차트 x 기준 컬럼(예: tkout_time) — 차트 종류에 따라 선택적"] = (
+        "tkout_time"
+    )
+    y: Annotated[str, "차트 y 기준 컬럼(예: value) — 차트 종류에 따라 선택적"] = "value"
+    legend: Annotated[
+        list[str],
+        "레전드(시리즈 그룹) 기준 컬럼 목록 — 다중 컬럼 합성 허용(예: category)",
+    ] = Field(default_factory=lambda: ["category"])
     # desc 는 선택적 — 데이터에 설명 컬럼이 없을 수 있으므로 required_columns 에서 제외하고
     # 부재 시 desc=None 으로 폴백한다(_resolve_desc_expr).
     desc: Annotated[str, "선택 기준 설명 컬럼(예: item_desc) — 없어도 됨"] = "item_desc"
 
+    def legend_columns(self) -> list[str]:
+        """비어 있지 않은 legend 컬럼명 목록 (합성·검증 대상)."""
+        return [col for col in self.legend if col]
+
     def required_columns(self) -> list[str]:
-        """반드시 존재해야 하는 컬럼 목록 (desc 제외 — desc 는 선택적)."""
-        return [self.select, self.sort, self.x, self.y, self.legend]
+        """반드시 존재해야 하는 컬럼 목록.
+
+        select·sort 는 항상 필수. x·y 는 매핑된(빈 문자열이 아닌) 경우에만 검증한다
+        (차트 종류별로 한쪽만 쓰는 경우 대응). legend 는 합성 컬럼들을 모두 포함.
+        desc 는 선택적이라 제외.
+        """
+        cols = [self.select, self.sort]
+        if self.x:
+            cols.append(self.x)
+        if self.y:
+            cols.append(self.y)
+        cols.extend(self.legend_columns())
+        return cols
 
 
 class CurationState(BaseModel):
-    """저장/복원되는 큐레이션 상태 — 선택된 키와 리스트 순서."""
+    """저장/복원되는 큐레이션 상태 — 선택·순서 + 차트 설정(mark·mapping).
+
+    mark·mapping 은 사용자가 도구 안에서 바꾼 차트 종류·컬럼 매핑을 영속해 재진입 시
+    그대로 복원하기 위한 것이다(빈 값이면 번들/쿼리 기본값을 쓴다).
+    """
 
     selected: Annotated[list[str], "최종 선택(체크)된 선택키 목록"] = Field(
         default_factory=list
@@ -76,6 +114,10 @@ class CurationState(BaseModel):
     order: Annotated[list[str], "사용자가 재정렬한 전체 선택키 순서"] = Field(
         default_factory=list
     )
+    mark: Annotated[str, "차트 종류(scatter/line/bar/...) — 빈 값이면 기본값"] = ""
+    mapping: Annotated[
+        dict[str, Any], "사용자가 변경한 컬럼 매핑 오버라이드 — 빈 dict 면 기본값"
+    ] = Field(default_factory=dict)
 
 
 class StateSaveRequest(BaseModel):
@@ -85,6 +127,10 @@ class StateSaveRequest(BaseModel):
     selected: Annotated[list[str], "체크된 선택키 목록"] = Field(default_factory=list)
     order: Annotated[list[str], "재정렬된 전체 선택키 순서"] = Field(
         default_factory=list
+    )
+    mark: Annotated[str, "차트 종류 — 빈 값이면 미저장"] = ""
+    mapping: Annotated[dict[str, Any], "컬럼 매핑 오버라이드 — 빈 dict 면 미저장"] = (
+        Field(default_factory=dict)
     )
 
 
@@ -101,6 +147,9 @@ class ExportRequest(BaseModel):
         "차트 Filter 로 제외한 행 — 선택키별 0-based point 인덱스(소스 행 순서 기준)."
         " 분석용 최종 데이터에서 실제로 행을 제거한다(시각 전용 레전드 설정은 미반영).",
     ] = Field(default_factory=dict)
+    note: Annotated[
+        str, "사람이 남긴 큐레이션 메모 — 결정 맥락으로 메인 앱 칩 요약에 표시된다."
+    ] = ""
 
 
 # ---------------------------------------------------------------------------
@@ -303,22 +352,49 @@ router = APIRouter(
 )
 
 
+def _legend_expr(legend_columns: list[str]) -> pl.Expr:
+    """legend 컬럼(들)을 단일 문자열 시리즈 그룹으로 합성하는 expr 을 만든다.
+
+    다중 컬럼이면 ``" | "`` 로 합성해 복합 차원(예: ``POR | XXXX1``)을 만든다.
+    컬럼이 하나면 그 값 그대로, 0개면 null(그룹 없음)로 폴백한다.
+
+    Args:
+        legend_columns: 비어 있지 않은 legend 컬럼명 목록.
+
+    Returns:
+        ``legend`` alias 가 붙은 polars Expr.
+    """
+    if not legend_columns:
+        return pl.lit(None).cast(pl.String).alias("legend")
+    parts = [pl.col(col).cast(pl.String) for col in legend_columns]
+    if len(parts) == 1:
+        return parts[0].alias("legend")
+    return pl.concat_str(parts, separator=" | ", ignore_nulls=False).alias("legend")
+
+
 @router.get("/dataset")
 async def get_dataset(
     path: Annotated[str, Query(description="소스 parquet 경로 (result/...)")],
     select: Annotated[str, Query(description="선택 기준 컬럼")] = "item_id",
     sort: Annotated[str, Query(description="Sort 기준 컬럼")] = "rank",
-    x: Annotated[str, Query(description="차트 x 기준 컬럼")] = "tkout_time",
-    y: Annotated[str, Query(description="차트 y 기준 컬럼")] = "value",
-    legend: Annotated[str, Query(description="레전드 기준 컬럼")] = "category",
+    x: Annotated[
+        str, Query(description="차트 x 기준 컬럼(빈 값=미매핑)")
+    ] = "tkout_time",
+    y: Annotated[str, Query(description="차트 y 기준 컬럼(빈 값=미매핑)")] = "value",
+    legend: Annotated[list[str], Query(description="레전드 기준 컬럼(다중 가능)")] = [
+        "category"
+    ],
     desc: Annotated[str, Query(description="선택 기준 설명 컬럼")] = "item_desc",
 ) -> dict[str, Any]:
-    """소스 parquet → 선택 항목 리스트 + scatter 포인트(JSON)를 반환한다.
+    """소스 parquet → 선택 항목 리스트 + 차트 포인트 + 스키마(JSON)를 반환한다.
 
     - ``items``: distinct 선택키별 ``{key, sort, desc}`` (sort 오름차순, key 보조정렬).
     - ``points``: ``{key, x, y, legend}`` 전체 행 (프론트가 key 로 필터해 차트 구성).
+      x/y 가 미매핑(빈 값)이면 해당 필드는 null. legend 가 다중 컬럼이면 합성 문자열.
+    - ``schema``: ``{name, dtype}`` 컬럼 목록 — 프론트 매핑 UI 의 드롭다운 채움용.
 
-    소형 데이터(아이템 수십~수백, 행 수천) 전제로 전체를 1회 내려준다.
+    소형 데이터(아이템 수십~수백, 행 수천) 전제로 전체를 1회 내려준다. 차트 종류가
+    바뀌어도 포인트는 동일하므로(렌더만 다름) 매핑 컬럼이 바뀔 때만 재요청하면 된다.
     """
     mapping = ColumnMapping(
         select=select, sort=sort, x=x, y=y, legend=legend, desc=desc
@@ -345,11 +421,14 @@ async def get_dataset(
         for key, srt, dsc in items_df.iter_rows()
     ]
 
+    # x/y 는 미매핑이면 null 리터럴로 폴백 — 차트 종류에 따라 한쪽만 쓰는 경우 대응.
+    x_expr = pl.col(mapping.x).alias("x") if mapping.x else pl.lit(None).alias("x")
+    y_expr = pl.col(mapping.y).alias("y") if mapping.y else pl.lit(None).alias("y")
     points_df = df.select(
         pl.col(mapping.select).cast(pl.String).alias("key"),
-        pl.col(mapping.x).alias("x"),
-        pl.col(mapping.y).alias("y"),
-        pl.col(mapping.legend).cast(pl.String).alias("legend"),
+        x_expr,
+        y_expr,
+        _legend_expr(mapping.legend_columns()),
     )
     points = [
         {
@@ -366,6 +445,9 @@ async def get_dataset(
         "mapping": mapping.model_dump(),
         "items": items,
         "points": points,
+        "schema": [
+            {"name": col, "dtype": str(dtype)} for col, dtype in df.schema.items()
+        ],
     }
 
 
@@ -460,10 +542,15 @@ async def get_state(
 
 @router.post("/state")
 async def save_state(req: StateSaveRequest) -> dict[str, Any]:
-    """큐레이션 상태(선택·순서)를 소스 parquet 옆 사이드카에 저장한다 (저장하기)."""
+    """큐레이션 상태(선택·순서·차트 설정)를 소스 parquet 옆 사이드카에 저장한다."""
     target = _resolve_parquet_or_404(req.path)
     sidecar = _state_sidecar_path(target)
-    state = CurationState(selected=req.selected, order=req.order)
+    state = CurationState(
+        selected=req.selected,
+        order=req.order,
+        mark=req.mark,
+        mapping=req.mapping,
+    )
 
     try:
         sidecar.write_text(
@@ -524,6 +611,10 @@ async def export_curated(req: ExportRequest) -> dict[str, Any]:
     df = _read_parquet(target)
     _require_columns(df, [mapping.select, mapping.sort])
 
+    # 큐레이션 요약 수치 — 사람의 결정을 에이전트가 읽도록 메인 앱 칩에 환류한다.
+    # total 은 필터 전 소스의 후보(선택키) 수 = '몇 개 중 몇 개를 골랐는가'의 분모.
+    total_items = df.select(pl.col(mapping.select).cast(pl.String)).n_unique()
+
     # 선택키 문자열 + 키별 행 순번(프론트 pointsByKey 인덱스와 정합)을 부착한다.
     df = df.with_columns(
         pl.col(mapping.select).cast(pl.String).alias("__key__")
@@ -561,6 +652,15 @@ async def export_curated(req: ExportRequest) -> dict[str, Any]:
 
     _append_session_manifest(out, rows=curated.height, columns=curated.width)
 
+    excluded_rows = sum(len(positions) for positions in req.excluded.values())
+    summary = {
+        "total": total_items,
+        "selected": len(req.selected),
+        "dropped": max(0, total_items - len(req.selected)),
+        "excluded_rows": excluded_rows,
+        "note": req.note,
+    }
+
     return {
         "ok": True,
         "path": to_result_relative(out),
@@ -568,6 +668,7 @@ async def export_curated(req: ExportRequest) -> dict[str, Any]:
         "rows": curated.height,
         "columns": curated.width,
         "items": len(req.selected),
+        "summary": summary,
     }
 
 

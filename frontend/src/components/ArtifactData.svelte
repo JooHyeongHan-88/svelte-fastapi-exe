@@ -1,7 +1,15 @@
 <script>
   import { getArtifactPreview, artifactCsvUrl } from "../lib/api.js";
+  import { seedCurationFollowup } from "../lib/artifactActions.svelte.js";
 
   let { payload } = $props();
+
+  // 큐레이션 환류 요약 — evaluator 내보내기로 만들어진 칩에만 존재(일반 데이터 칩은 없음).
+  const summary = $derived(
+    payload?.summary && typeof payload.summary === "object"
+      ? payload.summary
+      : null,
+  );
 
   /** @type {"loading"|"ok"|"error"} */
   let status = $state("loading");
@@ -34,6 +42,15 @@
 
   const csvName = $derived(
     `${(payload?.filename ?? "data").replace(/\.parquet$/i, "")}.csv`,
+  );
+
+  // 후속 작업 버튼 — load_artifact 가 해석 가능한 result 경로일 때만 노출.
+  const canFollowup = $derived(
+    typeof payload?.path === "string" && payload.path.startsWith("result/"),
+  );
+
+  const noteText = $derived(
+    summary && typeof summary.note === "string" ? summary.note.trim() : "",
   );
 
   function formatSize(bytes) {
@@ -82,25 +99,73 @@
 <div class="artifact-data-wrap">
   <div class="toolbar">
     <span class="data-label">{payload?.filename || "데이터"}</span>
-    <button
-      class="csv-btn"
-      onclick={downloadCsv}
-      disabled={downloading || status !== "ok"}
-      title="전체 데이터를 CSV 파일로 저장"
-    >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
+    <div class="tools">
+      {#if canFollowup}
+        <button
+          class="followup-btn"
+          onclick={() => seedCurationFollowup(payload)}
+          title="이 결과로 이어서 작업 — 결정 요약과 경로를 입력창에 채웁니다"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M2 8h10M9 4l4 4-4 4" />
+          </svg>
+          이어서 작업
+        </button>
+      {/if}
+      <button
+        class="csv-btn"
+        onclick={downloadCsv}
+        disabled={downloading || status !== "ok"}
+        title="전체 데이터를 CSV 파일로 저장"
       >
-        <path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10" />
-      </svg>
-      {downloading ? "저장 중..." : "CSV 저장"}
-    </button>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+        >
+          <path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10" />
+        </svg>
+        {downloading ? "저장 중..." : "CSV 저장"}
+      </button>
+    </div>
   </div>
+
+  {#if summary}
+    <div class="summary-banner">
+      <span class="summary-icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 4 6 11l-3-3" />
+        </svg>
+      </span>
+      <span class="summary-text">
+        큐레이션 결과 ·
+        {#if Number.isFinite(summary.total) && Number.isFinite(summary.selected)}
+          후보 {summary.total}개 중 <strong>{summary.selected}개 선택</strong>
+        {/if}
+        {#if Number.isFinite(summary.dropped) && summary.dropped > 0}
+          · {summary.dropped}개 제외
+        {/if}
+        {#if Number.isFinite(summary.excluded_rows) && summary.excluded_rows > 0}
+          · {summary.excluded_rows}행 필터
+        {/if}
+      </span>
+      {#if noteText}
+        <span class="summary-note" title={noteText}>“{noteText}”</span>
+      {/if}
+    </div>
+  {/if}
 
   <div class="data-body">
     {#if status === "loading"}
@@ -203,6 +268,66 @@
   .csv-btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .followup-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--accent-fg);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 3px 9px;
+    cursor: pointer;
+    transition: background var(--dur-fast);
+  }
+
+  .followup-btn:hover {
+    background: var(--accent-hover);
+  }
+
+  /* 큐레이션 요약 배너 — 사람의 결정(보존 N/M·제외·메모)을 한 줄로 보여준다. */
+  .summary-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 8px 14px;
+    background: var(--accent-soft);
+    border-bottom: 1px solid var(--accent-border);
+    font-size: 12px;
+    color: var(--fg);
+    flex-shrink: 0;
+  }
+
+  .summary-icon {
+    display: inline-flex;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .summary-text strong {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .summary-note {
+    color: var(--fg-muted);
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
 
   .data-body {

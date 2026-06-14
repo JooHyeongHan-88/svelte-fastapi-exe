@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from "svelte";
   import ChartCell from "./ChartCell.svelte";
-  import { buildScatterOption, ECHARTS_PALETTE } from "./chartOption.js";
+  import { buildChartOption, ECHARTS_PALETTE } from "./chartOption.js";
   import {
     currentSnapshot,
     applyExclude,
@@ -16,7 +16,16 @@
 
   // 표시 선택된 차트 목록을 확대 보여주는 리사이즈 모달 — Filter/Filter All/Reset/Undo/Redo
   // 툴바 + 우측 레전드 편집 패널(메인 앱 ArtifactLightbox 의 evaluator 클라이언트 버전).
-  let { charts = [], index = 0, onclose = null, onnext = null, onprev = null } = $props();
+  let {
+    charts = [],
+    index = 0,
+    mark = "scatter",
+    roles = { x: true, y: true, legend: true },
+    aggregate = "mean",
+    onclose = null,
+    onnext = null,
+    onprev = null,
+  } = $props();
 
   const MIN_WIDTH = 320;
   const MIN_HEIGHT = 240;
@@ -45,14 +54,17 @@
   let snap = $derived(chartKey ? currentSnapshot(chartKey) : null);
   let built = $derived(
     current
-      ? buildScatterOption(current.points, snap, {
+      ? buildChartOption(mark, current.points, snap, {
           xName: current.xName,
           yName: current.yName,
+          roles,
+          aggregate,
         })
       : null,
   );
   let legendNames = $derived(built?.legendNames ?? []);
   let legendEnabled = $derived(legendNames.length > 1);
+  let brushable = $derived(built?.brushable ?? false);
   let legendColors = $derived.by(() => {
     const colors = snap?.legend?.colors ?? {};
     const map = {};
@@ -78,6 +90,9 @@
     currentRowIds = rowIds ?? [];
     selectedRowIds = [];
     chart.off("brushselected");
+    // brush 점 선택은 점↔원본 행 1:1 차트(scatter/line/ecdf)에서만 의미가 있다.
+    // 집계 차트(bar/box/histogram/heatmap)는 brush 를 켜지 않고 레전드 Filter 만 쓴다.
+    if (!brushable) return;
     chart.on("brushselected", (params) => {
       const ids = [];
       const sel = params?.batch?.[0]?.selected ?? [];
@@ -308,6 +323,9 @@
                 chartKey={current.key}
                 points={current.points}
                 title={current.title}
+                {mark}
+                {roles}
+                {aggregate}
                 xName={current.xName}
                 yName={current.yName}
                 embedded={false}

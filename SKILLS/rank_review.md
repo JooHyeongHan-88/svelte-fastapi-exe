@@ -71,6 +71,12 @@ requires_tools:
 > 역할 키는 절대 바꾸지 않는다. 컬럼이 관례명과 같으면 `mapping` 을 생략해도 evaluator
 > 기본값이 적용된다(이 예시는 명시적으로 전부 적었다).
 
+> **`legend` 는 다중 컬럼도 가능**하다 — 여러 차원을 합성한 그룹(예: `POR | A`)으로 보고
+> 싶으면 리스트로 넘긴다: `"legend": ["category", "item_id"]`. **차트 종류·컬럼 매핑은 사용자가
+> evaluator 안에서 직접 바꿀 수 있으므로**(scatter/line/bar/box/histogram/ecdf/heatmap + 매핑
+> 설정 모달), SKILL 은 합리적 기본값만 넘기면 된다. 데이터 성격상 더 맞는 기본 차트가 있으면
+> `open_curation(..., mark="bar")` 로 **기본 차트 종류**도 제안할 수 있다(선택, 생략 시 scatter).
+
 ## 주의
 
 - `open_curation` 은 **맨 마지막에 한 번만** 호출한다. 후보를 다 만든 뒤 경로를 모아 넘긴다.

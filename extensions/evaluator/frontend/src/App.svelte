@@ -9,12 +9,53 @@
     exportCurated,
   } from "./lib/api.js";
   import ChartGrid from "./lib/ChartGrid.svelte";
+  import ChartCell from "./lib/ChartCell.svelte";
   import ChartLightbox from "./lib/ChartLightbox.svelte";
   import { currentSnapshot } from "./lib/chartState.svelte.js";
+  import {
+    MARKS,
+    MARK_BY_ID,
+    AGGREGATES,
+    flattenForOverview,
+  } from "./lib/chartOption.js";
 
-  const MAPPING_KEYS = ["select", "sort", "x", "y", "legend", "desc"];
+  // 단일 컬럼 역할(legend 만 다중). readUrl·normalizeMapping 이 공유.
+  const SINGLE_ROLE_KEYS = ["select", "sort", "x", "y", "desc"];
 
-  let mapping = $state({}); // 공통 매핑 (번들/쿼리 — 소스 간 동일 스키마 전제)
+  // 매핑 역할별 라벨·설명(매핑 UI 노출). SKILLS/rank_review.md 의 매핑 계약과 동일.
+  const ROLE_INFO = {
+    select: {
+      label: "선택 기준",
+      desc: "좌측 리스트 항목의 고유 키 — 검토·선별·내보내기의 행 단위",
+      multi: false,
+    },
+    sort: {
+      label: "Sort 기준",
+      desc: "리스트 정렬·내보내기 순위 재계산 기준(정수)",
+      multi: false,
+    },
+    legend: {
+      label: "레전드",
+      desc: "시리즈 그룹(범례). 여러 컬럼을 고르면 합성 그룹이 됩니다.",
+      multi: true,
+    },
+    desc: {
+      label: "설명",
+      desc: "리스트에 보조 표시할 설명 (선택 — 없어도 됨)",
+      multi: false,
+    },
+    x: { label: "X축", desc: "차트 가로축 값", multi: false },
+    y: { label: "Y축", desc: "차트 세로축 값", multi: false },
+  };
+  const COMMON_ROLES = ["select", "sort", "legend", "desc"]; // 차트 무관 공통 역할
+
+  let mapping = $state({}); // 활성 소스의 컬럼 역할 매핑(legend 는 배열)
+  let mark = $state("scatter"); // 활성 소스의 차트 종류
+  let viewMode = $state("per-item"); // "per-item"(항목별 그리드) | "overview"(전체 조망)
+  let aggregate = $state("mean"); // bar 집계 함수
+  let schema = $state([]); // 활성 소스 스키마 [{name, dtype}] — 매핑 드롭다운용
+  let bundleMapping = $state({}); // 번들/쿼리 기본 매핑(사이드카 없을 때 시드)
+  let bundleMark = $state(""); // 번들 기본 차트 종류
   let loading = $state(true); // 초기 전체 로드
   let error = $state(null); // 치명적 에러 (소스 0개·번들 실패)
 
@@ -26,15 +67,26 @@
   let pointsByKey = $state({}); // key -> [{x,y,legend}]
   let order = $state([]); // 표시 순서의 키 배열
   let selected = $state([]); // 체크된 키(order 의 부분집합 — 내보내기 대상)
-  let cursor = $state(0); // 키보드 하이라이트된 항목 인덱스
+  let cursor = $state(0); // 키보드 하이라이트 — filteredOrder(가시 리스트) 기준 인덱스
   let displaySelection = $state([]); // 차트로 표시 중인 키 집합(Ctrl+클릭 다중 선택)
   let sourceLoading = $state(false); // 탭 전환 시 활성 소스 로딩
   let sourceError = $state(null); // 활성 소스 로드 실패 (탭 단위)
+
+  // 리스트 검색·필터(휘발성 뷰 상태 — 표시만 좁힘, 순서/내보내기 의미 불변).
+  let listQuery = $state(""); // key·desc 부분일치 검색
+  let legendFilter = $state(""); // legend 값으로 좁히기(빈=전체)
+
+  // 매핑/차트 설정 모달의 드래프트 상태.
+  let mappingModalOpen = $state(false);
+  let draftMark = $state("scatter");
+  let draftMapping = $state({});
+  let draftAgg = $state("mean");
 
   let saving = $state(false);
   let exporting = $state(false);
   let status = $state(null); // {kind: "ok"|"err", text}
   let exportInfo = $state(null); // {path, rows, items}
+  let note = $state(""); // 내보내기 메모 — 요약 환류에 동봉(사람의 결정 맥락)
 
   // 좌측 패널 너비(드래그 조절).
   let sidebarWidth = $state(320);
@@ -60,6 +112,80 @@
   // 파생 상태
   let activePath = $derived(sources[activeIdx] ?? "");
   let selectedOrdered = $derived(order.filter((k) => selected.includes(k)));
+  // 키 → 전체 order 내 위치 — 순서 이동 버튼 disabled 판정(필터 무관).
+  let orderIndex = $derived.by(() => {
+    const m = {};
+    order.forEach((k, i) => (m[k] = i));
+    return m;
+  });
+
+  // 키별 legend 값 집합 — 리스트 legend 필터·드롭다운 카탈로그의 단일 원천.
+  let legendByKey = $derived.by(() => {
+    const map = {};
+    for (const [k, pts] of Object.entries(pointsByKey)) {
+      const set = new Set();
+      for (const p of pts) {
+        if (p.legend != null && p.legend !== "") set.add(String(p.legend));
+      }
+      map[k] = set;
+    }
+    return map;
+  });
+  let legendValues = $derived.by(() => {
+    const set = new Set();
+    for (const s of Object.values(legendByKey)) for (const v of s) set.add(v);
+    return [...set].sort();
+  });
+
+  // 검색·legend 필터를 적용한 가시 순서. 비필터 시 order 그대로(참조 동일).
+  let filteredOrder = $derived.by(() => {
+    const q = listQuery.trim().toLowerCase();
+    const lf = legendFilter;
+    if (!q && !lf) return order;
+    return order.filter((k) => {
+      if (lf && !legendByKey[k]?.has(lf)) return false;
+      if (q) {
+        const item = items.find((i) => i.key === k);
+        if (!`${k} ${item?.desc ?? ""}`.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  });
+  // 가시 집합 중 체크된 수 — 일괄 버튼 상태 표시용.
+  let visibleSelectedCount = $derived(
+    filteredOrder.filter((k) => selected.includes(k)).length,
+  );
+
+  // 필터가 좁혀져 cursor 가 범위를 벗어나면 클램프. legend 필터값이 사라지면 초기화.
+  $effect(() => {
+    if (cursor >= filteredOrder.length) {
+      cursor = Math.max(0, filteredOrder.length - 1);
+    }
+  });
+  $effect(() => {
+    if (legendFilter && !legendValues.includes(legendFilter)) legendFilter = "";
+  });
+
+  // 매핑된 legend 컬럼(배열) · 차트 빌더에 넘길 역할 가용성 · 드롭다운 컬럼 목록.
+  let legendCols = $derived(
+    Array.isArray(mapping.legend)
+      ? mapping.legend.filter(Boolean)
+      : mapping.legend
+        ? [mapping.legend]
+        : [],
+  );
+  let roles = $derived({
+    x: !!mapping.x,
+    y: !!mapping.y,
+    legend: legendCols.length > 0,
+  });
+  let columnNames = $derived(schema.map((s) => s.name));
+  let markMeta = $derived(MARK_BY_ID[mark] ?? MARK_BY_ID.scatter);
+
+  // 전체 조망 — 가시(필터된) 항목 전체를 한 차트에 모은다(항목=시리즈). 리스트 필터가
+  // 곧 조망 범위가 되도록 filteredOrder 를 쓴다. legend 는 키로 강제하므로 항상 true.
+  let overviewRoles = $derived({ x: !!mapping.x, y: !!mapping.y, legend: true });
+  let overviewPoints = $derived(flattenForOverview(pointsByKey, filteredOrder));
 
   // 표시 선택된 키들의 차트 스펙(리스트 순서 유지). chartState 식별자는 소스 경로로
   // 네임스페이스해 소스 간 같은 키가 필터 상태를 공유하지 않게 한다.
@@ -88,13 +214,36 @@
     return p ? p.split("/").pop() : "";
   }
 
+  // legend 를 항상 배열로 정규화한다(쿼리/번들/사이드카가 문자열로 줄 수 있음).
+  function normalizeMapping(m) {
+    const out = { ...(m ?? {}) };
+    if (out.legend == null) out.legend = [];
+    else if (typeof out.legend === "string")
+      out.legend = out.legend ? [out.legend] : [];
+    else if (!Array.isArray(out.legend)) out.legend = [];
+    else out.legend = out.legend.filter(Boolean);
+    return out;
+  }
+
+  // 두 매핑의 '컬럼 역할'만 비교한다(mark·aggregate 제외) — 데이터 재요청 필요 판정용.
+  function sameMappingColumns(a, b) {
+    for (const k of SINGLE_ROLE_KEYS) {
+      if ((a[k] ?? "") !== (b[k] ?? "")) return false;
+    }
+    const la = Array.isArray(a.legend) ? a.legend : [];
+    const lb = Array.isArray(b.legend) ? b.legend : [];
+    return la.length === lb.length && la.every((c, i) => c === lb[i]);
+  }
+
   function readUrl() {
     const q = new URLSearchParams(window.location.search);
     const m = {};
-    for (const k of MAPPING_KEYS) {
+    for (const k of SINGLE_ROLE_KEYS) {
       const v = q.get(k);
       if (v) m[k] = v;
     }
+    const legendAll = q.getAll("legend").filter(Boolean);
+    if (legendAll.length) m.legend = legendAll;
     return {
       path: q.get("path") || "",
       bundle: q.get("bundle") || "",
@@ -102,8 +251,8 @@
     };
   }
 
-  // 번들(open_curation 산출)을 읽어 소스 목록·매핑을 확정한다. 번들은 result/...
-  // 경로이며 호스트가 /result/ 로 서빙한다.
+  // 번들(open_curation 산출)을 읽어 소스 목록·매핑·차트 종류를 확정한다. 번들은
+  // result/... 경로이며 호스트가 /result/ 로 서빙한다.
   async function fetchBundle(bundle) {
     const res = await fetch(encodeURI("/" + bundle), { cache: "no-cache" });
     if (!res.ok) throw new Error(`번들 로드 실패: HTTP ${res.status}`);
@@ -111,7 +260,8 @@
     const list = Array.isArray(b.sources) ? b.sources : [];
     if (list.length === 0) throw new Error("번들에 sources 가 없습니다.");
     const m = b.mapping && typeof b.mapping === "object" ? b.mapping : {};
-    return { sources: list, mapping: m };
+    const bmark = typeof b.mark === "string" ? b.mark : "";
+    return { sources: list, mapping: m, mark: bmark };
   }
 
   async function loadAll() {
@@ -119,17 +269,22 @@
     error = null;
     try {
       const { path, bundle, queryMapping } = readUrl();
-      mapping = queryMapping;
       let initial = [];
+      let seedMapping = queryMapping;
+      let seedMark = "";
       if (bundle) {
         const b = await fetchBundle(bundle);
         initial = b.sources;
-        mapping = { ...mapping, ...b.mapping };
+        seedMapping = { ...queryMapping, ...b.mapping };
+        seedMark = b.mark || "";
       } else if (path) {
         initial = [path];
       }
       if (initial.length === 0)
         throw new Error("URL 에 ?path= 또는 ?bundle= 경로가 필요합니다.");
+      bundleMapping = normalizeMapping(seedMapping);
+      bundleMark = MARK_BY_ID[seedMark] ? seedMark : "";
+      mapping = bundleMapping; // loadActiveSource 가 사이드카로 덮어쓸 수 있음
       sources = initial;
       activeIdx = 0;
       await loadActiveSource();
@@ -142,16 +297,21 @@
 
   onMount(loadAll);
 
-  // 활성 소스 데이터/상태를 작업 변수에 반영한다.
-  function applyDataset(ds, st) {
-    items = ds.items;
-    mapping = ds.mapping; // 백엔드가 확정한 실제 매핑(기본값 채움)
-
+  // 데이터셋 points 를 선택키별 묶음으로 변환한다.
+  function pointsFromDataset(ds) {
     const pmap = {};
     for (const p of ds.points) {
       (pmap[p.key] ??= []).push({ x: p.x, y: p.y, legend: p.legend });
     }
-    pointsByKey = pmap;
+    return pmap;
+  }
+
+  // 활성 소스 데이터/상태를 작업 변수에 반영한다(최초 로드·소스 교체용).
+  function applyDataset(ds, st) {
+    items = ds.items;
+    mapping = normalizeMapping(ds.mapping); // 백엔드가 확정한 실제 매핑(기본값 채움)
+    schema = Array.isArray(ds.schema) ? ds.schema : [];
+    pointsByKey = pointsFromDataset(ds);
 
     const itemKeys = items.map((i) => i.key);
     const savedSelected = Array.isArray(st.selected) ? st.selected : [];
@@ -183,6 +343,10 @@
       selected: [...selected],
       cursor,
       displaySelection: [...displaySelection],
+      mapping,
+      mark,
+      aggregate,
+      schema,
     };
   }
 
@@ -194,12 +358,20 @@
     selected = [...s.selected];
     cursor = s.cursor;
     displaySelection = [...(s.displaySelection ?? [])];
+    mapping = s.mapping;
+    mark = s.mark;
+    aggregate = s.aggregate;
+    schema = s.schema ?? [];
     sourceError = null;
   }
 
   // 활성 소스(sources[activeIdx])를 작업 상태로 적재 — stash 우선, 없으면 fetch.
+  // 사이드카(상태)에 저장된 매핑·차트 종류가 있으면 그것으로, 없으면 번들 기본값으로
+  // 데이터셋을 요청한다(매핑이 데이터 투영을 바꾸므로 상태를 먼저 읽는다).
   async function loadActiveSource() {
     lightboxOpen = false;
+    listQuery = "";
+    legendFilter = "";
     const p = sources[activeIdx];
     if (!p) return;
     if (stash[p]) {
@@ -209,7 +381,16 @@
     sourceLoading = true;
     sourceError = null;
     try {
-      const [ds, st] = await Promise.all([getDataset(p, mapping), getState(p)]);
+      const st = await getState(p);
+      const savedMapping =
+        st.mapping && Object.keys(st.mapping).length
+          ? normalizeMapping(st.mapping)
+          : null;
+      const effMapping = savedMapping ?? bundleMapping;
+      const effMark = st.mark || bundleMark || "scatter";
+      const ds = await getDataset(p, effMapping);
+      mark = MARK_BY_ID[effMark] ? effMark : "scatter";
+      aggregate = (savedMapping && savedMapping.aggregate) || "mean";
       applyDataset(ds, st);
     } catch (e) {
       sourceError = e?.message || String(e);
@@ -222,6 +403,101 @@
     } finally {
       sourceLoading = false;
     }
+  }
+
+  // ── 차트 종류 · 매핑 설정 ─────────────────────────────────────────
+  // 차트 종류 전환 — 데이터는 동일하므로 재요청 없이 재렌더만(roles 가 필요 컬럼 안내).
+  function setMark(id) {
+    if (MARK_BY_ID[id]) mark = id;
+  }
+
+  function openMappingModal() {
+    draftMark = mark;
+    draftMapping = {
+      select: mapping.select || "",
+      sort: mapping.sort || "",
+      x: mapping.x || "",
+      y: mapping.y || "",
+      desc: mapping.desc || "",
+      legend: [...legendCols],
+    };
+    draftAgg = aggregate;
+    mappingModalOpen = true;
+  }
+
+  function closeMappingModal() {
+    mappingModalOpen = false;
+  }
+
+  function setDraftRole(role, value) {
+    draftMapping = { ...draftMapping, [role]: value };
+  }
+
+  // legend 다중 토글 — 선택 순서가 곧 합성 순서.
+  function toggleDraftLegend(col) {
+    const cur = Array.isArray(draftMapping.legend) ? draftMapping.legend : [];
+    const next = cur.includes(col)
+      ? cur.filter((c) => c !== col)
+      : [...cur, col];
+    draftMapping = { ...draftMapping, legend: next };
+  }
+
+  // 매핑/차트 설정 적용 — 컬럼 역할이 바뀌면 재요청(선택 보존), mark/집계만 바뀌면 재렌더.
+  async function applyMappingConfig() {
+    const norm = normalizeMapping(draftMapping);
+    mark = MARK_BY_ID[draftMark] ? draftMark : mark;
+    aggregate = draftAgg || "mean";
+    mappingModalOpen = false;
+
+    if (sameMappingColumns(norm, mapping)) {
+      mapping = norm; // legend 정규화 차이만 반영
+      return;
+    }
+
+    sourceLoading = true;
+    sourceError = null;
+    const prevSelected = [...selected];
+    const prevOrder = [...order];
+    const prevDisplay = [...displaySelection];
+    const prevKeys = new Set(items.map((i) => i.key));
+    try {
+      const ds = await getDataset(activePath, norm);
+      mapping = normalizeMapping(ds.mapping);
+      schema = Array.isArray(ds.schema) ? ds.schema : schema;
+      items = ds.items;
+      pointsByKey = pointsFromDataset(ds);
+
+      const itemKeys = items.map((i) => i.key);
+      const sameKeys =
+        itemKeys.length === prevKeys.size &&
+        itemKeys.every((k) => prevKeys.has(k));
+      if (sameKeys) {
+        // 선택키 집합이 그대로면 사용자의 큐레이션 선택·순서를 보존한다.
+        order = prevOrder.filter((k) => itemKeys.includes(k));
+        for (const k of itemKeys) if (!order.includes(k)) order.push(k);
+        selected = prevSelected.filter((k) => itemKeys.includes(k));
+        displaySelection = prevDisplay.filter((k) => itemKeys.includes(k));
+        if (displaySelection.length === 0 && order.length) {
+          displaySelection = [order[0]];
+        }
+        cursor = Math.min(cursor, Math.max(0, order.length - 1));
+      } else {
+        // select 컬럼 변경 등으로 키가 바뀌면 새로 시작(전부 선택).
+        order = itemKeys;
+        selected = [...itemKeys];
+        displaySelection = itemKeys.length ? [order[0]] : [];
+        cursor = 0;
+      }
+    } catch (e) {
+      sourceError = e?.message || String(e);
+    } finally {
+      sourceLoading = false;
+    }
+  }
+
+  // 저장/내보내기에 실을 매핑(컬럼 역할 + bar 집계함수).
+  function mappingForSave() {
+    return { ...mapping, aggregate };
   }
 
   async function switchSource(i) {
@@ -327,16 +603,38 @@
   }
 
   function moveCursor(delta) {
-    if (order.length === 0) return;
-    cursor = Math.max(0, Math.min(order.length - 1, cursor + delta));
+    if (filteredOrder.length === 0) return;
+    cursor = Math.max(0, Math.min(filteredOrder.length - 1, cursor + delta));
     // 키보드 이동은 단일 표시로 전환(다중은 Ctrl+클릭 전용).
-    displaySelection = [order[cursor]];
+    displaySelection = [filteredOrder[cursor]];
   }
 
   function toggleSelected(key) {
     selected = selected.includes(key)
       ? selected.filter((k) => k !== key)
       : [...selected, key];
+    status = null;
+  }
+
+  // ── 일괄 선택 (현재 가시 집합 filteredOrder 대상) ────────────────────
+  function selectAllFiltered() {
+    const set = new Set(selected);
+    for (const k of filteredOrder) set.add(k);
+    selected = [...set];
+    status = null;
+  }
+  function clearAllFiltered() {
+    const remove = new Set(filteredOrder);
+    selected = selected.filter((k) => !remove.has(k));
+    status = null;
+  }
+  function invertFiltered() {
+    const set = new Set(selected);
+    for (const k of filteredOrder) {
+      if (set.has(k)) set.delete(k);
+      else set.add(k);
+    }
+    selected = [...set];
     status = null;
   }
 
@@ -352,14 +650,15 @@
     }
   }
 
-  function moveItem(index, delta) {
+  // 순서 이동은 항상 전체 order 기준(필터는 표시만 좁힘) — 키로 위치를 찾아 인접 교환.
+  function moveItem(key, delta) {
+    const index = order.indexOf(key);
+    if (index < 0) return;
     const j = index + delta;
     if (j < 0 || j >= order.length) return;
     const nextOrder = [...order];
     [nextOrder[index], nextOrder[j]] = [nextOrder[j], nextOrder[index]];
     order = nextOrder;
-    if (cursor === index) cursor = j;
-    else if (cursor === j) cursor = index;
     status = null;
   }
 
@@ -403,7 +702,7 @@
     saving = true;
     status = null;
     try {
-      await saveState(activePath, selectedOrdered, order);
+      await saveState(activePath, selectedOrdered, order, mark, mappingForSave());
       status = { kind: "ok", text: "상태를 저장했습니다." };
     } catch (e) {
       status = { kind: "err", text: e?.message || String(e) };
@@ -454,6 +753,7 @@
         selectedOrdered,
         mapping,
         collectExclusions(),
+        note.trim(),
       );
       exportInfo = { path: res.path, rows: res.rows, items: res.items };
       status = { kind: "ok", text: "내보내기 완료" };
@@ -464,6 +764,7 @@
         filename: res.filename,
         rows: res.rows,
         columns: res.columns,
+        summary: res.summary ?? null, // 사람의 결정 요약(메인 앱 칩에 표시)
         at: Date.now(),
       });
     } catch (e) {
@@ -490,7 +791,7 @@
     } else if (e.key === " ") {
       if (tag === "button") return; // 버튼 포커스 시 space 는 버튼 활성화에 양보
       e.preventDefault();
-      const key = order[cursor];
+      const key = filteredOrder[cursor];
       if (key) toggleSelected(key);
     }
   }
@@ -564,8 +865,38 @@
             <span>선택 기준 ({mapping.select})</span>
             <span class="count">{selectedOrdered.length} / {items.length}</span>
           </div>
+          <div class="list-filter">
+            <input
+              class="search"
+              type="text"
+              bind:value={listQuery}
+              placeholder="검색 (키·설명)"
+              aria-label="리스트 검색"
+            />
+            {#if legendValues.length > 0}
+              <select class="legend-filter" bind:value={legendFilter} title="레전드로 좁히기">
+                <option value="">전체 레전드</option>
+                {#each legendValues as lv (lv)}
+                  <option value={lv}>{lv}</option>
+                {/each}
+              </select>
+            {/if}
+          </div>
+          <div class="bulk-bar">
+            <span class="bulk-count">
+              {#if filteredOrder.length !== items.length}{filteredOrder.length}개 표시 · {/if}{visibleSelectedCount}개 선택
+            </span>
+            <div class="bulk">
+              <button class="mini-btn" onclick={selectAllFiltered} title="표시된 항목 전체 선택">전체</button>
+              <button class="mini-btn" onclick={clearAllFiltered} title="표시된 항목 선택 해제">해제</button>
+              <button class="mini-btn" onclick={invertFiltered} title="표시된 항목 선택 반전">반전</button>
+            </div>
+          </div>
           <ul class="list">
-            {#each order as key, index (key)}
+            {#if filteredOrder.length === 0}
+              <li class="empty-row muted small">조건에 맞는 항목이 없습니다.</li>
+            {/if}
+            {#each filteredOrder as key, index (key)}
               {@const item = items.find((i) => i.key === key)}
               <li
                 class="row"
@@ -574,8 +905,8 @@
                 class:checked={selected.includes(key)}
               >
                 <div class="reorder">
-                  <button class="mini" title="위로" disabled={index === 0} onclick={() => moveItem(index, -1)}>↑</button>
-                  <button class="mini" title="아래로" disabled={index === order.length - 1} onclick={() => moveItem(index, 1)}>↓</button>
+                  <button class="mini" title="위로" disabled={orderIndex[key] === 0} onclick={() => moveItem(key, -1)}>↑</button>
+                  <button class="mini" title="아래로" disabled={orderIndex[key] === order.length - 1} onclick={() => moveItem(key, 1)}>↓</button>
                 </div>
                 <input
                   type="checkbox"
@@ -612,9 +943,60 @@
           onpointercancel={onSidebarResizeUp}
         ></div>
 
-        <!-- 본문: 표시 선택된 항목들의 차트 그리드 -->
+        <!-- 본문: 차트 종류 셀렉터 + 매핑 설정 + 차트 그리드 -->
         <main class="content">
-          <ChartGrid charts={displayCharts} onopen={openLightbox} />
+          <div class="config-bar">
+            <div class="mark-picker" role="group" aria-label="보기 모드">
+              <button class="mark-btn" class:active={viewMode === "per-item"} onclick={() => (viewMode = "per-item")} title="선택 항목을 항목별 차트 그리드로">
+                항목별
+              </button>
+              <button class="mark-btn" class:active={viewMode === "overview"} onclick={() => (viewMode = "overview")} title="가시 항목 전체를 한 차트에 모아 비교">
+                전체 조망
+              </button>
+            </div>
+            <div class="mark-picker" role="group" aria-label="차트 종류">
+              {#each MARKS as m (m.id)}
+                <button
+                  class="mark-btn"
+                  class:active={mark === m.id}
+                  onclick={() => setMark(m.id)}
+                  title={m.label}
+                >
+                  {m.label}
+                </button>
+              {/each}
+            </div>
+            <button class="map-btn" onclick={openMappingModal} title="컬럼 매핑·차트 설정">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2" /><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5 13 13M13 3l-1.5 1.5M4.5 11.5 3 13" /></svg>
+              매핑 설정
+            </button>
+          </div>
+          {#if viewMode === "overview"}
+            <div class="overview-wrap">
+              {#if overviewPoints.length === 0}
+                <div class="center muted small">표시할 항목이 없습니다 — 리스트 필터를 해제하거나 항목을 선택하세요.</div>
+              {:else}
+                <ChartCell
+                  chartKey={`${activePath}::__overview__`}
+                  points={overviewPoints}
+                  {mark}
+                  roles={overviewRoles}
+                  {aggregate}
+                  xName={mapping.x}
+                  yName={mapping.y}
+                  embedded={false}
+                />
+              {/if}
+            </div>
+          {:else}
+            <ChartGrid
+              charts={displayCharts}
+              {mark}
+              {roles}
+              {aggregate}
+              onopen={openLightbox}
+            />
+          {/if}
         </main>
       {/if}
     </div>
@@ -631,6 +1013,13 @@
           </code>
         {/if}
       </div>
+      <input
+        class="note-input"
+        type="text"
+        bind:value={note}
+        placeholder="큐레이션 메모 (선택) — 내보내기 시 채팅에 함께 전달"
+        title="이 큐레이션의 결정 맥락을 한 줄로 남기면 메인 앱 칩 요약에 표시됩니다."
+      />
       <div class="buttons">
         <button class="btn" onclick={onSave} disabled={saving}>
           {saving ? "저장 중…" : "저장하기"}
@@ -646,6 +1035,9 @@
     <ChartLightbox
       charts={displayCharts}
       index={lightboxIndex}
+      {mark}
+      {roles}
+      {aggregate}
       onclose={closeLightbox}
       onnext={lightboxNext}
       onprev={lightboxPrev}
@@ -763,6 +1155,149 @@
               </div>
             {/if}
           </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if mappingModalOpen}
+    {@const meta = MARK_BY_ID[draftMark] ?? MARK_BY_ID.scatter}
+    <div
+      class="picker-backdrop"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) closeMappingModal();
+      }}
+      role="presentation"
+    >
+      <div class="map-modal" role="dialog" aria-label="매핑 설정">
+        <div class="picker-head">
+          <strong>매핑 / 차트 설정</strong>
+          <button class="picker-close" onclick={closeMappingModal} aria-label="닫기">×</button>
+        </div>
+
+        <div class="map-body">
+          <!-- 차트 종류 -->
+          <section class="map-section">
+            <div class="map-section-title">차트 종류</div>
+            <div class="mark-picker wrap" role="group" aria-label="차트 종류">
+              {#each MARKS as m (m.id)}
+                <button
+                  class="mark-btn"
+                  class:active={draftMark === m.id}
+                  onclick={() => (draftMark = m.id)}
+                >
+                  {m.label}
+                </button>
+              {/each}
+            </div>
+          </section>
+
+          {#if columnNames.length === 0}
+            <p class="muted small">소스 스키마를 불러오지 못해 컬럼 목록이 비었습니다.</p>
+          {/if}
+
+          <!-- 공통 매핑 (차트 종류 무관) -->
+          <section class="map-section">
+            <div class="map-section-title">공통 매핑 <span class="muted small">— 모든 차트 공통</span></div>
+            {#each COMMON_ROLES as role (role)}
+              {@const info = ROLE_INFO[role]}
+              <div class="map-row">
+                <div class="map-role">
+                  <span class="role-name">{info.label}</span>
+                  <code class="role-key">{role}</code>
+                  <p class="role-desc">{info.desc}</p>
+                </div>
+                <div class="map-control">
+                  {#if info.multi}
+                    <div class="chip-row">
+                      {#each columnNames as col (col)}
+                        <button
+                          class="chip"
+                          class:on={(draftMapping.legend ?? []).includes(col)}
+                          onclick={() => toggleDraftLegend(col)}
+                          title={col}
+                        >
+                          {col}
+                        </button>
+                      {/each}
+                    </div>
+                    {#if (draftMapping.legend ?? []).length}
+                      <div class="chip-hint">합성: <strong>{draftMapping.legend.join(" | ")}</strong></div>
+                    {:else}
+                      <div class="chip-hint muted">선택 안 함 (그룹 없는 단일 시리즈)</div>
+                    {/if}
+                    {#if meta.usesLegend === false}
+                      <div class="chip-hint muted">{meta.label}에서는 미사용(색=빈도) — 선택해 두면 다른 차트 종류에서 적용됩니다.</div>
+                    {/if}
+                  {:else}
+                    <select
+                      class="col-select"
+                      value={draftMapping[role] ?? ""}
+                      onchange={(e) => setDraftRole(role, e.currentTarget.value)}
+                    >
+                      {#if role === "desc"}<option value="">(없음)</option>{/if}
+                      {#each columnNames as col (col)}
+                        <option value={col}>{col}</option>
+                      {/each}
+                    </select>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </section>
+
+          <!-- 차트별 매핑 (mark 에 따라 가변) -->
+          <section class="map-section">
+            <div class="map-section-title">
+              차트 매핑 <span class="muted small">— {meta.label}</span>
+            </div>
+            {#if meta.needs.length === 0 && !meta.aggregate}
+              <p class="muted small">이 차트 종류는 추가 컬럼 매핑이 필요 없습니다.</p>
+            {/if}
+            {#each meta.needs as role (role)}
+              {@const info = ROLE_INFO[role]}
+              <div class="map-row">
+                <div class="map-role">
+                  <span class="role-name">{info.label}</span>
+                  <code class="role-key">{role}</code>
+                  <p class="role-desc">{info.desc}</p>
+                </div>
+                <div class="map-control">
+                  <select
+                    class="col-select"
+                    value={draftMapping[role] ?? ""}
+                    onchange={(e) => setDraftRole(role, e.currentTarget.value)}
+                  >
+                    <option value="">(선택)</option>
+                    {#each columnNames as col (col)}
+                      <option value={col}>{col}</option>
+                    {/each}
+                  </select>
+                </div>
+              </div>
+            {/each}
+            {#if meta.aggregate}
+              <div class="map-row">
+                <div class="map-role">
+                  <span class="role-name">집계</span>
+                  <code class="role-key">aggregate</code>
+                  <p class="role-desc">같은 X 값에 여러 행이 있으면 묶어서 집계합니다.</p>
+                </div>
+                <div class="map-control">
+                  <select class="col-select" value={draftAgg} onchange={(e) => (draftAgg = e.currentTarget.value)}>
+                    {#each AGGREGATES as a (a.id)}
+                      <option value={a.id}>{a.label}</option>
+                    {/each}
+                  </select>
+                </div>
+              </div>
+            {/if}
+          </section>
+        </div>
+
+        <div class="map-foot">
+          <button class="btn" onclick={closeMappingModal}>취소</button>
+          <button class="btn primary" onclick={applyMappingConfig}>적용</button>
         </div>
       </div>
     </div>
@@ -924,6 +1459,74 @@
     color: var(--accent);
     font-variant-numeric: tabular-nums;
   }
+  .list-filter {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px 0;
+  }
+  .search,
+  .legend-filter {
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 12px;
+  }
+  .search {
+    flex: 1;
+    min-width: 0;
+  }
+  .search::placeholder {
+    color: var(--subtle);
+  }
+  .search:focus,
+  .legend-filter:focus {
+    outline: none;
+    border-color: var(--accent-border);
+  }
+  .legend-filter {
+    flex-shrink: 0;
+    max-width: 42%;
+  }
+  .bulk-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px 6px;
+  }
+  .bulk-count {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bulk {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .mini-btn {
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .mini-btn:hover {
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+  .empty-row {
+    padding: 16px 12px;
+    text-align: center;
+  }
   .list {
     list-style: none;
     margin: 0;
@@ -1036,6 +1639,197 @@
     flex-direction: column;
     padding: 14px;
     background: var(--bg);
+    gap: 10px;
+  }
+
+  /* 차트 종류 셀렉터 + 매핑 설정 바 (Tableau 의 Marks 카드 느낌). */
+  .config-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* 전체 조망 — 단일 차트가 본문 전체를 채운다. */
+  .overview-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .mark-picker {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .mark-picker.wrap {
+    flex-wrap: wrap;
+  }
+  .mark-btn {
+    padding: 5px 11px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .mark-btn:hover {
+    color: var(--fg);
+  }
+  .mark-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+  }
+  .map-btn {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .map-btn:hover {
+    background: var(--panel-2);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+
+  /* 매핑 설정 모달 */
+  .map-modal {
+    width: 640px;
+    max-width: 94vw;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 12px);
+    overflow: hidden;
+  }
+  .map-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 18px 14px;
+  }
+  .map-section {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .map-section:last-child {
+    border-bottom: none;
+  }
+  .map-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 10px;
+  }
+  .map-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 8px 0;
+  }
+  .map-role {
+    width: 200px;
+    flex-shrink: 0;
+  }
+  .role-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .role-key {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  .role-desc {
+    margin: 4px 0 0;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .map-control {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 2px;
+  }
+  .col-select {
+    width: 100%;
+    max-width: 280px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 12px;
+  }
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .chip {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full, 999px);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11.5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .chip:hover {
+    border-color: var(--accent-border);
+    color: var(--fg);
+  }
+  .chip.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+  }
+  .chip-hint {
+    font-size: 11px;
+    color: var(--fg);
+  }
+  .chip-hint.muted {
+    color: var(--muted);
+  }
+  .map-foot {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
   }
 
   .actions {
@@ -1068,6 +1862,25 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .note-input {
+    flex-shrink: 0;
+    width: 280px;
+    max-width: 32vw;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 12px;
+  }
+  .note-input::placeholder {
+    color: var(--subtle);
+  }
+  .note-input:focus {
+    outline: none;
+    border-color: var(--accent-border);
+  }
+
   .buttons {
     display: flex;
     gap: 10px;

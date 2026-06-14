@@ -130,6 +130,38 @@ def test_dataset_desc_optional_when_column_absent(
     ]
 
 
+def test_dataset_returns_schema(client: TestClient) -> None:
+    # 매핑 UI 드롭다운용 스키마(컬럼명+dtype)가 함께 내려온다.
+    resp = client.get("/api/ext/evaluator/dataset", params={"path": _REL})
+    schema = resp.json()["schema"]
+    names = {c["name"] for c in schema}
+    assert names == {"item_id", "item_desc", "rank", "tkout_time", "category", "value"}
+    assert all("dtype" in c for c in schema)
+
+
+def test_dataset_multi_column_legend_composites(client: TestClient) -> None:
+    # legend 를 두 컬럼으로 주면 " | " 로 합성된 그룹명이 만들어진다.
+    resp = client.get(
+        "/api/ext/evaluator/dataset",
+        params=[("path", _REL), ("legend", "category"), ("legend", "item_id")],
+    )
+    assert resp.status_code == 200, resp.text
+    legends = {p["legend"] for p in resp.json()["points"]}
+    # item A·B × category POR·NEW = 4종 합성 그룹.
+    assert legends == {"POR | A", "NEW | A", "POR | B", "NEW | B"}
+    # 매핑 echo 의 legend 는 리스트.
+    assert resp.json()["mapping"]["legend"] == ["category", "item_id"]
+
+
+def test_dataset_optional_y_unmapped_is_null(client: TestClient) -> None:
+    # y 를 빈 값으로 주면(histogram 등) y 는 null 로 내려오고 422 가 아니다.
+    resp = client.get("/api/ext/evaluator/dataset", params={"path": _REL, "y": ""})
+    assert resp.status_code == 200, resp.text
+    points = resp.json()["points"]
+    assert all(p["y"] is None for p in points)
+    assert all(p["x"] is not None for p in points)
+
+
 def test_dataset_missing_column_returns_422(client: TestClient) -> None:
     resp = client.get(
         "/api/ext/evaluator/dataset", params={"path": _REL, "select": "ghost"}
@@ -242,10 +274,13 @@ def test_preview_missing_file_returns_404(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+_EMPTY_STATE = {"selected": [], "order": [], "mark": "", "mapping": {}}
+
+
 def test_state_default_is_empty(client: TestClient) -> None:
     resp = client.get("/api/ext/evaluator/state", params={"path": _REL})
     assert resp.status_code == 200
-    assert resp.json() == {"selected": [], "order": []}
+    assert resp.json() == _EMPTY_STATE
 
 
 def test_state_save_and_reload_roundtrip(client: TestClient, ts_dir: Path) -> None:
@@ -258,7 +293,32 @@ def test_state_save_and_reload_roundtrip(client: TestClient, ts_dir: Path) -> No
     assert (ts_dir / "sample.evaluator-state.json").exists()
 
     reload = client.get("/api/ext/evaluator/state", params={"path": _REL})
-    assert reload.json() == {"selected": ["A"], "order": ["B", "A"]}
+    assert reload.json() == {
+        "selected": ["A"],
+        "order": ["B", "A"],
+        "mark": "",
+        "mapping": {},
+    }
+
+
+def test_state_persists_mark_and_mapping(client: TestClient) -> None:
+    # 차트 종류·컬럼 매핑(다중 legend 포함)이 사이드카에 영속·복원된다.
+    mapping = {"select": "item_id", "x": "value", "legend": ["category", "rank"]}
+    save = client.post(
+        "/api/ext/evaluator/state",
+        json={
+            "path": _REL,
+            "selected": ["A"],
+            "order": ["A", "B"],
+            "mark": "histogram",
+            "mapping": mapping,
+        },
+    )
+    assert save.status_code == 200, save.text
+
+    reload = client.get("/api/ext/evaluator/state", params={"path": _REL}).json()
+    assert reload["mark"] == "histogram"
+    assert reload["mapping"] == mapping
 
 
 def test_state_corrupt_sidecar_falls_back_to_empty(
@@ -267,7 +327,7 @@ def test_state_corrupt_sidecar_falls_back_to_empty(
     (ts_dir / "sample.evaluator-state.json").write_text("{ broken", encoding="utf-8")
     resp = client.get("/api/ext/evaluator/state", params={"path": _REL})
     assert resp.status_code == 200
-    assert resp.json() == {"selected": [], "order": []}
+    assert resp.json() == _EMPTY_STATE
 
 
 # ---------------------------------------------------------------------------
@@ -352,3 +412,39 @@ def test_export_all_points_excluded_returns_422(client: TestClient) -> None:
 def test_export_empty_selected_returns_422(client: TestClient) -> None:
     resp = client.post("/api/ext/evaluator/export", json={"path": _REL, "selected": []})
     assert resp.status_code == 422
+
+
+def test_export_returns_curation_summary(client: TestClient) -> None:
+    # 후보 2개(A·B) 중 1개(A)만 선택 → 사람의 결정 요약이 응답에 실린다.
+    resp = client.post(
+        "/api/ext/evaluator/export", json={"path": _REL, "selected": ["A"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["summary"] == {
+        "total": 2,
+        "selected": 1,
+        "dropped": 1,
+        "excluded_rows": 0,
+        "note": "",
+    }
+
+
+def test_export_summary_counts_note_and_exclusions(client: TestClient) -> None:
+    # 메모 + 차트 Filter 제외가 요약에 반영된다(excluded_rows = 제외 인덱스 총합).
+    resp = client.post(
+        "/api/ext/evaluator/export",
+        json={
+            "path": _REL,
+            "selected": ["A", "B"],
+            "excluded": {"A": [0, 2]},
+            "note": "이상치 2건 제외",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["summary"] == {
+        "total": 2,
+        "selected": 2,
+        "dropped": 0,
+        "excluded_rows": 2,
+        "note": "이상치 2건 제외",
+    }

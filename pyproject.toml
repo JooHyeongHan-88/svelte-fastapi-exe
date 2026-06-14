@@ -1,6 +1,6 @@
 [project]
 name = "senpia"
-version = "0.0.19"
+version = "0.0.20"
 description = "Vite/Svelte로 만든 AI Agent 채팅 UI를 FastAPI가 서빙하고, PyInstaller로 단일 `.exe`로 패키징하는 사내 배포용 데스크톱 앱"
 readme = "README.md"
 requires-python = ">=3.12"

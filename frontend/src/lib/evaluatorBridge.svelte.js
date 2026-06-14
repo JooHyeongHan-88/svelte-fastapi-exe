@@ -48,8 +48,13 @@ function _handleExport(msg) {
   const session = _findSession(msg.session);
   if (!session) return; // 알 수 없는 세션(다른 창/앱의 산출물) — 무시.
 
-  // 같은 경로가 이미 칩으로 있으면(중복 브로드캐스트·새로고침) 다시 띄우기만 한다.
+  const summary =
+    msg.summary && typeof msg.summary === "object" ? msg.summary : undefined;
+
+  // 같은 경로가 이미 칩으로 있으면(중복 브로드캐스트·재내보내기) 요약만 갱신 후 띄운다 —
+  // 같은 parquet 을 다시 내보내면 선택/메모가 바뀌었을 수 있으므로 최신 요약을 반영한다.
   if (_hasDataChip(session, path)) {
+    _refreshSummary(session, path, summary);
     _focusChip(session, path);
     return;
   }
@@ -59,6 +64,7 @@ function _handleExport(msg) {
     filename: msg.filename || path.split("/").pop(),
     rows: Number.isFinite(msg.rows) ? msg.rows : undefined,
     columns: Number.isFinite(msg.columns) ? msg.columns : undefined,
+    summary,
   };
   const chip = makeArtifactChip("data", payload);
 
@@ -93,6 +99,21 @@ function _hasDataChip(session, path) {
       (c) => c.kind === "data" && c.payload?.path === path,
     ),
   );
+}
+
+// 재내보내기 시 기존 칩의 요약을 최신값으로 갱신하고 영속한다(요약 없으면 무변경).
+function _refreshSummary(session, path, summary) {
+  if (!summary) return;
+  for (const m of session.messages) {
+    for (const c of m.artifactChips ?? []) {
+      if (c.kind === "data" && c.payload?.path === path) {
+        c.payload.summary = summary;
+        ui.sessions = [...ui.sessions];
+        saveSessions(ui.sessions);
+        return;
+      }
+    }
+  }
 }
 
 function _focusChip(session, path) {

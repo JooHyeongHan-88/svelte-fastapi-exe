@@ -1,9 +1,16 @@
 <script>
   import ChartCell from "./ChartCell.svelte";
 
-  // 표시 선택된 선택키들의 scatter 를 제목 패널 + 페이지네이션 그리드로 보여준다
-  // (메인 앱 ArtifactChart 패턴). 셀 클릭은 라이트박스 확대로 위임한다.
-  let { charts = [], onopen = null } = $props();
+  // 표시 선택된 선택키들의 차트를 제목 패널 + 페이지네이션 그리드로 보여준다
+  // (메인 앱 ArtifactChart 패턴). 셀 클릭은 라이트박스 확대로 위임한다. mark·roles·
+  // aggregate 는 모든 셀에 공통 적용되는 차트 설정이다.
+  let {
+    charts = [],
+    mark = "scatter",
+    roles = { x: true, y: true, legend: true },
+    aggregate = "mean",
+    onopen = null,
+  } = $props();
 
   const PAGE_SIZE = 6;
 
@@ -58,6 +65,9 @@
             chartKey={charts[0].key}
             points={charts[0].points}
             title={charts[0].title}
+            {mark}
+            {roles}
+            {aggregate}
             xName={charts[0].xName}
             yName={charts[0].yName}
             embedded={false}
@@ -74,6 +84,9 @@
               chartKey={c.key}
               points={c.points}
               title={c.title}
+              {mark}
+              {roles}
+              {aggregate}
               xName={c.xName}
               yName={c.yName}
               embedded={true}
