@@ -2,7 +2,7 @@
 
 `backend/agent/providers/mock.py` 의 `MockProvider` 는 실제 LLM 없이 Harness 와
 프론트엔드 UI/UX 전체 파이프라인을 결정론적으로 검증하기 위한 가짜 응답기다.
-사용자가 특정 트리거 문구를 입력하면 미리 정의된 5개 시나리오가 발동되어 도구
+사용자가 특정 트리거 문구를 입력하면 미리 정의된 시나리오(A~H)가 발동되어 도구
 호출·산출물 저장·SSE 이벤트 스트림을 자동으로 재현한다.
 
 **중요**: Mock 은 `ToolCallEvent` / `DeltaEvent` / `ReasoningEvent` / `DoneEvent` 만
@@ -39,6 +39,7 @@ EXE 모드: 설정 UI 에서 Provider 드롭다운을 `mock` 으로 변경.
 | **E** | `전체 분석 보고서`, `종합 보고서` | Case 3 × 2단 체이닝 | 오케스트레이터 `TodoProgress(2)`, `AgentTrail` 칩 2개, sub 내 위젯들, `ArtifactChart`(차트 7개 페이지네이션) + `ArtifactMarkdown` + `ArtifactImage`(이미지 10장 갤러리) |
 | **F** | `병렬 분석`, `동시 분석`, `parallel` | `call_sub_agents_parallel`(analyst ∥ writer 동시) | `AgentTrail` 칩 2개가 **동시에** running → 인터리브 진행, dispatch_id 라우팅, 단일 통합 tool_result → 최종 통합 보고 |
 | **G** | `이전 결과`, `지난 분석`, `예전 데이터`, `아까 저장` | 직접 실행 (오케스트레이터) | `list_artifacts`→`load_artifact`→`exec_code` 읽기 방향 체인. **D 를 먼저 실행**해 디스크에 산출물이 있는 상태를 전제. parquet 없으면 안내 메시지로 graceful 종료 |
+| **H** | `순위 검토`, `후보 큐레이션`, `검토 큐레이션`, `큐레이션 도구` | 직접 실행 (오케스트레이터) | `exec_code`(후보)→`save_artifact`(parquet)→`open_curation` 핸드오프. markdown 칩(진입 카드) 렌더 · 카드의 새 탭 `/ext/evaluator/?bundle=` 링크 · `rank_review` SKILL 의 큐레이션 핸드오프 계약 |
 
 ---
 
@@ -184,6 +185,34 @@ parquet 산출물이 없으면 "먼저 분석을 실행하라" 는 안내로 gra
 
 ---
 
+### H. 큐레이션 핸드오프 (rank_review SKILL → open_curation)
+
+```
+오케스트레이터 (sub-agent 없이 직접 실행)
+  턴 1  → ToolCallEvent(exec_code, cand_df 생성 — evaluator 스키마
+                        item_id·item_desc·rank·tkout_time·category·value)
+  턴 2  → ToolCallEvent(save_artifact, kind="parquet", filename="candidates.parquet",
+                        source="$cand_df")
+  턴 3  → save_artifact tool_result 에서 'result/...parquet' 경로 파싱
+        → ToolCallEvent(open_curation, tool="evaluator", sources=[<파싱경로>],
+                        mapping={select/sort/x/y/legend/desc})
+  턴 4  → DeltaEvent(카드 안내 + 새 탭 링크 클릭 유도)
+```
+
+`open_curation` 은 번들 스펙(`evaluator.bundle.json`)과 마크다운 카드
+(`evaluator.curation.md`)를 턴 슬롯에 쓰고 `data.kind="markdown"` 칩을 반환한다 —
+**display_markdown 과 동일한 칩 렌더 경로를 재사용**하므로 전용 프론트 컴포넌트가 없다
+(`chatActions.svelte.js` 의 `_ARTIFACT_TOOL_NAMES` 에 `open_curation` 1줄만 등록).
+
+검증 포인트: ① 카드가 우측 패널에 markdown 칩으로 자동 표시되는지, ② 카드 본문의
+**'🔍 큐레이션 도구 열기'** 링크가 `/ext/evaluator/?bundle=<URL인코딩>` 을 가리키며
+**새 탭**으로 열리는지(프론트 `lib/markdown.js` 의 DOMPurify 훅이 모든 링크에
+`target="_blank"` 부여 — DOMPurify 기본값은 target 을 제거하므로 훅이 필수), ③ 클릭 시
+evaluator 가 번들의 `sources[0]`+`mapping` 으로 데이터를 로드하는지. `rank_review` SKILL
+(`SKILLS/rank_review.md`)이 실 LLM 환경에서 따르는 핸드오프 계약과 동일한 흐름이다.
+
+---
+
 ## 분기 우선순위
 
 `MockProvider.astream` 의 분기 순서:
@@ -198,6 +227,7 @@ parquet 산출물이 없으면 "먼저 분석을 실행하라" 는 안내로 gra
 2  E composite     (트리거 또는 진행 중 상태)
 3  D single        (트리거 또는 진행 중 상태)
 3b G artifact 재사용 (트리거 또는 list_artifacts tool_result 존재 — D 와 트리거 분리)
+3c H 큐레이션 핸드오프 (트리거 또는 exec_code tool_result 존재 — mock-H-exec prefix)
 4  C time_check    (트리거 또는 진행 중 상태)
 5  B ask_user      (트리거)
 5b B answered echo (B ask_user tool_result 존재)
@@ -275,6 +305,8 @@ result/
 - B 의 트리거에서 "도와줘" 는 제외 (D/E 와 충돌 위험)
 - E 의 트리거에서 "요약" 단어 제외 (D 와 충돌)
 - C 의 "몇 시" 는 "몇 시야" / "몇 시인가요" 로 제한 (오탐 방지)
+- H 트리거("순위 검토"·"…큐레이션"·"큐레이션 도구")는 기존과 미충돌 — `rank_review`
+  SKILL 트리거와 의도적으로 겹쳐 SKILL 뱃지와 H 흐름이 같은 입력에 함께 발동한다
 
 ---
 

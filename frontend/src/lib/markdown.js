@@ -18,6 +18,17 @@ const marked = new Marked(
   { breaks: true, gfm: true },
 );
 
+// 데스크탑 앱은 채팅이 곧 전체 창이라, 마크다운 링크가 같은 탭으로 이동하면 앱이
+// 통째로 대체돼 세션이 소실된다. 모든 링크를 새 탭으로 강제하고 tabnabbing 을 막는다.
+// DOMPurify 기본 ALLOWED_ATTR 에는 target 이 없어 그냥 두면 제거되므로, 속성 sanitize
+// 이후 실행되는 훅에서 직접 부여한다 (예: open_curation 카드의 /ext/<tool> 진입 링크).
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A" && node.getAttribute("href")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 export function renderMarkdown(text) {
   if (!text) return "";
   return DOMPurify.sanitize(marked.parse(text));

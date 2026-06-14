@@ -732,6 +732,9 @@ const _ARTIFACT_TOOL_NAMES = new Set([
   "display_image",
   "display_chart",
   "display_markdown",
+  // 확장 시스템 진입 규약 — open_curation 은 큐레이션 카드를 markdown 칩으로 표시한다.
+  // evaluator 비특정(제네릭)이라 확장 폴더를 지워도 무해(에이전트가 호출 안 함).
+  "open_curation",
 ]);
 const _ARTIFACT_KINDS = new Set(["image", "chart", "markdown"]);
 

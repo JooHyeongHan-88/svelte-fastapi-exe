@@ -14,6 +14,12 @@
       "port": 5173
     },
     {
+      "name": "evaluator",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "extensions/evaluator/frontend", "run", "dev"],
+      "port": 5174
+    },
+    {
       "name": "slides",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "http-server", "docs/overview/slides", "-p", "4599", "-c-1"],

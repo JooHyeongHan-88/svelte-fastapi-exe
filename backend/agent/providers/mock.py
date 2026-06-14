@@ -90,6 +90,7 @@ _D_TRIGGERS = ("데이터 요약", "요약 통계", "summary stats", "통계 계
 _E_TRIGGERS = ("전체 분석 보고서", "종합 보고서", "종합 분석 보고서")
 _F_TRIGGERS = ("병렬 분석", "동시 분석", "parallel")
 _G_TRIGGERS = ("이전 결과", "지난 분석", "예전 데이터", "아까 저장", "reuse artifact")
+_H_TRIGGERS = ("순위 검토", "후보 큐레이션", "검토 큐레이션", "큐레이션 도구")
 
 # ============================================================
 # Marker — sub-agent context 및 composite 분기 판별
@@ -166,6 +167,14 @@ class MockProvider:
         # ───────────────────────────────────────────────────────────────
         if _is_G_active(messages, last_user):
             async for event in _scenario_G_artifact_reuse(messages):
+                yield event
+            return
+
+        # ───────────────────────────────────────────────────────────────
+        # 3c) H 큐레이션 핸드오프 — 후보 parquet → open_curation 진입 카드
+        # ───────────────────────────────────────────────────────────────
+        if _is_H_active(messages, last_user):
+            async for event in _scenario_H_curation(messages):
                 yield event
             return
 
@@ -476,6 +485,144 @@ async def _scenario_G_artifact_reuse(
         f"과거 산출물 `{parquet_path}` 를 다시 불러와 분석을 이어갈 준비를 마쳤습니다.\n\n"
         f"```\n{exec_text.strip()}\n```\n\n"
         "이제 `reloaded_df` 변수로 추가 전처리·시각화를 진행할 수 있습니다."
+    )
+    for ch in reply:
+        await asyncio.sleep(_MOCK_TOKEN_DELAY)
+        yield DeltaEvent(content=ch)
+    yield DoneEvent()
+
+
+# =============================================================================
+# Scenario H — 큐레이션 핸드오프 (rank_review SKILL → open_curation)
+# =============================================================================
+# 오케스트레이터 직접 실행 (sub-agent 없음). 후보 parquet 를 만든 뒤 open_curation
+# 으로 evaluator 진입 카드를 띄운다 — markdown 칩 재사용 + 새 탭 ?bundle= 링크 검증.
+
+_H_EXEC_PREFIX = "mock-H-exec-"
+_H_PARQUET_PREFIX = "mock-H-parquet-"
+_H_OPEN_PREFIX = "mock-H-open-"
+
+# rank_review SKILL 의 매핑 계약과 동일 (evaluator 역할 키 → 후보 컬럼명).
+_H_MAPPING = {
+    "select": "item_id",
+    "sort": "rank",
+    "x": "tkout_time",
+    "y": "value",
+    "legend": "category",
+    "desc": "item_desc",
+}
+
+
+def _is_H_active(messages: list[Message], last_user: Message | None) -> bool:
+    """H 흐름이 진행 중이거나 새 트리거가 들어왔는지 판별."""
+    if _has_recent_tool_result(messages, _H_EXEC_PREFIX):
+        return True
+    return last_user is not None and _matches(last_user.content, _H_TRIGGERS)
+
+
+def _build_candidates_df_code() -> str:
+    """exec_code 에 전달할 후보 DataFrame(cand_df) 생성 코드.
+
+    evaluator 예시 스키마(item_id·item_desc·rank·tkout_time·category·value)를 따른다.
+    품목 4개를 POR/NEW × 3개 시각으로 펼쳐 scatter 레전드(category) 데모를 만든다.
+    """
+    return (
+        "import polars as pl\n"
+        "from datetime import datetime\n"
+        "_items = [('A', '품목 A', 1), ('B', '품목 B', 2), "
+        "('C', '품목 C', 3), ('D', '품목 D', 4)]\n"
+        "_rows = []\n"
+        "for _id, _desc, _rank in _items:\n"
+        "    for _cat in ('POR', 'NEW'):\n"
+        "        for _hh in (9, 13, 18):\n"
+        "            _base = 80 + _rank * 2 + (5 if _cat == 'NEW' else 0)\n"
+        "            _rows.append({\n"
+        "                'item_id': _id, 'item_desc': _desc, 'rank': _rank,\n"
+        "                'tkout_time': datetime(2026, 6, 14, _hh, 0),\n"
+        "                'category': _cat, 'value': _base + _hh,\n"
+        "            })\n"
+        "cand_df = pl.DataFrame(_rows)\n"
+        "print(f'후보 생성: cand_df shape={cand_df.shape}')"
+    )
+
+
+async def _scenario_H_curation(
+    messages: list[Message],
+) -> AsyncIterator[StreamEvent]:
+    """rank_review SKILL 핸드오프 흐름 — 후보 parquet 생성 → open_curation 카드.
+
+    턴 1: exec_code(cand_df — evaluator 스키마)
+    턴 2: save_artifact(parquet, candidates.parquet, source=$cand_df)
+    턴 3: open_curation(tool='evaluator', sources=[저장경로], mapping=_H_MAPPING)
+    턴 4: 자연어 최종 응답
+    """
+    has_exec = _has_recent_tool_result(messages, _H_EXEC_PREFIX)
+    has_parquet = _has_recent_tool_result(messages, _H_PARQUET_PREFIX)
+    has_open = _has_recent_tool_result(messages, _H_OPEN_PREFIX)
+
+    # 턴 1: 후보 데이터 생성.
+    if not has_exec:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"{_H_EXEC_PREFIX}{uuid.uuid4().hex[:8]}",
+                name="exec_code",
+                arguments={"code": _build_candidates_df_code()},
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # 턴 2: candidates.parquet 저장.
+    if not has_parquet:
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"{_H_PARQUET_PREFIX}{uuid.uuid4().hex[:8]}",
+                name="save_artifact",
+                arguments={
+                    "filename": "candidates.parquet",
+                    "kind": "parquet",
+                    "source": "$cand_df",
+                },
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # 턴 3: open_curation — 저장된 parquet 경로를 tool_result 에서 파싱해 전달.
+    if not has_open:
+        parquet_path = _extract_artifact_path(messages, _H_PARQUET_PREFIX)
+        if parquet_path is None:
+            reply = (
+                "후보 parquet 저장 결과를 확인하지 못해 큐레이션 카드를 만들 수 없습니다. "
+                "다시 시도해 주세요."
+            )
+            for ch in reply:
+                await asyncio.sleep(_MOCK_TOKEN_DELAY)
+                yield DeltaEvent(content=ch)
+            yield DoneEvent()
+            return
+
+        yield ToolCallEvent(
+            call=ToolCall(
+                id=f"{_H_OPEN_PREFIX}{uuid.uuid4().hex[:8]}",
+                name="open_curation",
+                arguments={
+                    "tool": "evaluator",
+                    "sources": [parquet_path],
+                    "mapping": _H_MAPPING,
+                    "title": "순위 검토 큐레이션",
+                },
+            )
+        )
+        yield DoneEvent()
+        return
+
+    # 턴 4: 자연어 최종 응답.
+    reply = (
+        "검토 후보 데이터를 준비하고 **큐레이션 진입 카드**를 우측 패널에 표시했습니다.\n\n"
+        "카드의 **'🔍 큐레이션 도구 열기'** 링크를 클릭하면 새 탭에서 evaluator 가 열려 "
+        "품목을 직접 검토·선별·내보내기 할 수 있습니다.\n\n"
+        "> 소스 선정이 잘못됐다면 도구 안에서 후보를 더하거나 빼며 교정할 수 있습니다."
     )
     for ch in reply:
         await asyncio.sleep(_MOCK_TOKEN_DELAY)

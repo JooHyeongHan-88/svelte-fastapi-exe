@@ -3,9 +3,9 @@
 # Validates the full release pipeline locally without uploading to the remote repo.
 #
 # Steps:
-#   1. Run release.ps1 without -Upload (build + sha256 + latest.json)
+#   1. Run release.ps1 without -Upload (build incl. extension frontends + sha256 + latest.json)
 #   2. Serve release/ via a local HTTP server (remote repo mock)
-#   3. Fetch latest.json and print fields to confirm correct generation
+#   3. Fetch latest.json + confirm extension dist/router bundles are present
 #   4. Print manual verification scenarios
 #
 # Usage:
@@ -109,6 +109,28 @@ try {
     Write-Host "ERROR: failed to fetch latest.json: $_" -ForegroundColor Red
 }
 
+# 3b. Confirm extension bundles (release.ps1 builds dist/, App.spec bundles it into the EXE).
+Write-Host ""
+Write-Host "==> extension bundles  (App.spec bundles dist/ + backend/ into the EXE)" -ForegroundColor Cyan
+$extRoot = Join-Path $root "extensions"
+if (Test-Path $extRoot) {
+    $extDirs = Get-ChildItem $extRoot -Directory | Where-Object { $_.Name -notmatch '^[._]' }
+    if ($extDirs) {
+        foreach ($ext in $extDirs) {
+            $distOk = Test-Path (Join-Path $ext.FullName "frontend\dist\index.html")
+            $apiOk = Test-Path (Join-Path $ext.FullName "backend\router.py")
+            Write-Host ("    {0,-18} dist:{1}  router:{2}" -f `
+                $ext.Name, `
+                $(if ($distOk) { 'OK' } else { '--' }), `
+                $(if ($apiOk) { 'OK' } else { '--' }))
+        }
+    } else {
+        Write-Host "    (none)"
+    }
+} else {
+    Write-Host "    (no extensions/ dir)"
+}
+
 # 4. Manual verification guide
 Write-Host ""
 Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
@@ -130,6 +152,10 @@ Write-Host ""
 Write-Host "  [D] Negative case -- sha256 mismatch:"
 Write-Host "        Edit release/latest.json, set sha256 to a random value,"
 Write-Host "        trigger update apply -> expect integrity check failure error"
+Write-Host ""
+Write-Host "  [E] Extension entry (served by the same backend EXE):"
+Write-Host "        http://127.0.0.1:8765/ext/evaluator/?path=result/<session>/<ts>/<file>.parquet"
+Write-Host "        -> extension SPA loads + /api/ext/evaluator/* responds"
 Write-Host ""
 Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
 

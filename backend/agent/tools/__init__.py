@@ -12,6 +12,7 @@ from agent.tools import (  # noqa: F401 — 등록 부수효과
     artifact_io,
     builtin,
     clarify,
+    curation,
     dispatch,
     planner,
     runtime,

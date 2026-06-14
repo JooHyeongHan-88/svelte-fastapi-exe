@@ -20,6 +20,22 @@
 
 ---
 
+## Release 빌드 순서 (extensions 포함)
+
+`release.ps1` 빌드 순서: ① pyproject 버전 읽기 → ② **메인 프론트**(`frontend` → `build/web/`)
+→ ③ **확장 프론트**(`extensions/*/frontend` → 각 `dist/`) → ④ Updater.exe → ⑤ App EXE(App.spec)
+→ ⑥ sha256·latest.json → ⑦ 업로드(`-Upload`).
+
+- **③ 확장 프론트 빌드가 ⑤ App.spec 보다 먼저**여야 한다. `App.spec` 은 `extensions/<tool>/frontend/dist`
+  가 **있을 때만** 번들하므로(→ `extensions_architecture.md`), 빌드를 건너뛰면 stale/누락 dist 가
+  EXE 에 박힌다. 확장은 폴더 컨벤션(`*/frontend/package.json`)으로 자동 발견 — 새 확장을 추가해도
+  release.ps1 수정 불필요.
+- **격리**: 한 확장의 `npm` 빌드 실패는 메인 앱 릴리즈를 막지 않는다(경고 후 계속). App.spec 은 그 경우
+  기존 dist 만 번들하거나, 없으면 그 확장을 건너뛴다(빈손 no-op).
+- `node_modules` 부재 시에만 설치(`package-lock.json` 있으면 `npm ci`, 없으면 `npm install`) 후 `npm run build`.
+- `release-dryrun.ps1` 은 release.ps1 을 호출하므로 확장 빌드를 그대로 상속하며, 끝에 각 확장의
+  `dist`/`router` 번들 존재를 확인 출력한다. 수동 검증 시나리오 `[E]` 가 `/ext/<tool>/` 진입을 안내한다.
+
 ## Release 스크립트 — PowerShell 5.1 주의점
 
 - `param()` 블록은 **반드시 첫 실행문** (앞에 `[Console]::OutputEncoding=` 두면 파싱 에러)

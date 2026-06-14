@@ -74,6 +74,28 @@ for _lib in [l.strip() for l in _allowed_libs_raw.split(',') if l.strip()]:
         print(f'[spec] collect_all({_lib!r}) 실패 — hiddenimports 에 루트만 추가: {_e}')
         _allowed_extra_hidden.append(_lib)
 
+# ---------------------------------------------------------------------------
+# extensions/ — 확장 툴(별도 SPA + API). 런타임에 필요한 backend/ 와 frontend/dist 만
+# 선별 번들한다 (node_modules·src·tests 제외 → EXE 비대화 방지).
+# core.extensions_loader 가 런타임에 MEIPASS/extensions 를 스캔해 파일 경로로 적재하므로
+# collect_submodules/hiddenimports 가 불필요하다. 폴더가 없거나 비면 빈 리스트 → no-op.
+# 확장 1개 폴더를 지워도 spec 수정 없이 다음 빌드에 자동 반영(삭제 = 미수집).
+# ---------------------------------------------------------------------------
+import glob as _glob
+_extension_datas = []
+for _ext in _glob.glob(os.path.join(root, 'extensions', '*')):
+    if not os.path.isdir(_ext):
+        continue
+    _name = os.path.basename(_ext)
+    _backend = os.path.join(_ext, 'backend')
+    _dist = os.path.join(_ext, 'frontend', 'dist')
+    if os.path.isdir(_backend):
+        _extension_datas.append((_backend, f'extensions/{_name}/backend'))
+        print(f'[spec] extension bundled: extensions/{_name}/backend')
+    if os.path.isdir(_dist):
+        _extension_datas.append((_dist, f'extensions/{_name}/frontend/dist'))
+        print(f'[spec] extension bundled: extensions/{_name}/frontend/dist')
+
 a = Analysis(
     [os.path.join(root, 'backend', 'main.py')],
     pathex=[os.path.join(root, 'backend')],
@@ -87,7 +109,7 @@ a = Analysis(
         (os.path.join(root, 'PROMPTS'), 'PROMPTS'),
         (os.path.join(root, 'SKILLS'), 'SKILLS'),
         (os.path.join(root, 'AGENTS'), 'AGENTS'),
-    ] + _allowed_extra_datas,
+    ] + _allowed_extra_datas + _extension_datas,
     hiddenimports=[
         '_version',
         'core',

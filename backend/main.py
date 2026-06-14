@@ -23,6 +23,7 @@ from core.config import (
     WEB_DIR,
     WORKSPACE_DIR,
 )
+from core.extensions_loader import load_extensions
 from core.server_socket import ServerAlreadyRunning, create_server_socket
 
 # Windows Python 환경에 따라 mimetypes 레지스트리가 누락된 확장자를 보정한다.
@@ -71,6 +72,11 @@ app.mount("/workspace", StaticFiles(directory=WORKSPACE_DIR), name="workspace")
 # 동일 파일을 다시 fetch 해 시각화를 복원한다.
 RESULT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/result", StaticFiles(directory=RESULT_DIR), name="result")
+
+# 확장(extensions/<tool>/) 의 API 라우터(/api/ext/<name>)와 정적 SPA(/ext/<name>)를 마운트.
+# 반드시 아래 SPA catch-all(/{path:path}) 보다 먼저 등록해야 폴백에 잡히지 않는다.
+# extensions/ 가 없거나 비면 no-op — 메인 앱 동작에 영향 없음.
+load_extensions(app)
 
 # build/web 가 존재할 때만 정적 자산을 서빙한다.
 # - frozen EXE: 항상 존재(sys._MEIPASS/web 임베드)
