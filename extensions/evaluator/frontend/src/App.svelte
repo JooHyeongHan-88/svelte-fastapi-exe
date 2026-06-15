@@ -16,7 +16,7 @@
     MARKS,
     MARK_BY_ID,
     AGGREGATES,
-    flattenForOverview,
+    mergePoints,
   } from "./lib/chartOption.js";
 
   // 단일 컬럼 역할(legend 만 다중). readUrl·normalizeMapping 이 공유.
@@ -51,7 +51,7 @@
 
   let mapping = $state({}); // 활성 소스의 컬럼 역할 매핑(legend 는 배열)
   let mark = $state("scatter"); // 활성 소스의 차트 종류
-  let viewMode = $state("per-item"); // "per-item"(항목별 그리드) | "overview"(전체 조망)
+  let mergeView = $state(false); // 표시 중인 차트들을 하나로 병합해 보는 모드
   let aggregate = $state("mean"); // bar 집계 함수
   let schema = $state([]); // 활성 소스 스키마 [{name, dtype}] — 매핑 드롭다운용
   let bundleMapping = $state({}); // 번들/쿼리 기본 매핑(사이드카 없을 때 시드)
@@ -70,7 +70,8 @@
   let order = $state([]); // 표시 순서의 키 배열
   let selected = $state([]); // 체크된 키(order 의 부분집합 — 내보내기 대상)
   let cursor = $state(0); // 키보드 하이라이트 — filteredOrder(가시 리스트) 기준 인덱스
-  let displaySelection = $state([]); // 차트로 표시 중인 키 집합(Ctrl+클릭 다중 선택)
+  let displaySelection = $state([]); // 차트로 표시 중인 키 집합(Ctrl/Shift+클릭 다중 선택)
+  let displayAnchor = $state(null); // Shift+클릭 범위 선택의 기준 키(마지막 단일/토글 클릭)
   let sourceLoading = $state(false); // 탭 전환 시 활성 소스 로딩
   let sourceError = $state(null); // 활성 소스 로드 실패 (탭 단위)
 
@@ -114,12 +115,6 @@
   // 파생 상태
   let activePath = $derived(sources[activeIdx] ?? "");
   let selectedOrdered = $derived(order.filter((k) => selected.includes(k)));
-  // 키 → 전체 order 내 위치 — 순서 이동 버튼 disabled 판정(필터 무관).
-  let orderIndex = $derived.by(() => {
-    const m = {};
-    order.forEach((k, i) => (m[k] = i));
-    return m;
-  });
 
   // 키별 legend 값 집합 — 리스트 legend 필터·드롭다운 카탈로그의 단일 원천.
   let legendByKey = $derived.by(() => {
@@ -184,10 +179,11 @@
   let columnNames = $derived(schema.map((s) => s.name));
   let markMeta = $derived(MARK_BY_ID[mark] ?? MARK_BY_ID.scatter);
 
-  // 전체 조망 — 가시(필터된) 항목 전체를 한 차트에 모은다(항목=시리즈). 리스트 필터가
-  // 곧 조망 범위가 되도록 filteredOrder 를 쓴다. legend 는 키로 강제하므로 항상 true.
-  let overviewRoles = $derived({ x: !!mapping.x, y: !!mapping.y, legend: true });
-  let overviewPoints = $derived(flattenForOverview(pointsByKey, filteredOrder));
+  // 병합 보기 — 표시 선택(클릭으로 본 차트)된 항목들의 points 를 하나로 합친다. 조망과
+  // 달리 legend 매핑을 그대로 보존해(항목별 차트의 매핑 요소 유지) 소스 데이터만 합쳐
+  // 한 차트로 비교한다. order 순서를 따라 결정론적으로 결합한다.
+  let mergedKeys = $derived(order.filter((k) => displaySelection.includes(k)));
+  let mergedPoints = $derived(mergePoints(pointsByKey, mergedKeys));
 
   // 표시 선택된 키들의 차트 스펙(리스트 순서 유지). chartState 식별자는 소스 경로로
   // 네임스페이스해 소스 간 같은 키가 필터 상태를 공유하지 않게 한다.
@@ -351,8 +347,9 @@
       : savedSelected.filter((k) => itemKeys.includes(k));
 
     cursor = 0;
-    // 기본 표시 차트는 첫 항목 1개 — Ctrl+클릭으로 다중 표시.
+    // 기본 표시 차트는 첫 항목 1개 — Ctrl/Shift+클릭으로 다중 표시.
     displaySelection = itemKeys.length > 0 ? [order[0]] : [];
+    displayAnchor = displaySelection[0] ?? null;
   }
 
   function stashCurrent() {
@@ -365,6 +362,7 @@
       selected: [...selected],
       cursor,
       displaySelection: [...displaySelection],
+      displayAnchor,
       mapping,
       mark,
       aggregate,
@@ -380,6 +378,7 @@
     selected = [...s.selected];
     cursor = s.cursor;
     displaySelection = [...(s.displaySelection ?? [])];
+    displayAnchor = s.displayAnchor ?? displaySelection[0] ?? null;
     mapping = s.mapping;
     mark = s.mark;
     aggregate = s.aggregate;
@@ -422,6 +421,7 @@
       selected = [];
       cursor = 0;
       displaySelection = [];
+      displayAnchor = null;
     } finally {
       sourceLoading = false;
     }
@@ -510,6 +510,7 @@
         displaySelection = itemKeys.length ? [order[0]] : [];
         cursor = 0;
       }
+      displayAnchor = displaySelection[0] ?? null;
     } catch (e) {
       sourceError = e?.message || String(e);
     } finally {
@@ -627,8 +628,9 @@
   function moveCursor(delta) {
     if (filteredOrder.length === 0) return;
     cursor = Math.max(0, Math.min(filteredOrder.length - 1, cursor + delta));
-    // 키보드 이동은 단일 표시로 전환(다중은 Ctrl+클릭 전용).
+    // 키보드 이동은 단일 표시로 전환(다중은 Ctrl/Shift+클릭 전용).
     displaySelection = [filteredOrder[cursor]];
+    displayAnchor = filteredOrder[cursor];
   }
 
   function toggleSelected(key) {
@@ -660,28 +662,91 @@
     status = null;
   }
 
-  // 항목 클릭 → 차트 표시. Ctrl/⌘+클릭이면 표시 집합에 토글, 아니면 단일 표시.
+  // 항목 클릭 → 차트 표시. 단일/토글/범위 선택을 모디파이어로 분기한다:
+  //   기본 클릭        → 단일 표시(앵커 갱신)
+  //   Ctrl/⌘+클릭      → 표시 집합 토글(앵커 갱신)
+  //   Shift+클릭       → 앵커~클릭 사이 가시 범위 선택(파일 탐색기 류 UX)
+  //   Ctrl/⌘+Shift+클릭 → 범위를 기존 선택에 누적 추가
   function selectDisplay(index, key, e) {
     cursor = index;
-    if (e && (e.ctrlKey || e.metaKey)) {
+    const meta = !!(e && (e.ctrlKey || e.metaKey));
+    const shift = !!(e && e.shiftKey);
+
+    if (shift) {
+      const anchorIdx = displayAnchor != null ? filteredOrder.indexOf(displayAnchor) : -1;
+      const from = anchorIdx < 0 ? index : anchorIdx;
+      const [lo, hi] = from <= index ? [from, index] : [index, from];
+      const range = filteredOrder.slice(lo, hi + 1);
+      if (meta) {
+        const set = new Set([...displaySelection, ...range]);
+        displaySelection = order.filter((k) => set.has(k));
+      } else {
+        displaySelection = range;
+      }
+      return; // 앵커는 범위 기준점으로 고정 유지
+    }
+
+    if (meta) {
       displaySelection = displaySelection.includes(key)
         ? displaySelection.filter((k) => k !== key)
         : [...displaySelection, key];
     } else {
       displaySelection = [key];
     }
+    displayAnchor = key;
   }
 
-  // 순서 이동은 항상 전체 order 기준(필터는 표시만 좁힘) — 키로 위치를 찾아 인접 교환.
-  function moveItem(key, delta) {
-    const index = order.indexOf(key);
-    if (index < 0) return;
-    const j = index + delta;
-    if (j < 0 || j >= order.length) return;
-    const nextOrder = [...order];
-    [nextOrder[index], nextOrder[j]] = [nextOrder[j], nextOrder[index]];
-    order = nextOrder;
+  // ── 차트 표시 일괄 (전체 보기 / 보기 해제) — 현재 가시 집합 filteredOrder 대상 ──
+  function showAllCharts() {
+    displaySelection = [...filteredOrder];
+    displayAnchor = filteredOrder.at(-1) ?? null;
+  }
+  function clearCharts() {
+    displaySelection = [];
+    displayAnchor = null;
+  }
+
+  // ── 리스트 순서 드래그&드롭 (sort 순위 재배치) ────────────────────
+  // 순서는 항상 전체 order 기준이다(필터는 표시만 좁힘). 드래그한 키를 빼서 드롭 대상
+  // 키의 전체 order 위치 앞에 삽입한다 — 필터가 걸려 중간에 숨은 항목이 있어도 정합.
+  let dragKey = $state(null); // 드래그 중인 항목 키
+  let dragOverKey = $state(null); // 드롭 인디케이터를 표시할 대상 키
+
+  function onItemDragStart(key, e) {
+    dragKey = key;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      // Firefox 는 setData 가 있어야 드래그를 시작한다.
+      try {
+        e.dataTransfer.setData("text/plain", key);
+      } catch {
+        // 일부 환경은 setData 를 막는다 — 드래그 자체는 dragKey 로 처리하므로 무해.
+      }
+    }
+  }
+  function onItemDragOver(key, e) {
+    e.preventDefault(); // drop 을 허용하려면 dragover 의 기본동작을 막아야 한다.
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (dragKey != null && key !== dragOverKey) dragOverKey = key;
+  }
+  function onItemDrop(targetKey) {
+    const from = dragKey;
+    dragKey = null;
+    dragOverKey = null;
+    if (from == null || from === targetKey) return;
+    const next = [...order];
+    const fromIdx = next.indexOf(from);
+    if (fromIdx < 0) return;
+    next.splice(fromIdx, 1);
+    const targetIdx = next.indexOf(targetKey);
+    if (targetIdx < 0) return;
+    next.splice(targetIdx, 0, from);
+    order = next;
     status = null;
+  }
+  function onItemDragEnd() {
+    dragKey = null;
+    dragOverKey = null;
   }
 
   function openLightbox(i) {
@@ -960,17 +1025,23 @@
                 class:active={index === cursor}
                 class:displayed={displaySelection.includes(key)}
                 class:checked={selected.includes(key)}
+                class:dragging={dragKey === key}
+                class:drag-over={dragOverKey === key && dragKey !== key}
+                draggable="true"
+                ondragstart={(e) => onItemDragStart(key, e)}
+                ondragover={(e) => onItemDragOver(key, e)}
+                ondrop={() => onItemDrop(key)}
+                ondragend={onItemDragEnd}
               >
-                <div class="reorder">
-                  <button class="mini" title="위로" disabled={orderIndex[key] === 0} onclick={() => moveItem(key, -1)}>↑</button>
-                  <button class="mini" title="아래로" disabled={orderIndex[key] === order.length - 1} onclick={() => moveItem(key, 1)}>↓</button>
-                </div>
+                <span class="drag-handle" aria-hidden="true" title="드래그하여 순서 변경">
+                  <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor"><circle cx="4" cy="3" r="1.3" /><circle cx="8" cy="3" r="1.3" /><circle cx="4" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="4" cy="13" r="1.3" /><circle cx="8" cy="13" r="1.3" /></svg>
+                </span>
                 <input
                   type="checkbox"
                   checked={selected.includes(key)}
                   onchange={() => toggleSelected(key)}
                 />
-                <button class="meta" onclick={(e) => selectDisplay(index, key, e)} title="클릭: 차트 표시 · Ctrl/⌘+클릭: 여러 항목 동시 표시">
+                <button class="meta" onclick={(e) => selectDisplay(index, key, e)} title="클릭: 차트 표시 · Ctrl/⌘+클릭: 토글 · Shift+클릭: 범위 표시">
                   <div class="key-line">
                     <span class="rank">#{item?.sort ?? "–"}</span>
                     <span class="key">{key}</span>
@@ -984,7 +1055,7 @@
             {/each}
           </ul>
           <p class="hint muted small">
-            ↑/↓ 이동 · Space 선택 · 클릭 차트표시 · Ctrl+클릭 다중표시 · 행 ↑↓ 순서변경
+            ↑/↓ 이동 · Space 선택 · 클릭 차트표시 · Ctrl/Shift+클릭 다중표시 · 드래그로 순서변경
           </p>
         </aside>
 
@@ -1003,14 +1074,6 @@
         <!-- 본문: 차트 종류 셀렉터 + 매핑 설정 + 차트 그리드 -->
         <main class="content">
           <div class="config-bar">
-            <div class="mark-picker" role="group" aria-label="보기 모드">
-              <button class="mark-btn" class:active={viewMode === "per-item"} onclick={() => (viewMode = "per-item")} title="선택 항목을 항목별 차트 그리드로">
-                항목별
-              </button>
-              <button class="mark-btn" class:active={viewMode === "overview"} onclick={() => (viewMode = "overview")} title="가시 항목 전체를 한 차트에 모아 비교">
-                전체 조망
-              </button>
-            </div>
             <div class="mark-picker" role="group" aria-label="차트 종류">
               {#each MARKS as m (m.id)}
                 <button
@@ -1023,26 +1086,46 @@
                 </button>
               {/each}
             </div>
+            <div class="view-actions" role="group" aria-label="차트 보기 제어">
+              <button class="ghost-btn" onclick={showAllCharts} disabled={filteredOrder.length === 0} title="표시된 항목을 모두 차트로 보기">
+                전체 보기
+              </button>
+              <button class="ghost-btn" onclick={clearCharts} disabled={displaySelection.length === 0} title="차트 보기 모두 해제">
+                보기 해제
+              </button>
+              <button class="ghost-btn merge-toggle" class:active={mergeView} onclick={() => (mergeView = !mergeView)} title="표시 중인 차트들을 하나로 병합해 보기 (매핑·레전드 유지, 소스 데이터만 합침)">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h4l2 2M2 12h4l2-2" /><path d="M10.5 8h4" /><circle cx="9" cy="8" r="1.4" fill="currentColor" stroke="none" /></svg>
+                병합 보기
+              </button>
+            </div>
             <button class="map-btn" onclick={openMappingModal} title="컬럼 매핑·차트 설정">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2" /><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5 13 13M13 3l-1.5 1.5M4.5 11.5 3 13" /></svg>
               매핑 설정
             </button>
           </div>
-          {#if viewMode === "overview"}
-            <div class="overview-wrap">
-              {#if overviewPoints.length === 0}
-                <div class="center muted small">표시할 항목이 없습니다 — 리스트 필터를 해제하거나 항목을 선택하세요.</div>
+          {#if mergeView}
+            <div class="merge-wrap">
+              {#if mergedPoints.length === 0}
+                <div class="center muted small">병합할 차트가 없습니다 — 좌측에서 항목을 클릭해 표시하거나 '전체 보기'를 누르세요.</div>
               {:else}
-                <ChartCell
-                  chartKey={`${activePath}::__overview__`}
-                  points={overviewPoints}
-                  {mark}
-                  roles={overviewRoles}
-                  {aggregate}
-                  xName={mapping.x}
-                  yName={mapping.y}
-                  embedded={false}
-                />
+                <div class="merge-head">
+                  <span>병합 보기 · {mergedKeys.length}개 항목 · {mergedPoints.length} 포인트</span>
+                  <span class="muted small">매핑·레전드 유지 · 소스 데이터만 합침</span>
+                </div>
+                <div class="merge-chart">
+                  {#key `${activePath}::merge::${mark}::${mergedKeys.length}`}
+                    <ChartCell
+                      chartKey={`${activePath}::__merged__`}
+                      points={mergedPoints}
+                      {mark}
+                      {roles}
+                      {aggregate}
+                      xName={mapping.x}
+                      yName={mapping.y}
+                      embedded={false}
+                    />
+                  {/key}
+                </div>
               {/if}
             </div>
           {:else}
@@ -1613,29 +1696,24 @@
   .row.checked .key {
     color: var(--accent);
   }
-  .reorder {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+  .drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    flex-shrink: 0;
+    color: var(--subtle);
+    cursor: grab;
   }
-  .mini {
-    width: 20px;
-    height: 16px;
-    line-height: 1;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--panel);
-    color: var(--muted);
-    font-size: 11px;
+  .drag-handle:active {
+    cursor: grabbing;
   }
-  .mini:hover:not(:disabled) {
-    border-color: var(--accent-border);
-    color: var(--accent);
+  .row.dragging {
+    opacity: 0.45;
   }
-  .mini:disabled {
-    opacity: 0.35;
-    cursor: default;
+  /* 드롭 인디케이터 — 드래그 항목이 대상 앞에 삽입됨을 상단 라인으로 표시. */
+  .row.drag-over {
+    box-shadow: inset 0 2px 0 var(--accent);
   }
   .row input[type="checkbox"] {
     width: 16px;
@@ -1708,8 +1786,8 @@
     flex-wrap: wrap;
   }
 
-  /* 전체 조망 — 단일 차트가 본문 전체를 채운다. */
-  .overview-wrap {
+  /* 병합 보기 — 합쳐진 단일 차트가 본문 전체를 채운다. */
+  .merge-wrap {
     flex: 1;
     min-height: 0;
     display: flex;
@@ -1718,6 +1796,23 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     overflow: hidden;
+  }
+  .merge-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .merge-chart {
+    flex: 1;
+    min-height: 0;
+    padding: 8px;
   }
   .mark-picker {
     display: inline-flex;
@@ -1749,6 +1844,40 @@
     border-color: var(--accent);
     color: var(--accent-fg);
   }
+  /* 차트 보기 제어 — 전체 보기 / 보기 해제 / 병합 보기 토글. */
+  .view-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .ghost-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ghost-btn:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+  .ghost-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .ghost-btn.merge-toggle.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+  }
+
   .map-btn {
     margin-left: auto;
     display: inline-flex;

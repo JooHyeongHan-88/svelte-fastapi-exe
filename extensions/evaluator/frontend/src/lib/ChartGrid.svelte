@@ -38,7 +38,7 @@
   {#if total === 0}
     <div class="empty">
       좌측에서 항목을 클릭해 차트를 표시하세요.<br />
-      <span class="muted small">Ctrl(⌘)+클릭으로 여러 항목을 동시에 볼 수 있습니다.</span>
+      <span class="muted small">Ctrl(⌘)+클릭 토글 · Shift+클릭 범위 · '전체 보기'로 한 번에 볼 수 있습니다.</span>
     </div>
   {:else}
     <div class="toolbar">

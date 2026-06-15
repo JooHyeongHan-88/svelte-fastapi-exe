@@ -20,6 +20,12 @@ export const ECHARTS_PALETTE = [
 const LEGEND_FALLBACK = "—";
 const HISTOGRAM_BIN_COUNT = 10; // 메인 앱 chart_renderer 와 동일 고정값.
 
+// brush 컴포넌트 — 이 키가 option 에 있어야 takeGlobalCursor(key:"brush") 가 드래그
+// 박스 선택을 활성화한다. 없으면 라이트박스에서 마우스 box select 자체가 동작하지
+// 않는다(메인 앱 render_spec_to_echarts 의 "brush": {} 와 동일 역할). 점↔원본 행이
+// 1:1 인 차트(scatter/line/ecdf)에만 부여한다. toolbox 버튼은 노출하지 않는다.
+const BRUSH_COMPONENT = { throttleType: "debounce", throttleDelay: 80, toolbox: [] };
+
 // 차트 종류 메타데이터 — 매핑 UI(차트별 역할 노출)와 빌더 분기가 공유하는 단일 진실원천.
 //   needs:     차트별로 반드시 매핑돼야 하는 역할(공통 select/sort/legend/desc 외).
 //   brushable: brush 점 선택으로 데이터 제외가 가능한가(점↔원본 행 1:1 대응 차트만).
@@ -54,19 +60,20 @@ export function emptySnapshot() {
 }
 
 /**
- * 조망(overview) 뷰용 평탄화 — 여러 선택키의 points 를 이어 붙이되 각 point 의 legend 를
- * 그 키로 덮어써 '항목=시리즈' 로 한 차트에서 비교 가능하게 만든다. brush 환원(원본 행
- * 인덱스)은 조망에서 쓰지 않으므로 단순 평탄화만 한다(읽기전용 비교 뷰).
+ * 병합(merge) 뷰용 결합 — 여러 선택키의 points 를 단순히 이어 붙인다. 조망(overview)과
+ * 달리 각 point 의 legend 를 키로 덮어쓰지 않고 **원래 legend 매핑을 그대로 보존**한다
+ * (항목별 차트의 매핑 요소를 유지한 채 소스 데이터만 합쳐서 본다는 요구). 읽기전용
+ * 비교 뷰이므로 brush 환원(원본 행 인덱스)은 쓰지 않는다.
  *
  * @param {Record<string, Array<{x:any,y:any,legend:any}>>} pointsByKey
  * @param {string[]} keys  포함할 선택키(표시 순서)
- * @returns {Array<{x:any,y:any,legend:string}>}
+ * @returns {Array<{x:any,y:any,legend:any}>}
  */
-export function flattenForOverview(pointsByKey, keys) {
+export function mergePoints(pointsByKey, keys) {
   const out = [];
   for (const key of keys ?? []) {
     const pts = pointsByKey?.[key] ?? [];
-    for (const p of pts) out.push({ x: p.x, y: p.y, legend: key });
+    for (const p of pts) out.push({ x: p.x, y: p.y, legend: p.legend });
   }
   return out;
 }
@@ -225,6 +232,7 @@ function buildScatter(points, ctx) {
     tooltip: { trigger: "item" },
     legend: { data: legendNames, selected: selectedMap(legendNames, ctx.hidden), top: 8, right: 12, type: "scroll" },
     grid: { left: 56, right: 28, top: 40, bottom: 60 },
+    brush: BRUSH_COMPONENT,
     xAxis: { type: detectAxisType(xValues), name: ctx.xName, nameLocation: "middle", nameGap: 28 },
     yAxis: { type: "value", name: ctx.yName, scale: true },
     series,
@@ -300,6 +308,7 @@ function buildLineLike(points, ctx, { ecdf }) {
     tooltip: { trigger: "axis" },
     legend: { data: legendNames, selected: selectedMap(legendNames, ctx.hidden), top: 8, right: 12, type: "scroll" },
     grid: { left: 56, right: 28, top: 40, bottom: 60 },
+    brush: BRUSH_COMPONENT,
     xAxis: {
       type: ecdf ? "value" : detectAxisType(xValues),
       name: ctx.xName,

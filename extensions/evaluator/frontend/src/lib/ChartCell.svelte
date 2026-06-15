@@ -40,6 +40,15 @@
   // 매핑 누락 등으로 차트를 못 그리는 경우(option=null) 안내 문구.
   let buildError = $derived(built?.error ?? null);
 
+  // embedded(그리드) 셀은 클릭=라이트박스 확대 전용이라 brush 박스 선택을 켜지 않는다.
+  // standalone(라이트박스)에서만 brush 가 살아 있어야 드래그 선택이 가능하다.
+  let renderOption = $derived.by(() => {
+    const opt = built?.option;
+    if (!opt || !embedded || !opt.brush) return opt;
+    const { brush: _brush, ...rest } = opt;
+    return rest;
+  });
+
   function emitChart() {
     if (chart && typeof onchart === "function") onchart(chart, built.row_ids);
   }
@@ -61,7 +70,7 @@
         resizeObserver = new ResizeObserver(() => chart?.resize());
         resizeObserver.observe(container);
       }
-      chart.setOption(built.option, { notMerge: true });
+      chart.setOption(renderOption, { notMerge: true });
       renderError = null;
       emitChart();
     } catch (err) {
