@@ -47,6 +47,7 @@ function stopStreamClock() {
 import {
   makeArtifactChip,
   resetArtifactPanelState,
+  loadExtensions,
 } from "./artifactActions.svelte.js";
 import {
   startEvaluatorBridge,
@@ -641,6 +642,8 @@ export async function initApp() {
     ui.availableSkills = skills;
   });
 
+  loadExtensions();
+
   refreshArtifactUsage();
 
   // evaluator 확장 탭의 내보내기 알림을 구독해 데이터 칩으로 인폼한다.
@@ -740,11 +743,11 @@ const _ARTIFACT_TOOL_NAMES = new Set([
   "display_image",
   "display_chart",
   "display_markdown",
-  // 확장 시스템 진입 규약 — open_curation 은 큐레이션 카드를 markdown 칩으로 표시한다.
+  // 확장 시스템 진입 규약 — open_curation 은 확장 SPA 를 패널 iframe(extension 칩)으로 연다.
   // evaluator 비특정(제네릭)이라 확장 폴더를 지워도 무해(에이전트가 호출 안 함).
   "open_curation",
 ]);
-const _ARTIFACT_KINDS = new Set(["image", "chart", "markdown"]);
+const _ARTIFACT_KINDS = new Set(["image", "chart", "markdown", "extension"]);
 
 // harness 가 모든 tool_call 을 프론트로 yield 하지만, sentinel 도구는 전용 세그먼트
 // (subagent / todo / askUser / skill 칩) 로 따로 렌더되므로 도구 카드로 중복 표시하면 안 된다.

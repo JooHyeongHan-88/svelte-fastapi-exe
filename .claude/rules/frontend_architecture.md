@@ -40,6 +40,10 @@ components/
   ArtifactData.svelte   parquet 데이터 칩 패널 — GET /api/artifact/preview 로 head(10) 테이블
                         (횡 스크롤·sticky th·dtype 부기) + CSV 다운로드(showSaveFilePicker
                         저장 위치 선택, 미지원 시 앵커 다운로드 폴백)
+  ArtifactExtension.svelte 확장(extension) 칩 패널 — 확장 SPA 를 same-origin <iframe src=/ext/<tool>/...>
+                        로 임베드 + 헤더 '새 탭' 버튼(window.open). open_curation 칩·런처 뷰 공용
+  ExtensionMenu.svelte  TopBar 패널-열기 버튼 옆 caret 드롭다운 — ui.extensions(/api/extensions) 나열,
+                        고르면 openExtensionPanel(tool)로 확장을 패널에 휘발 뷰로 연다(ModelPicker 패턴)
   ChartCell.svelte      단일 ECharts 인스턴스 자가 관리 — onMount init·onDestroy dispose·ResizeObserver
   ArtifactLightbox.svelte  전체화면 확대 모달 — drag-to-resize 핸들(우하단), 좌우 키 네비게이션,
                            filter 툴바(brush Filter/Filter All/Undo/Redo/Reset + Legend 토글),
@@ -77,6 +81,11 @@ ui.activeArtifactId;
 ui.artifactPanelOpen;
 ui.artifactWidth;                      // 사용자 드래그 조절 패널 너비(px)
 
+// 확장(extensions) 런처
+ui.extensions;                         // [{tool, name, description, icon}] — GET /api/extensions 캐시
+ui.extensionMenuOpen;                  // TopBar caret 드롭다운 열림 여부
+ui.extensionView;                      // 런처로 연 휘발 확장 뷰 {id, kind:"extension", label, payload}
+
 // 아티팩트 라이트박스
 ui.lightbox.open;                      // boolean
 ui.lightbox.kind;                      // "image" | "chart" | null
@@ -98,6 +107,8 @@ import {
   excludeLegend, setChartLegend,   // 레전드 Filter / 순서·색상·Hide
   artifactRefPath, insertArtifactReference,   // 칩→Composer 경로 참조 삽입
   revealArtifactFolder,   // 패널 헤더 '폴더 열기' — 탐색기 reveal
+  loadExtensions, openExtensionPanel,   // 확장 런처 — /api/extensions 캐시·패널에 확장 열기
+  toggleExtensionMenu, closeExtensionMenu, closeExtensionView,   // 런처 드롭다운·휘발 뷰 제어
 } from "$lib/artifactActions.svelte.js";
 ```
 

@@ -4,8 +4,72 @@
 도구들이 있다. 이 도구들은 **파일을 수정하지 않아도 항상 LLM 에 노출**된다.
 
 도구 종류:
-- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`, `display_image`, `display_chart`, `display_markdown`)
+- **실행 도구**: 실제 로직이 실행되고 결과를 반환 (`now`, `save_artifact`, `display_image`, `display_chart`, `display_markdown`, `open_curation`)
 - **Sentinel 도구**: harness 가 tool_call 을 가로채 직접 처리 — 함수 본문은 절대 실행되지 않음
+
+---
+
+## 산출물 저장 도구
+
+### `save_artifact`
+
+LLM 이 작성한 텍스트/데이터/바이너리 산출물을 `result/<session>/<ts>/<filename>` 경로에 디스크로
+저장한다. `display_*` 시각화 도구는 **디스크에 사전 존재하는 파일만** 표시할 수 있으므로, 산출물을
+사용자에게 남기는 거의 모든 체인의 **첫 단계**가 이 도구다. 같은 턴 안에서 여러 번 호출하면
+`turn_slot()` 캐시 덕분에 같은 타임스탬프 폴더에 모인다. 성공 시 세션 manifest(`_artifacts.jsonl`)에도
+한 줄 기록돼 이후 턴/세션에서 `list_artifacts` 로 재발견할 수 있다.
+
+#### 인자
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `filename` | string | **필수** | — | 단순 파일명(경로 구분자·`..` 금지). `kind` 와 확장자가 일치해야 함 |
+| `kind` | enum | 선택 | `"markdown"` | `markdown`·`json`·`text`·`parquet` + 바이너리 `png`·`svg`·`pdf`·`pptx`·`xlsx` |
+| `content` | string \| dict \| list | 조건부 | `null` | 본문 텍스트. **markdown/json/text 에 필수**, 그 외 금지. json 은 문자열 또는 객체(자동 직렬화) |
+| `source` | string | 조건부 | `null` | namespace 변수 참조(`"$varname"`). **parquet·바이너리에 필수**, 그 외 금지 |
+| `description` | string | 선택 | `""` | 산출물 용도 1줄 — `list_artifacts` 재발견 시 LLM 이 식별 |
+
+> `content` 와 `source` 는 **상호 배타적**이다. 텍스트 kind 는 `content`, parquet·바이너리 kind 는
+> `source`(namespace 변수)를 쓴다. parquet 은 `polars`/`pandas` DataFrame 변수를, 바이너리는
+> `bytes`/`io.BytesIO` 변수를 가리킨다.
+
+#### kind 별 입력 요약
+
+| kind | 입력 | namespace 변수 타입 | 확장자 |
+|---|---|---|---|
+| `markdown` / `text` | `content` (문자열) | — | `.md`/`.markdown`, `.txt` |
+| `json` | `content` (JSON 문자열 또는 dict/list) | — | `.json` |
+| `parquet` | `source` (`"$df"`) | `polars`/`pandas` DataFrame | `.parquet` |
+| `png` / `svg` | `source` (`"$bytes"`) | `bytes`/`io.BytesIO` | `.png`/`.svg` (이후 `display_image` 가능) |
+| `pdf` / `pptx` / `xlsx` | `source` (`"$bytes"`) | `bytes`/`io.BytesIO` | `.pdf`/`.pptx`/`.xlsx` (다운로드 링크로 안내) |
+
+#### 반환값
+
+`ToolResult.data = {kind, path, size, filename, ...}` — `path` 는 `result/...` 상대 경로로,
+**그대로 `display_markdown`/`display_chart`/`display_image`/`load_artifact` 에 전달**할 수 있다.
+parquet 은 `rows`·`columns`·`schema` 도 함께 반환되며, 프론트는 parquet 산출물을 자동으로
+**데이터 칩**(ArtifactData)으로 만든다.
+
+#### 표준 체인 예시
+
+```
+# 마크다운 리포트
+save_artifact(kind="markdown", filename="report.md", content="# 분석 리포트\n...")
+  → display_markdown(source="result/<session>/<ts>/report.md", title="리포트")
+
+# 차트 (parquet + spec)
+save_artifact(kind="parquet", filename="samples.parquet", source="$df")
+save_artifact(kind="json", filename="charts.spec.json", content=<ChartSpecV1 객체>)
+  → display_chart(source="result/<session>/<ts>/charts.spec.json")
+
+# 이미지 (matplotlib → bytes)
+exec_code: buf=io.BytesIO(); fig.savefig(buf, format="png"); png=buf.getvalue()
+save_artifact(kind="png", filename="fig.png", source="$png")
+  → display_image(images=[{source:"result/<session>/<ts>/fig.png"}])
+```
+
+> JSON 객체를 `content` 에 그대로 넘겨도 된다 — dict/list 는 자동 직렬화된다(차트 spec 작성에 편리).
+> 형식·타입 오류(예: parquet 인데 `content` 전달)는 슬롯 가드가 LLM 에 회신해 self-correct 시킨다.
 
 ---
 
@@ -250,6 +314,60 @@ Markdown 산출물 파일을 아티팩트 패널에 렌더링한다.
 
 > **파일 사전 저장 필수** — `display_markdown` 을 호출하기 전에 디스크에 `.md` 파일이 존재해야 한다.
 > 파일이 없으면 프론트엔드에서 "산출물 파일을 불러올 수 없습니다." 에러 UI 가 표시된다.
+
+---
+
+## 확장 진입 도구
+
+### `open_curation`
+
+후보 parquet 들을 **사람이 검토·선별하는 확장 도구**(evaluator 등)를 채팅창 우측 아티팩트 패널에
+**iframe 으로 임베드**해 연다. SKILL 의 마지막 핸드오프 단계로, 후보를 모두 만든 뒤 **한 번만**
+호출한다. evaluator 에 특정되지 않는 **제네릭 진입 훅**으로, `tool` 인자로 어떤 확장이든 가리킨다.
+확장 시스템 전반은 → **[extensions.md](extensions.md)**.
+
+#### 인자
+
+| 인자 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `tool` | string | **필수** | — | 확장 툴 이름(영소문자/숫자/`_`/`-`). `/ext/<tool>/` 로 열린다. 예: `"evaluator"` |
+| `sources` | list[string] | **필수** | — | 검토할 parquet 의 `result/...` 경로 리스트(1개 이상). `save_artifact` 반환 경로 그대로 |
+| `mapping` | dict | 선택 | `null` | 컬럼 역할→컬럼명(확장이 해석). 값은 문자열 또는 문자열 리스트(다중 컬럼 역할) |
+| `mark` | string | 선택 | `""` | 기본 차트 종류(확장이 해석). evaluator: scatter/line/bar/box/histogram/ecdf/heatmap |
+| `title` | string | 선택 | `""` | 패널 헤더·탭에 표시할 제목 |
+
+evaluator 의 `mapping` 역할 키: `select`(리스트 항목 키)·`sort`(정수 순위)·`x`·`y`(scatter 축)·
+`legend`(시리즈 그룹, 다중 가능)·`desc`(보조 설명).
+
+#### 동작
+
+1. `tool` 이름·`sources`(parquet 경로 containment)·`mapping`(평탄 dict) 검증.
+2. 번들 스펙 `<tool>.bundle.json`(`{tool, sources, mapping, mark?}`)을 현재 턴 슬롯에 쓴다.
+3. `ToolResult.data = {kind:"extension", tool, src:"/ext/<tool>/?bundle=...", title, bundle}` 반환.
+4. 프론트엔드가 우측 패널에 확장 SPA 를 **iframe 으로 임베드**(`ArtifactExtension`)하고 자동으로 연다.
+   패널 헤더의 **'새 탭'** 버튼으로 별도 창에서도 열 수 있다. 칩은 메시지에 영속되어 세션 재진입
+   후에도 같은 번들로 복원된다.
+
+#### 예시 (LLM 이 호출하는 형태)
+
+```json
+{
+  "name": "open_curation",
+  "arguments": {
+    "tool": "evaluator",
+    "sources": ["result/<session>/<ts>/candidates.parquet"],
+    "mapping": {
+      "select": "item_id", "sort": "rank",
+      "x": "tkout_time", "y": "value",
+      "legend": "category", "desc": "item_desc"
+    },
+    "title": "순위 검토 큐레이션"
+  }
+}
+```
+
+> SKILL 작성 표준은 [SKILLS/rank_review.md](../SKILLS/rank_review.md). 역할 키는 고정이고 값(컬럼명)만
+> 도메인에 맞게 바꾼다.
 
 ---
 
@@ -607,11 +725,13 @@ async def fetch_sales(
 | 도구 | 종류 | 사용 주체 | 핵심 효과 |
 |---|---|---|---|
 | `now` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 시각 반환 |
+| `save_artifact` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 텍스트/parquet/바이너리 산출물을 디스크에 저장 (display_* 체인의 첫 단계) |
 | `list_artifacts` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 현재 세션 산출물 목록 조회 (재발견) |
 | `load_artifact` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 산출물 파일을 namespace 로 로드 (역방향 브리지) |
 | `display_image` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 이미지 표시 |
 | `display_chart` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 ECharts 인터랙티브 차트 표시 |
 | `display_markdown` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 Markdown 파일 렌더링 |
+| `open_curation` | 실행 도구 | 오케스트레이터 · 서브 에이전트 | 우측 아티팩트 패널에 큐레이션 확장 SPA 를 iframe 으로 임베드 |
 | `add_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | TodoProgress 체크리스트 생성 |
 | `complete_todo` | Sentinel | 오케스트레이터 · 서브 에이전트 | 단계 완료/실패 표시, SkillCompleteBadge |
 | `ask_user` | Sentinel | 오케스트레이터 · 서브 에이전트 | AskUserCard 표시, 턴 중단 |

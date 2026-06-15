@@ -10,6 +10,7 @@ import {
   postChartFilter,
   getChartFilterState,
   revealArtifactPath,
+  listExtensions,
 } from "./api.js";
 
 /**
@@ -216,6 +217,53 @@ export function toggleArtifactPanel() {
  */
 export function resetArtifactPanelState() {
   ui.activeArtifactId = null;
+  // 휘발 확장 뷰는 세션 산출물이 아니므로 세션 전환 시 정리한다.
+  ui.extensionView = null;
+}
+
+// ---------------------------------------------------------------------------
+// 확장(extensions) 런처 — 패널 열기 버튼의 드롭다운으로 확장을 패널에 연다.
+// open_curation 이 만든 확장 칩(메시지 영속)과 달리, 여기서 연 확장은 휘발 뷰다.
+// ---------------------------------------------------------------------------
+
+/** 부팅 시 1회 — 패널 런처가 띄울 수 있는 확장 카탈로그를 캐시한다. */
+export async function loadExtensions() {
+  ui.extensions = await listExtensions();
+}
+
+/** 런처 드롭다운 토글/닫기. */
+export function toggleExtensionMenu() {
+  ui.extensionMenuOpen = !ui.extensionMenuOpen;
+}
+
+export function closeExtensionMenu() {
+  ui.extensionMenuOpen = false;
+}
+
+/**
+ * 확장을 우측 패널에 휘발 뷰로 연다 (소스/번들 없이 → 확장의 랜딩 페이지).
+ * 같은 출처 iframe(/ext/<tool>/)을 임베드하고, 활성 칩으로 만들어 패널을 띄운다.
+ *
+ * @param {string} tool  확장 툴 이름 (ui.extensions[].tool)
+ */
+export function openExtensionPanel(tool) {
+  const meta = ui.extensions.find((e) => e.tool === tool);
+  const title = meta?.name || tool;
+  ui.extensionView = {
+    id: `ext-${tool}-${Date.now()}`,
+    kind: "extension",
+    label: title,
+    payload: { tool, src: `/ext/${tool}/`, title },
+  };
+  ui.activeArtifactId = ui.extensionView.id;
+  ui.artifactPanelOpen = true;
+  saveArtifactPanelOpen(true);
+  ui.extensionMenuOpen = false;
+}
+
+/** 휘발 확장 뷰를 닫는다 (탭의 × — 메시지 칩은 영향 없음). */
+export function closeExtensionView() {
+  ui.extensionView = null;
 }
 
 /**
@@ -243,6 +291,8 @@ export function listSessionArtifacts() {
 // ---------------------------------------------------------------------------
 
 function _findChip(id) {
+  // 휘발 확장 뷰(드롭다운 런처)도 활성화 대상 — 메시지 칩과 동일하게 탭 클릭으로 연다.
+  if (ui.extensionView && ui.extensionView.id === id) return ui.extensionView;
   const session = activeSession();
   if (!session) return null;
   for (const m of session.messages) {
@@ -278,6 +328,9 @@ function _artifactLabel(kind, payload) {
   }
   if (kind === "markdown") {
     return payload.title || "마크다운 문서";
+  }
+  if (kind === "extension") {
+    return payload.title || payload.tool || "확장 도구";
   }
   if (kind === "data") {
     const name = payload?.filename || "데이터";

@@ -89,12 +89,17 @@ for _ext in _glob.glob(os.path.join(root, 'extensions', '*')):
     _name = os.path.basename(_ext)
     _backend = os.path.join(_ext, 'backend')
     _dist = os.path.join(_ext, 'frontend', 'dist')
+    _manifest = os.path.join(_ext, 'extension.json')
     if os.path.isdir(_backend):
         _extension_datas.append((_backend, f'extensions/{_name}/backend'))
         print(f'[spec] extension bundled: extensions/{_name}/backend')
     if os.path.isdir(_dist):
         _extension_datas.append((_dist, f'extensions/{_name}/frontend/dist'))
         print(f'[spec] extension bundled: extensions/{_name}/frontend/dist')
+    # 선택적 메타데이터 매니페스트 — list_available_extensions() 가 런처 드롭다운에 쓴다.
+    if os.path.isfile(_manifest):
+        _extension_datas.append((_manifest, f'extensions/{_name}'))
+        print(f'[spec] extension bundled: extensions/{_name}/extension.json')
 
 a = Analysis(
     [os.path.join(root, 'backend', 'main.py')],

@@ -1,0 +1,5 @@
+{
+  "name": "Evaluator",
+  "description": "parquet 후보 데이터를 시각적으로 검토·선별하는 큐레이션 도구",
+  "icon": "evaluator"
+}

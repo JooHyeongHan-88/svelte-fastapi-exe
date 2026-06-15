@@ -1,21 +1,21 @@
-"""open_curation 도구 — 큐레이션 확장 툴(evaluator 등)로 가는 진입 카드를 띄운다.
+"""open_curation 도구 — 큐레이션 확장 툴(evaluator 등)을 우측 패널에서 연다.
 
 에이전트가 후보 parquet 들을 만든 뒤 이 도구를 한 번 호출하면:
 
 1. 소스 parquet 경로들을 검증하고,
 2. 번들 스펙(``<tool>.bundle.json``)을 현재 턴 슬롯에 쓰고,
-3. "큐레이션 도구 열기" 링크가 든 마크다운 카드(``<tool>.curation.md``)를 만들어,
-4. **기존 markdown 칩 렌더 경로를 그대로 재사용**해 우측 패널에 표시한다
-   (전용 프론트 컴포넌트 없이 ``data.kind="markdown"`` 으로 처리).
+3. ``data.kind="extension"`` 칩을 반환해 **우측 아티팩트 패널에 확장 SPA 를
+   iframe 으로 임베드**한다. iframe 은 ``/ext/<tool>/?bundle=<rel>`` 을 열고, 확장
+   툴이 번들의 parquet 들을 로드한다.
 
-사용자가 카드의 링크를 클릭하면 새 탭에서 ``/ext/<tool>/?bundle=<rel>`` 이 열리고,
-확장 툴이 번들의 parquet 들을 로드한다. 새 탭(``target="_blank"``)은 프론트의 마크다운
-렌더러(``lib/markdown.js`` 의 DOMPurify 훅)가 모든 링크에 부여하므로 — 채팅 탭이 통째로
-대체되지 않게 한다 — 카드는 평범한 마크다운 링크만 쓴다.
+예전에는 마크다운 카드(``<tool>.curation.md``)를 띄워 사용자가 링크를 새 탭으로
+열게 했지만, 데스크탑 앱에서 새 탭은 맥락을 끊으므로 **패널 내 iframe 임베드**로
+바꿨다. 패널 헤더의 '새 탭' 버튼으로 별도 창에서도 열 수 있다(프론트
+``ArtifactExtension`` 컴포넌트).
 
-이 도구는 **evaluator 에 특정되지 않는다** — ``tool`` 인자로 어떤 확장 툴이든 가리킬 수
-있고, ``mapping`` 도 해석하지 않고 번들에 그대로 실어 보낸다(확장 툴이 해석). 확장
-시스템의 진입 규약을 한 곳에 모은 제네릭 호스트 훅이다.
+이 도구는 **evaluator 에 특정되지 않는다** — ``tool`` 인자로 어떤 확장 툴이든 가리킬
+수 있고, ``mapping`` 도 해석하지 않고 번들에 그대로 실어 보낸다(확장 툴이 해석).
+확장 시스템의 진입 규약을 한 곳에 모은 제네릭 호스트 훅이다.
 """
 
 from __future__ import annotations
@@ -41,11 +41,8 @@ logger = logging.getLogger(__name__)
 _TOOL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # 정적 SPA 마운트 prefix (core.extensions_loader._STATIC_MOUNT_PREFIX 와 일치).
 _EXT_MOUNT_PREFIX = "/ext"
-# 번들 스펙·카드 파일 명명 규약 (소스와 같은 턴 슬롯에 형제로 쓴다).
+# 번들 스펙 파일 명명 규약 (소스와 같은 턴 슬롯에 형제로 쓴다).
 _BUNDLE_SUFFIX = ".bundle.json"
-_CARD_SUFFIX = ".curation.md"
-# 마크다운 칩(ArtifactMarkdown)이 fetch 할 산출물 URL prefix.
-_RESULT_URL_PREFIX = "/result/"
 
 
 # ---------------------------------------------------------------------------
@@ -121,39 +118,6 @@ def _validate_mapping(
     return mapping, None
 
 
-def _render_card(tool: str, sources: list[str], href: str, title: str) -> str:
-    """큐레이션 진입 카드 마크다운 본문을 만든다.
-
-    평범한 마크다운 링크로 작성한다 — 새 탭(``target="_blank"``)은 프론트 마크다운
-    렌더러의 DOMPurify 훅이 모든 링크에 부여하므로 여기서 raw HTML 을 쓰지 않는다.
-
-    Args:
-        tool: 확장 툴 이름.
-        sources: 번들에 포함된 'result/...' 소스 경로 목록.
-        href: 큐레이션 도구 진입 URL (``/ext/<tool>/?bundle=...``).
-        title: 카드 제목 (빈 문자열이면 기본 제목 사용).
-
-    Returns:
-        마크다운 문자열.
-    """
-    heading = title or f"{tool} 큐레이션"
-    lines = [
-        f"# {heading}",
-        "",
-        f"검토 후보 **{len(sources)}개**를 큐레이션 도구로 넘길 준비가 되었습니다.",
-        "",
-        f"**[🔍 큐레이션 도구 열기 →]({href})**",
-        "",
-        "## 포함된 소스",
-        *[f"- `{src}`" for src in sources],
-        "",
-        "> 링크는 새 탭에서 열립니다. 도구 안에서 소스를 더하거나 빼며 "
-        "검토·선별할 수 있습니다.",
-        "",
-    ]
-    return "\n".join(lines)
-
-
 def _write_text(target: Path, text: str) -> str | None:
     """텍스트 파일을 쓰고, 실패 시 오류 메시지를 반환한다 (성공 시 None)."""
     try:
@@ -170,8 +134,8 @@ def _write_text(target: Path, text: str) -> str | None:
 
 @register_tool(
     description=(
-        "후보 데이터(parquet)를 사람이 검토·선별하는 큐레이션 확장 도구로 넘기는 "
-        "진입 카드를 채팅창 우측 패널에 표시한다. "
+        "후보 데이터(parquet)를 사람이 검토·선별하는 큐레이션 확장 도구를 "
+        "채팅창 우측 패널에 iframe 으로 연다. "
         "When to use: 분석으로 만든 후보 parquet 들을 사용자가 시각적으로 검토·선별해야 할 때 "
         "(SKILL 의 마지막 핸드오프 단계). 후보를 모두 만든 뒤 **마지막에 한 번만** 호출한다. "
         "When NOT to use: 데이터를 그냥 보여줄 때(display_chart/display_markdown), "
@@ -185,8 +149,8 @@ def _write_text(target: Path, text: str) -> str | None:
         "legend(시리즈 그룹)·desc(보조 설명). "
         "mark 는 기본 차트 종류(선택) — evaluator 는 "
         "scatter/line/bar/box/histogram/ecdf/heatmap 을 받으며 생략 시 scatter. "
-        "이 도구는 마크다운 카드 칩 1개를 패널에 표시하며, 사용자가 카드의 링크를 "
-        "클릭하면 큐레이션 도구가 새 탭에서 열린다."
+        "이 도구는 확장 칩 1개를 우측 패널에 표시하고 확장 도구를 바로 연다 "
+        "(패널 헤더의 '새 탭' 버튼으로 별도 창에서도 열 수 있다)."
     ),
     slot_prompts={
         "tool": "어떤 큐레이션 확장 도구를 열까요? (예: 'evaluator')",
@@ -215,12 +179,12 @@ async def open_curation(
         "기본 차트 종류 (확장 툴이 해석, 생략 가능). evaluator 는 "
         "scatter/line/bar/box/histogram/ecdf/heatmap 중 하나. 사용자가 도구 안에서 바꿀 수 있다.",
     ] = "",
-    title: Annotated[str, "카드 제목 (패널 헤더·카드 제목에 표시)"] = "",
+    title: Annotated[str, "카드 제목 (패널 헤더·탭에 표시)"] = "",
 ) -> ToolResult:
-    """큐레이션 확장 도구 진입 카드를 패널에 표시한다.
+    """큐레이션 확장 도구를 우측 패널에 iframe 으로 연다.
 
-    소스 경로를 검증하고, 번들 스펙과 마크다운 카드를 현재 턴 슬롯에 쓴 뒤,
-    기존 markdown 칩 경로(``data.kind="markdown"``)로 패널에 카드를 표시한다.
+    소스 경로를 검증하고, 번들 스펙을 현재 턴 슬롯에 쓴 뒤, ``data.kind="extension"``
+    칩을 반환해 패널이 ``/ext/<tool>/?bundle=...`` 을 iframe 으로 임베드하게 한다.
 
     Args:
         tool: 확장 툴 이름 (/ext/<tool>/ 세그먼트).
@@ -230,7 +194,7 @@ async def open_curation(
         title: 카드 제목 (선택).
 
     Returns:
-        성공: ``ToolResult(content=요약, data={kind:"markdown", src, title})``
+        성공: ``ToolResult(content=요약, data={kind:"extension", tool, src, title, bundle})``
         실패: ``ToolResult(is_error=True, content=원인 + 재시도 유도)``
     """
     tool_name = (tool or "").strip()
@@ -270,19 +234,7 @@ async def open_curation(
         )
 
     bundle_rel = to_result_relative(bundle_path)
-    href = f"{_EXT_MOUNT_PREFIX}/{tool_name}/?bundle={quote(bundle_rel, safe='')}"
-
-    card_path = slot / f"{tool_name}{_CARD_SUFFIX}"
-    write_error = _write_text(
-        card_path, _render_card(tool_name, resolved_sources, href, title)
-    )
-    if write_error:
-        return ToolResult(
-            content=f"[open_curation 오류] 카드 저장 실패: {write_error}",
-            is_error=True,
-        )
-
-    card_src = _RESULT_URL_PREFIX + to_result_relative(card_path)[len("result/") :]
+    src = f"{_EXT_MOUNT_PREFIX}/{tool_name}/?bundle={quote(bundle_rel, safe='')}"
     label = title or f"큐레이션: {tool_name}"
     logger.info(
         "open_curation: tool=%s sources=%d bundle=%s",
@@ -293,8 +245,14 @@ async def open_curation(
 
     return ToolResult(
         content=(
-            f"큐레이션 진입 카드를 표시했습니다 (도구: {tool_name}, 소스 "
-            f"{len(resolved_sources)}개). 사용자가 카드의 링크로 도구를 엽니다."
+            f"큐레이션 도구를 우측 패널에 열었습니다 (도구: {tool_name}, 소스 "
+            f"{len(resolved_sources)}개). 사용자가 패널에서 직접 검토·선별합니다."
         ),
-        data={"kind": "markdown", "src": card_src, "title": label},
+        data={
+            "kind": "extension",
+            "tool": tool_name,
+            "src": src,
+            "title": label,
+            "bundle": bundle_rel,
+        },
     )

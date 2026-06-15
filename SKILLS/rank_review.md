@@ -49,9 +49,9 @@ requires_tools:
      }
    )
    ```
-   `open_curation` 이 번들 스펙 작성·소스 경로 검증·카드 표시를 모두 처리한다.
-   사용자가 카드를 클릭하면 evaluator 가 새 탭에서 열리고 번들의 parquet 들을 로드한다.
-   완료 후 `complete_todo` 로 2단계 마킹.
+   `open_curation` 이 번들 스펙 작성·소스 경로 검증·패널 임베드를 모두 처리한다.
+   호출 즉시 evaluator 가 채팅창 우측 패널에 iframe 으로 열려 번들의 parquet 들을 로드한다
+   (패널 헤더 '새 탭' 버튼으로 별도 창에서도 가능). 완료 후 `complete_todo` 로 2단계 마킹.
 
 ## 컬럼 역할 (매핑 계약)
 

@@ -49,6 +49,16 @@ export async function listSkills() {
   }
 }
 
+export async function listExtensions() {
+  // 부팅 시 한 번만 호출 — 패널 런처 드롭다운 카탈로그.
+  try {
+    const r = await fetch("/api/extensions");
+    return r.ok ? r.json() : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function deleteConversation(clientId) {
   try {
     await fetch(`/api/conversation?client_id=${clientId}`, { method: "DELETE" });

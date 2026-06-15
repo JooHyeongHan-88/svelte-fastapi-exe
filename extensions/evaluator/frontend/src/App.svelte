@@ -57,7 +57,9 @@
   let bundleMapping = $state({}); // 번들/쿼리 기본 매핑(사이드카 없을 때 시드)
   let bundleMark = $state(""); // 번들 기본 차트 종류
   let loading = $state(true); // 초기 전체 로드
-  let error = $state(null); // 치명적 에러 (소스 0개·번들 실패)
+  let error = $state(null); // 치명적 에러 (번들 실패 등)
+  let landing = $state(false); // 소스/번들 없이 열림 — 랜딩 페이지(소스 경로 입력 안내)
+  let landingPath = $state(""); // 랜딩에서 사용자가 입력한 parquet 경로
 
   let sources = $state([]); // 작업 세트: 소스 경로 배열
   let activeIdx = $state(0);
@@ -280,8 +282,12 @@
       } else if (path) {
         initial = [path];
       }
-      if (initial.length === 0)
-        throw new Error("URL 에 ?path= 또는 ?bundle= 경로가 필요합니다.");
+      if (initial.length === 0) {
+        // 소스/번들 없이 직접 열림(패널 런처 등) — 에러 대신 랜딩 페이지를 띄워
+        // 소스 데이터·매핑 입력을 안내한다.
+        landing = true;
+        return;
+      }
       bundleMapping = normalizeMapping(seedMapping);
       bundleMark = MARK_BY_ID[seedMark] ? seedMark : "";
       mapping = bundleMapping; // loadActiveSource 가 사이드카로 덮어쓸 수 있음
@@ -293,6 +299,22 @@
     } finally {
       loading = false;
     }
+  }
+
+  // 랜딩 페이지에서 사용자가 입력한 경로로 단일 소스를 적재한다(기본 매핑).
+  // 로드 후 ⚙ 매핑 설정·소스 변경으로 컬럼 역할·소스를 보강할 수 있다.
+  async function submitLanding() {
+    const p = landingPath.trim();
+    if (!p) return;
+    landing = false;
+    error = null;
+    loading = false;
+    bundleMapping = normalizeMapping({});
+    bundleMark = "";
+    mapping = bundleMapping;
+    sources = [p];
+    activeIdx = 0;
+    await loadActiveSource();
   }
 
   onMount(loadAll);
@@ -835,6 +857,41 @@
 
   {#if loading}
     <div class="center muted">불러오는 중…</div>
+  {:else if landing}
+    <div class="center">
+      <div class="landing-box">
+        <span class="landing-dot"></span>
+        <h2>큐레이션할 소스 데이터가 필요합니다</h2>
+        <p class="muted">
+          Evaluator 는 AI 가 만든 <strong>parquet 후보 데이터</strong>를 사람이 시각적으로
+          검토·선별하는 도구입니다. 보통은 채팅에서 에이전트가 큐레이션 핸드오프
+          (<code>open_curation</code>)로 소스와 컬럼 매핑을 함께 넘겨 열립니다.
+        </p>
+        <p class="muted">
+          직접 검토하려면 아래에 <code>result/…</code> parquet 경로를 입력하세요.
+          불러온 뒤 <strong>⚙ 매핑 설정</strong>에서 컬럼 역할(선택·정렬·축·레전드)을
+          맞추고, <strong>소스 변경/추가</strong>로 다른 후보도 가져올 수 있습니다.
+        </p>
+        <form
+          class="landing-form"
+          onsubmit={(e) => {
+            e.preventDefault();
+            submitLanding();
+          }}
+        >
+          <input
+            class="landing-input"
+            type="text"
+            bind:value={landingPath}
+            placeholder="result/<session>/<ts>/candidates.parquet"
+            aria-label="parquet 경로"
+          />
+          <button class="landing-load" type="submit" disabled={!landingPath.trim()}>
+            불러오기
+          </button>
+        </form>
+      </div>
+    </div>
   {:else if error}
     <div class="center">
       <div class="err-box">
@@ -2093,6 +2150,71 @@
   }
   .err-box p {
     margin: 8px 0 0;
+  }
+  .landing-box {
+    max-width: 520px;
+    text-align: center;
+    padding: 28px 30px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+  }
+  .landing-dot {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-bottom: 12px;
+  }
+  .landing-box h2 {
+    margin: 0 0 12px;
+    font-size: 17px;
+    color: var(--fg);
+  }
+  .landing-box p {
+    margin: 0 0 12px;
+    font-size: 13px;
+    line-height: 1.55;
+    text-align: left;
+  }
+  .landing-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .landing-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    outline: none;
+  }
+  .landing-input:focus {
+    border-color: var(--accent-border);
+  }
+  .landing-load {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .landing-load:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+  .landing-load:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   code {
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;

@@ -305,7 +305,7 @@ frozen EXE는 빌드 시 박제된 `.env`를 `override=False`로 읽으므로, *
 | `APP_LLM_PROVIDER` | `mock` | 최초 기동 시 settings.json 시드값 (`mock` \| `dtgpt` \| `openai_compatible`) |
 | `APP_DTGPT_BASE_URL` | — | DTGPT 엔드포인트 (UI 비노출, 환경 변수로 고정 주입) |
 | `APP_LLM_TEMPERATURE` / `APP_LLM_MAX_TOKENS` | `0.7` / 무제한 | 생성 파라미터 (UI 비노출) |
-| `APP_MAX_AGENT_ITERATIONS` | `8` | 한 턴당 provider→도구 반복 상한 |
+| `APP_MAX_AGENT_ITERATIONS` | `12` | 한 턴당 provider→도구 반복 상한 |
 | `APP_MAX_AGENT_CALLS_PER_TURN` | `20` | 오케스트레이터+서브 에이전트 합산 LLM 호출 예산 |
 | `APP_MAX_PARALLEL_SUBAGENTS` | `3` | 병렬 서브 에이전트 동시 실행 상한 |
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | 도구 1회 실행 타임아웃 (초) |

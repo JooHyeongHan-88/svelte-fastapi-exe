@@ -2,6 +2,7 @@
   import { ui, activeSession } from "../lib/state.svelte.js";
   import { toggleSidebar, renameSession } from "../lib/chatActions.svelte.js";
   import { toggleArtifactPanel } from "../lib/artifactActions.svelte.js";
+  import ExtensionMenu from "./ExtensionMenu.svelte";
 
   let session = $derived(activeSession());
   let title = $derived(session?.title ?? "새 대화");
@@ -63,21 +64,25 @@
     {/if}
   </div>
 
-  <!-- 우측: 아티팩트 패널 토글 — 패널이 열려 있을 때 active 상태로 시각 피드백. -->
-  <button
-    type="button"
-    class="panel-toggle"
-    class:active={ui.artifactPanelOpen}
-    onclick={toggleArtifactPanel}
-    aria-label={ui.artifactPanelOpen ? "아티팩트 패널 닫기" : "아티팩트 패널 열기"}
-    aria-pressed={ui.artifactPanelOpen}
-    title="아티팩트 패널"
-  >
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M15 4 L 15 20" />
-    </svg>
-  </button>
+  <!-- 우측: 아티팩트 패널 토글 + 확장 런처 드롭다운. 토글은 패널 가시성, 옆 caret 은
+       확장 도구를 골라 패널에 연다 (Claude Desktop 의 패널-열기 드롭다운 패턴). -->
+  <div class="panel-controls">
+    <button
+      type="button"
+      class="panel-toggle"
+      class:active={ui.artifactPanelOpen}
+      onclick={toggleArtifactPanel}
+      aria-label={ui.artifactPanelOpen ? "아티팩트 패널 닫기" : "아티팩트 패널 열기"}
+      aria-pressed={ui.artifactPanelOpen}
+      title="아티팩트 패널"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M15 4 L 15 20" />
+      </svg>
+    </button>
+    <ExtensionMenu />
+  </div>
 </header>
 
 <style>
@@ -127,6 +132,13 @@
 
   .title-btn:hover:not(:disabled) {
     background: var(--bg-hover);
+  }
+
+  .panel-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
   }
 
   /* 아티팩트 패널 토글 — .menu 와 같은 32x32 톤. active 시 accent 음각으로 상태 표시. */

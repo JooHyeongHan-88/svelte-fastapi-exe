@@ -8,6 +8,7 @@
     artifactRefPath,
     insertArtifactReference,
     revealArtifactFolder,
+    closeExtensionView,
   } from "../lib/artifactActions.svelte.js";
   import {
     saveArtifactWidth,
@@ -17,13 +18,19 @@
   import ArtifactChart from "./ArtifactChart.svelte";
   import ArtifactMarkdown from "./ArtifactMarkdown.svelte";
   import ArtifactData from "./ArtifactData.svelte";
+  import ArtifactExtension from "./ArtifactExtension.svelte";
   import ArtifactIcon from "./ArtifactIcon.svelte";
 
   // 활성 세션의 모든 메시지에서 칩을 평탄화 → payload 가 메시지에 영속되어 있으므로
-  // 세션 복귀 후에도 동일한 칩 목록을 그대로 복원할 수 있다.
-  let sessionArtifacts = $derived(listSessionArtifacts());
+  // 세션 복귀 후에도 동일한 칩 목록을 그대로 복원할 수 있다. 드롭다운 런처로 연
+  // 휘발 확장 뷰(ui.extensionView)는 대화 산출물이 아니므로 앞에 끼워 함께 보여준다.
+  let displayArtifacts = $derived(
+    ui.extensionView
+      ? [ui.extensionView, ...listSessionArtifacts()]
+      : listSessionArtifacts(),
+  );
   let activeArtifact = $derived(
-    sessionArtifacts.find((a) => a.id === ui.activeArtifactId) ?? null,
+    displayArtifacts.find((a) => a.id === ui.activeArtifactId) ?? null,
   );
 
   // 폴더 열기 실패 피드백 — 탐색기 창은 브라우저 밖에서 열리므로 실패가 조용하면
@@ -152,9 +159,9 @@
     </div>
 
     <!-- 아티팩트 탭 목록 (2개 이상일 때만 표시) -->
-    {#if sessionArtifacts.length > 1}
+    {#if displayArtifacts.length > 1}
       <div class="tab-bar" role="tablist">
-        {#each sessionArtifacts as artifact (artifact.id)}
+        {#each displayArtifacts as artifact (artifact.id)}
           <button
             class="tab"
             class:active={artifact.id === ui.activeArtifactId}
@@ -165,6 +172,27 @@
           >
             <ArtifactIcon kind={artifact.kind} size={12} />
             <span class="tab-label">{artifact.label}</span>
+            {#if ui.extensionView && artifact.id === ui.extensionView.id}
+              <!-- 휘발 확장 뷰는 닫기(×) 가능 — 메시지 칩은 영향 없음. -->
+              <span
+                class="tab-close"
+                role="button"
+                tabindex="0"
+                aria-label="확장 닫기"
+                title="확장 닫기"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  closeExtensionView();
+                }}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeExtensionView();
+                  }
+                }}
+              >×</span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -181,6 +209,8 @@
           <ArtifactMarkdown payload={activeArtifact.payload} />
         {:else if activeArtifact.kind === "data"}
           <ArtifactData payload={activeArtifact.payload} />
+        {:else if activeArtifact.kind === "extension"}
+          <ArtifactExtension payload={activeArtifact.payload} />
         {:else}
           <div class="unknown-kind">알 수 없는 아티팩트 유형</div>
         {/if}
@@ -390,6 +420,25 @@
   .tab-label {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    line-height: 1;
+    color: var(--fg-subtle);
+    flex-shrink: 0;
+  }
+
+  .tab-close:hover {
+    background: var(--bg-active);
+    color: var(--fg);
   }
 
   /* 본문 */

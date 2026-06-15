@@ -1,8 +1,8 @@
-"""open_curation 도구 — 번들 작성·카드 칩·경로 가드 회귀 테스트.
+"""open_curation 도구 — 번들 작성·extension 칩·경로 가드 회귀 테스트.
 
-번들 스펙(``<tool>.bundle.json``)과 마크다운 카드(``<tool>.curation.md``)가 현재 턴
-슬롯에 쓰이고, 카드가 새 탭 ``?bundle=`` 링크를 담으며, markdown 칩 data 를 반환하는지
-검증한다. 경로 가드(비-parquet·미존재·tool 이름)도 함께 본다.
+번들 스펙(``<tool>.bundle.json``)이 현재 턴 슬롯에 쓰이고, ``data.kind="extension"``
+칩이 ``/ext/<tool>/?bundle=`` iframe src 를 담아 반환되는지 검증한다 (마크다운 카드는
+더 이상 쓰지 않는다). 경로 가드(비-parquet·미존재·tool 이름)도 함께 본다.
 """
 
 from __future__ import annotations
@@ -66,33 +66,33 @@ def _open(**kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_happy_path_returns_markdown_chip() -> None:
+def test_happy_path_returns_extension_chip() -> None:
     _setup()
     src = _make_parquet()
     result = _open(tool="evaluator", sources=[src], mapping=_MAPPING)
 
     assert result.is_error is False, result.content
     assert result.data is not None
-    assert result.data["kind"] == "markdown"
-    assert result.data["src"].startswith("/result/"), result.data["src"]
-    assert result.data["src"].endswith("/evaluator.curation.md"), result.data["src"]
+    assert result.data["kind"] == "extension"
+    assert result.data["tool"] == "evaluator"
+    # src 는 패널 iframe 이 여는 /ext/<tool>/?bundle=... — 번들 경로가 URL 인코딩(%2F).
+    assert result.data["src"].startswith("/ext/evaluator/?bundle="), result.data["src"]
+    assert "evaluator.bundle.json" in result.data["src"]
+    assert "%2F" in result.data["src"]
 
 
-def test_card_has_bundle_link() -> None:
+def test_no_markdown_card_written() -> None:
+    # 패널 임베드로 전환됨 — 더 이상 마크다운 카드(.curation.md)를 쓰지 않는다.
     _setup()
     src = _make_parquet()
-    _open(tool="evaluator", sources=[src], mapping=_MAPPING, title="검토")
+    result = _open(tool="evaluator", sources=[src], mapping=_MAPPING, title="검토")
 
     card = result_store.turn_slot() / "evaluator.curation.md"
-    text = card.read_text(encoding="utf-8")
-    # 카드는 평범한 마크다운 링크 — 새 탭(target=_blank)은 프론트 markdown 렌더러
-    # (lib/markdown.js 의 DOMPurify 훅)가 렌더 시점에 부여한다.
-    assert "/ext/evaluator/?bundle=" in text
-    # bundle 파라미터에 번들 경로가 URL 인코딩되어 들어간다 (slash → %2F).
-    assert "evaluator.bundle.json" in text
-    assert "%2F" in text
-    # 제목이 카드 heading 에 반영.
-    assert "# 검토" in text
+    assert not card.exists()
+    # 제목은 칩 title 로 전달된다.
+    assert result.data["title"] == "검토"
+    # 번들 상대 경로도 함께 노출 (참조/디버그용).
+    assert result.data["bundle"].endswith("evaluator.bundle.json")
 
 
 def test_bundle_records_sources_and_mapping() -> None:

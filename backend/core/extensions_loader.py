@@ -16,6 +16,7 @@ frozen EXE 에서도 동작하도록, 라우터 모듈은 name-import 가 아니
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 from pathlib import Path
 from types import ModuleType
@@ -33,6 +34,8 @@ _STATIC_DIST_RELPATH = ("frontend", "dist")
 _ROUTER_FACTORY_NAME = "get_router"
 # 정적 SPA 마운트 prefix. 예: extensions/evaluator → /ext/evaluator
 _STATIC_MOUNT_PREFIX = "/ext"
+# 확장 메타데이터 매니페스트 (선택) — 패널 런처 드롭다운의 표시 이름/설명/아이콘.
+_MANIFEST_FILENAME = "extension.json"
 
 
 def _extensions_dir() -> Path:
@@ -67,6 +70,58 @@ def _iter_tool_dirs(ext_root: Path) -> list[Path]:
         for path in ext_root.iterdir()
         if path.is_dir() and not path.name.startswith(("_", "."))
     ]
+
+
+def list_available_extensions() -> list[dict[str, str]]:
+    """패널 런처가 띄울 수 있는 확장(UI 가 있는) 목록을 반환한다.
+
+    ``frontend/dist`` 가 있는 확장만 포함한다 — 패널은 정적 SPA 를 iframe 으로
+    임베드하므로, 라우터만 있고 화면이 없는 확장은 런처에 띄울 수 없다. 각 확장 루트의
+    선택적 ``extension.json`` 매니페스트(``{name, description, icon}``)로 표시 이름을
+    꾸미고, 없으면 폴더명을 그대로 쓴다.
+
+    Returns:
+        ``{tool, name, description, icon}`` 딕셔너리 목록 (tool 이름순 정렬).
+    """
+    ext_root = _extensions_dir()
+    if not ext_root.exists():
+        return []
+
+    out: list[dict[str, str]] = []
+    for tool_dir in sorted(_iter_tool_dirs(ext_root)):
+        dist_dir = tool_dir.joinpath(*_STATIC_DIST_RELPATH)
+        if not dist_dir.is_dir():
+            continue
+        try:
+            out.append(_read_extension_meta(tool_dir))
+        except Exception as exc:  # noqa: BLE001 — 매니페스트 손상이 목록 전체를 막지 않게 격리
+            logger.warning("확장 '%s' 메타 읽기 실패: %s", tool_dir.name, exc)
+            out.append(
+                {
+                    "tool": tool_dir.name,
+                    "name": tool_dir.name,
+                    "description": "",
+                    "icon": "",
+                }
+            )
+    return out
+
+
+def _read_extension_meta(tool_dir: Path) -> dict[str, str]:
+    """확장 루트의 ``extension.json`` 을 읽어 메타데이터를 구성한다 (없으면 폴더명 폴백)."""
+    name = tool_dir.name
+    meta = {"tool": name, "name": name, "description": "", "icon": ""}
+    manifest = tool_dir / _MANIFEST_FILENAME
+    if not manifest.is_file():
+        return meta
+
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        for key in ("name", "description", "icon"):
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                meta[key] = value
+    return meta
 
 
 def _mount_extension(app: FastAPI, tool_dir: Path) -> None:

@@ -60,6 +60,16 @@ export const ui = $state({
   activeArtifactId: /** @type {string|null} */ (null),
   artifactPanelOpen: false,
 
+  // 확장(extensions) 런처 — 패널 열기 버튼의 드롭다운이 띄울 수 있는 확장 카탈로그.
+  // GET /api/extensions 결과를 부팅 시 1회 캐시한다.
+  /** @type {Array<{ tool: string, name: string, description: string, icon: string }>} */
+  extensions: [],
+  extensionMenuOpen: false,
+  // 드롭다운으로 직접 연 확장은 대화 산출물이 아니므로 휘발 뷰로 둔다(메시지 칩과 별개).
+  // open_curation 이 만든 확장 칩은 메시지에 영속되지만, 이 뷰는 단일·비영속이다.
+  /** @type {null | { id: string, kind: "extension", label: string, payload: { tool: string, src: string, title: string } }} */
+  extensionView: null,
+
   // 세션별 산출물 총 용량 — { client_id[:8]: bytes }. 사이드바 SessionItem 이
   // 세션 id 앞 8자로 조회해 작고 연한 텍스트로 표시한다. refreshArtifactUsage() 가 갱신.
   /** @type {Record<string, number>} */

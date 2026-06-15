@@ -43,6 +43,12 @@ export default defineConfig(() => {
           target: `http://${host}:${port}`,
           changeOrigin: true,
         },
+        // 확장 SPA 정적 서빙 — 우측 패널 iframe(/ext/<tool>/...)이 dev 에서 로드되게 한다.
+        // /api/ext/* 는 위 /api 프록시가 커버한다.
+        "/ext": {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+        },
       },
     },
 
