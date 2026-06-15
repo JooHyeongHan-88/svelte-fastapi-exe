@@ -84,7 +84,13 @@
 
 ## 에이전트 하니스 구조
 
-`backend/agent/harness.py`의 `run_turn()` 한 번 = 사용자 입력 1건에 대한 완전한 응답 턴.
+`backend/agent/harness/` 패키지(`core.py`의 `run_turn()`) 한 번 = 사용자 입력 1건에 대한 완전한 응답 턴.
+
+> **harness 패키지 구성** — 서브시스템이 커져 단일 파일에서 패키지로 분리됨 (다른 `agent/` 서브시스템과 동일 컨벤션):
+> - `harness/core.py` — `run_turn` 진입점 + provider→tool 루프 + 서브에이전트 dispatch + 도구 실행.
+> - `harness/prompts.py` — LLM system prompt 동적 조립 (오케스트레이터 / 서브에이전트 / 단층 fallback).
+> - `harness/state.py` — AgentState 변형(todo)·대화 히스토리 정합성(tool 쌍 보존)·루프 가드 시그니처.
+> - `harness/__init__.py` — 공개 API(`run_turn`/`TurnBudget`/`ORCHESTRATOR_ID`) + 하위호환 re-export. `from agent.harness import run_turn` 경로 불변.
 
 ```
 run_turn(client_id, user_message, *, agent_registry, force_skills=None, ...)

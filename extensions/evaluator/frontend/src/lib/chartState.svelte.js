@@ -101,11 +101,3 @@ export function redo(key) {
   const entry = chartStore.byKey[key];
   if (entry && entry.cursor < entry.stack.length - 1) entry.cursor += 1;
 }
-
-/** 더 이상 표시하지 않는 키의 상태를 비운다(메모리 정리, 선택적). */
-export function dropKeys(keepKeys) {
-  const keep = new Set(keepKeys);
-  for (const k of Object.keys(chartStore.byKey)) {
-    if (!keep.has(k)) delete chartStore.byKey[k];
-  }
-}

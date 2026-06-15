@@ -26,8 +26,6 @@ run_turn 한 번 = 사용자 입력 1건에 대한 응답 1턴.
 
 import asyncio
 import logging
-import uuid
-import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
@@ -49,7 +47,6 @@ from agent.models import (
     SkillActiveEvent,
     SkillCompleteEvent,
     StreamEvent,
-    TodoItem,
     TodoStatus,
     TodoUpdateEvent,
     ToolCall,
@@ -71,25 +68,41 @@ from agent.registries.tools import (
     SUB_AGENTS_PARALLEL_DISPATCH,
     ToolRegistry,
 )
-from agent.runtime import introspect
 from agent.tools.artifact_io import ARTIFACT_IO_TOOL_NAMES
 from agent.tools.runtime import INFRASTRUCTURE_TOOL_NAMES
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
-from core.result_store import (
-    current_client_id,
-    read_manifest_entries,
-    resolve_result_path,
+
+# system prompt 조립(prompts)·상태 변형/히스토리/루프가드(state)는 같은 harness
+# 패키지의 별도 모듈로 분리됨 — 아래 심볼은 하위호환을 위해 harness 네임스페이스에서도
+# 그대로 접근할 수 있도록 re-export 한다 (기존 `from agent.harness import _x` 호출 보존).
+from agent.harness.prompts import (  # noqa: F401  (re-export)
+    _build_wind_down_message,
+    _collect_agent_api_refs_section,
+    _compose_orchestrator_system_prompt,
+    _compose_sub_agent_system_prompt,
+    _compose_system_prompt,
+    _render_session_artifacts_section,
+    _render_skills_api_refs,
+)
+from agent.harness.state import (  # noqa: F401  (re-export)
+    _ERROR_TOOL_PLACEHOLDER,
+    _TERMINAL_STATUSES,
+    _all_todos_terminal,
+    _balance_all_unresolved,
+    _balance_unresolved_tool_calls,
+    _build_skill_complete_event,
+    _call_signature,
+    _handle_add_todo,
+    _handle_complete_todo,
+    _mark_running_todo_done,
+    _record_invalid_call,
 )
 
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_ID = "orchestrator"
 TASK_SUMMARY_HEADER = "Task Summary:"
-
-# Session Artifacts 프롬프트 섹션 — 노출 개수와 설명 절단 길이 (토큰 예산 통제).
-_ARTIFACTS_SECTION_LIMIT = 10
-_ARTIFACT_DESC_MAX_CHARS = 80
 
 # 동일 시그니처(_call_signature: name+args+참조파일 fingerprint) 호출이 반복될 때
 # LLM 에 회신하는 루프 차단 메시지.
@@ -100,40 +113,10 @@ _LOOP_GUARD_MESSAGE = (
     "접근 방식을 시도하세요."
 )
 
-# todo 가 더 이상 진행되지 않는 최종 상태.
-_TERMINAL_STATUSES: frozenset[TodoStatus] = frozenset(
-    {TodoStatus.COMPLETED, TodoStatus.FAILED, TodoStatus.SKIPPED}
-)
-
 # 남은 provider 호출(반복 상한·turn budget 중 작은 쪽)이 이 수 이하로 떨어지면
 # LLM 에 마무리(wind-down)를 지시한다. 2 = '마지막 도구 실행 1회 + 최종 요약 1회'
 # — 이미 저장된 산출물을 display_* 로 사용자에게 노출할 최소 여유.
 _WIND_DOWN_REMAINING_CALLS = 2
-
-
-def _build_wind_down_message(remaining_calls: int) -> str:
-    """반복 예산 임박 시 LLM 컨텍스트에 주입할 마무리 지시문을 생성한다 (R7).
-
-    실패 없이 진행 중인데 예산만 소진돼 사용자 노출 단계(display_*)가 hard-cut
-    되는 것을 막는다. fallback 메시지와 동일하게 turn-local — 히스토리 비영속.
-
-    Args:
-        remaining_calls: 이번 호출을 포함해 남은 provider 호출 수.
-
-    Returns:
-        role=user 로 주입할 [System] 지시문.
-    """
-    if remaining_calls <= 1:
-        return (
-            "[System] 이번 응답이 이 턴의 마지막 provider 호출입니다. 도구를 호출하지 "
-            "말고, 지금까지 완료한 작업과 산출물을 정리한 최종 답변을 작성하세요."
-        )
-    return (
-        f"[System] 이 턴의 반복 예산이 거의 소진되었습니다 (남은 호출 {remaining_calls}회). "
-        "새로운 분석·데이터 생성을 시작하지 마세요. 이미 저장된 산출물이 있으면 지금 즉시 "
-        "display_chart/display_markdown 등으로 사용자에게 표시하고 complete_todo 로 plan 을 "
-        "정리한 뒤, 다음 응답에서 도구 호출 없이 최종 요약을 작성하세요."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1253,196 +1236,8 @@ async def _dispatch_parallel_sub_agents(
 
 
 # ---------------------------------------------------------------------------
-# 시스템 프롬프트 조립
+# 런타임 도구 스펙 준비 (서브 에이전트 노출 도구 선별)
 # ---------------------------------------------------------------------------
-
-
-def _compose_orchestrator_system_prompt(
-    *,
-    base: str,
-    skills: list[Skill],
-    state: AgentState,
-    agent_registry: AgentRegistry,
-    skill_registry: SkillRegistry | None = None,
-) -> str:
-    """오케스트레이터 system prompt — 기존 조립 + 가용 에이전트 카탈로그 동적 주입."""
-    parts: list[str] = [base] if base else []
-
-    for s in skills:
-        parts.append(f"\n# Skill: {s.meta.name}\n{s.body}")
-
-    # 비활성 SKILL 카탈로그 — LLM 이 의미 기반으로 activate_skill 을 호출할 수 있도록.
-    if skill_registry is not None:
-        active_names = {s.meta.name for s in skills}
-        inactive_metas = [
-            m for m in skill_registry.list_meta() if m.name not in active_names
-        ]
-        if inactive_metas:
-            catalog_lines: list[str] = [
-                "\n# 가용 SKILL 카탈로그 (비활성)",
-                "trigger 키워드가 질의에 없어도 의미가 맞으면 `activate_skill(name=...)` 으로 활성화하라.",
-            ]
-            for m in inactive_metas:
-                trigger_hint = (
-                    f"  (예시 트리거: {', '.join(m.trigger[:3])})" if m.trigger else ""
-                )
-                catalog_lines.append(f"- **{m.name}**: {m.description}{trigger_hint}")
-            parts.append("\n".join(catalog_lines))
-
-    if len(skills) > 1:
-        skill_names = ", ".join(f"`{s.meta.name}`" for s in skills)
-        parts.append(
-            f"\n# 멀티 스킬 실행 지침\n"
-            f"현재 {len(skills)}개 스킬이 동시에 활성화되었습니다: {skill_names}.\n"
-            f"실제 작업을 시작하기 전에 반드시 `add_todo` 로 각 스킬의 실행 순서와 "
-            f"단계를 먼저 등록하세요. 한 스킬의 작업이 완료될 때마다 즉시 "
-            f"`complete_todo` 로 표시한 뒤 다음 스킬 작업으로 넘어가세요."
-        )
-
-    if state.todo_list:
-        rendered = "\n".join(
-            f"- [{t.status.value}] ({t.task_id}) {t.description}"
-            for t in state.todo_list
-        )
-        parts.append(f"\n# 현재 To-do\n{rendered}")
-
-    artifacts_section = _render_session_artifacts_section()
-    if artifacts_section:
-        parts.append(artifacts_section)
-
-    # 서브 에이전트 pending 이 오케스트레이터 자체 pending 보다 우선.
-    if state.pending_sub_agent and state.missing_slots:
-        first_q = next(iter(state.missing_slots.values()))
-        parts.append(
-            "\n# Pending Sub-Agent Slot\n"
-            f"직전 턴에 `{state.pending_sub_agent}` 서브 에이전트가 작업 중 "
-            f"필요한 정보를 사용자에게 질문했습니다: '{first_q}'.\n"
-            f"원래 위임 task: '{state.pending_sub_task}'.\n"
-            "사용자의 이번 메시지가 그 응답이라면 즉시 `call_sub_agent` 로 해당 에이전트에게 "
-            "사용자가 제공한 정보를 포함해 재위임하세요. "
-            "새 주제 전환이면 이 pending 상태를 무시하고 새 요청을 처리하세요."
-        )
-    elif state.pending_tool and state.missing_slots:
-        first_q = next(iter(state.missing_slots.values()))
-        parts.append(
-            "\n# Pending Slot\n"
-            f"당신은 직전 턴에 도구 `{state.pending_tool}` 호출을 위해 "
-            f"사용자에게 다음을 물었고 응답을 기다리는 중입니다: '{first_q}'.\n"
-            f"부분적으로 채워진 인자: {state.pending_args}.\n"
-            "사용자의 이번 메시지가 그 질문에 대한 응답이면 같은 도구를 채워서 다시 호출하세요. "
-            "새 주제로 전환된 메시지라면 이 pending 호출을 폐기하고 새 요청을 처리하세요."
-        )
-    elif state.pending_question:
-        # ask_user sentinel 로 능동 질문을 던진 직후 — 사용자의 이번 메시지가 그 답변이다.
-        parts.append(
-            "\n# Pending User Question\n"
-            f"당신은 직전 턴에 사용자에게 다음을 질문했습니다: '{state.pending_question}'.\n"
-            "이번 메시지가 그 질문에 대한 답변이라고 가정하고, 받은 답변을 활용해 작업을 이어가세요. "
-            "답변이 여전히 모호하면 다시 `ask_user` 를 호출해도 되지만 같은 질문 반복은 금지합니다 — "
-            "그 경우엔 가장 합리적인 해석으로 진행하고 결과 보고에서 그 가정을 명시하세요."
-        )
-
-    metas = agent_registry.list_meta()
-    if metas:
-        catalog_lines: list[str] = ["\n# 가용 서브 에이전트 카탈로그"]
-        skill_to_agent: dict[str, str] = {}
-        for m in metas:
-            skills_str = ", ".join(m.skills) if m.skills else "(없음)"
-            agent_block: list[str] = [f"- **{m.name}**: {m.description}"]
-            if m.role:
-                agent_block.append(f"  Role: {m.role}")
-            if m.goal:
-                agent_block.append(f"  Goal: {m.goal}")
-            if m.when_to_delegate:
-                # YAML | 블록 입력에 포함된 줄바꿈은 시각적 노이즈가 되므로 한 줄로 정규화.
-                inlined = " ".join(m.when_to_delegate.split())
-                agent_block.append(f"  When to delegate: {inlined}")
-            agent_block.append(f"  전담 스킬: {skills_str}")
-            catalog_lines.append("\n".join(agent_block))
-            for sk in m.skills:
-                skill_to_agent.setdefault(sk, m.name)
-
-        if skill_to_agent:
-            mapping_lines = [
-                f"- '{sk}' 트리거가 들어오면 반드시 `{ag}` 에게 `call_sub_agent` 로 위임"
-                for sk, ag in skill_to_agent.items()
-            ]
-            catalog_lines.append(
-                "\n## Case 3 결정론 매핑 (반드시 준수)\n" + "\n".join(mapping_lines)
-            )
-        parts.append("\n".join(catalog_lines))
-
-    # Library runtime — 활성 스킬들의 api_refs 를 모아 한 섹션으로 주입.
-    api_section = _render_skills_api_refs(skills)
-    if api_section:
-        parts.append("\n" + api_section)
-
-    return "\n".join(parts)
-
-
-def _render_session_artifacts_section(limit: int = _ARTIFACTS_SECTION_LIMIT) -> str:
-    """현재 세션 산출물 목록을 '# Session Artifacts' 프롬프트 섹션으로 렌더링한다.
-
-    히스토리 윈도우 밖이나 세션 복원(tool 메시지 소실) 후에도 LLM 이 과거
-    산출물을 재발견할 수 있도록, 디스크 manifest 를 진실원천으로 최근 N개를
-    compact 하게 노출한다. 빈 세션이면 빈 문자열을 반환해 섹션을 생략한다.
-
-    Args:
-        limit: 노출할 최대 산출물 수.
-
-    Returns:
-        '# Session Artifacts' 섹션 문자열, 또는 산출물이 없으면 "".
-    """
-    client_id = current_client_id()
-    if not client_id:
-        return ""
-
-    entries = read_manifest_entries(client_id, limit)
-    if not entries:
-        return ""
-
-    lines: list[str] = [
-        "\n# Session Artifacts",
-        "이 세션에서 저장된 산출물 (최신순). 사용자가 과거 산출물을 지칭하면 아래 경로를 사용하라:",
-    ]
-    for e in entries:
-        path = e.get("path", "")
-        if not path:
-            continue
-        kind = e.get("kind", "")
-        desc = str(e.get("description", "")).strip()[:_ARTIFACT_DESC_MAX_CHARS]
-        shape = ""
-        if e.get("rows") is not None and e.get("columns") is not None:
-            shape = f", {e['rows']}×{e['columns']}"
-        suffix = f" — {desc}" if desc else ""
-        lines.append(f"- {path} ({kind}{shape}){suffix}")
-
-    lines.append(
-        "재표시는 display_markdown/display_chart/display_image 에 경로를 직접 전달하고, "
-        "재계산·추가분석은 load_artifact(path=..., store_as=...) 로 namespace 에 로드하라. "
-        "전체 목록이 필요하면 list_artifacts 를 호출하라. "
-        "exec_code 에서 'result/...' 를 open() 으로 직접 열지 말고 load_artifact 를 쓰라 "
-        "(frozen EXE 경로 안전)."
-    )
-    return "\n".join(lines)
-
-
-def _render_skills_api_refs(skills: list[Skill]) -> str:
-    """활성 SKILL 목록의 api_refs 를 평면화해 ApiDoc 섹션으로 렌더링한다.
-
-    중복 ref 는 한 번만 노출하고, 모두 비어 있으면 빈 문자열 반환.
-    """
-    refs: list[str] = []
-    seen: set[str] = set()
-    for s in skills:
-        for r in s.meta.api_refs:
-            if r not in seen:
-                refs.append(r)
-                seen.add(r)
-    if not refs:
-        return ""
-    docs = introspect.collect_api_docs(refs)
-    return introspect.render_api_docs_section(docs)
 
 
 def _skills_require_runtime_tools(skills: list[Skill]) -> bool:
@@ -1469,66 +1264,6 @@ def _inject_runtime_tools(
             ToolSpec(name=rt.name, description=rt.description, parameters=rt.parameters)
         )
     return specs + extra
-
-
-def _compose_sub_agent_system_prompt(
-    *,
-    base: str,
-    agent: Agent,
-    skill_bodies: list[Skill],
-) -> str:
-    """서브 에이전트 system prompt — 격리된 컨텍스트로 페르소나·스킬 본문 주입.
-
-    구성: safety+base (orchestrator.md 제외) + 에이전트 본문 + 학습 SKILL 본문
-    + Library APIs (있으면) + Task Summary 종료 규약. 'call_sub_agent' 도구는
-    spec 에서 제거되므로 LLM 시야에 보이지 않는다 (무한 재귀 방지).
-    """
-    parts: list[str] = [base] if base else []
-    identity_lines: list[str] = [f"\n# 당신은 '{agent.meta.name}' 서브 에이전트입니다"]
-    if agent.meta.role:
-        identity_lines.append(f"- Role: {agent.meta.role}")
-    if agent.meta.goal:
-        identity_lines.append(f"- Goal: {agent.meta.goal}")
-    if len(identity_lines) > 1:
-        # role/goal 블록과 body 사이 시각 구분을 위한 빈 줄.
-        identity_lines.append("")
-    identity_lines.append(agent.body)
-    parts.append("\n".join(identity_lines))
-    for s in skill_bodies:
-        parts.append(f"\n# 학습 Skill: {s.meta.name}\n{s.body}")
-
-    # 에이전트 자체 api_refs + 학습 SKILL 들의 api_refs 를 합쳐 API 섹션으로 주입.
-    api_section = _collect_agent_api_refs_section(agent, skill_bodies)
-    if api_section:
-        parts.append("\n" + api_section)
-
-    parts.append(
-        "\n# 종료 규약 (필수)\n"
-        "작업을 완료했으면 반드시 `complete_subagent` 도구를 호출해 결과를 반환하라.\n"
-        "summary 파라미터에 수행한 내용과 핵심 결과를 1~3문장으로 기술한다.\n"
-        "`complete_subagent` 를 호출하지 않으면 오케스트레이터가 결과를 인식하지 못하므로 "
-        "작업 완료 시 마지막 액션으로 반드시 호출해야 한다."
-    )
-    return "\n".join(parts)
-
-
-def _collect_agent_api_refs_section(agent: Agent, skill_bodies: list[Skill]) -> str:
-    """에이전트 + 학습 SKILL 들의 api_refs 를 평면화해 ApiDoc 섹션 텍스트로 반환."""
-    refs: list[str] = []
-    seen: set[str] = set()
-    for r in agent.meta.api_refs:
-        if r not in seen:
-            refs.append(r)
-            seen.add(r)
-    for s in skill_bodies:
-        for r in s.meta.api_refs:
-            if r not in seen:
-                refs.append(r)
-                seen.add(r)
-    if not refs:
-        return ""
-    docs = introspect.collect_api_docs(refs)
-    return introspect.render_api_docs_section(docs)
 
 
 def _resolve_agent_skills(agent: Agent, skill_registry: SkillRegistry) -> list[Skill]:
@@ -1589,22 +1324,6 @@ def _filter_specs_for_sub_agent(
     return out
 
 
-def _all_todos_terminal(state: AgentState) -> bool:
-    """todo_list 가 비어 있지 않고 모든 항목이 terminal 상태인지 확인한다."""
-    return bool(state.todo_list) and all(
-        item.status in _TERMINAL_STATUSES for item in state.todo_list
-    )
-
-
-def _build_skill_complete_event(state: AgentState) -> SkillCompleteEvent:
-    """AgentState 의 todo_list 통계로 SkillCompleteEvent 를 생성한다."""
-    return SkillCompleteEvent(
-        completed=sum(1 for t in state.todo_list if t.status == TodoStatus.COMPLETED),
-        failed=sum(1 for t in state.todo_list if t.status == TodoStatus.FAILED),
-        skipped=sum(1 for t in state.todo_list if t.status == TodoStatus.SKIPPED),
-    )
-
-
 def _format_sub_agent_result(event: AgentReturnEvent) -> str:
     """AgentReturnEvent 를 오케스트레이터 LLM 컨텍스트용 구조화 텍스트로 변환.
 
@@ -1657,304 +1376,8 @@ def _extract_task_summary(full_text: str, agent_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 단층 fallback (하위호환) — AGENTS 가 없을 때
-# ---------------------------------------------------------------------------
-
-
-def _compose_system_prompt(
-    base: str,
-    skills: list[Skill],
-    state: AgentState,
-    skill_registry: SkillRegistry | None = None,
-) -> str:
-    """PROMPTS 베이스 + 선택된 SKILLS 본문 + AgentState 요약을 합성한다 (단층).
-
-    오케스트레이터 카탈로그 / Case 3 매핑 없이 기존 동작 그대로. agent_registry 가
-    None 일 때만 사용 — 하위호환을 위해 보존.
-    """
-    parts: list[str] = [base] if base else []
-
-    for s in skills:
-        parts.append(f"\n# Skill: {s.meta.name}\n{s.body}")
-
-    # 비활성 SKILL 카탈로그 — 의미 기반 activate_skill 호출을 위해 상시 노출.
-    if skill_registry is not None:
-        active_names = {s.meta.name for s in skills}
-        inactive_metas = [
-            m for m in skill_registry.list_meta() if m.name not in active_names
-        ]
-        if inactive_metas:
-            catalog_lines: list[str] = [
-                "\n# 가용 SKILL 카탈로그 (비활성)",
-                "trigger 키워드가 질의에 없어도 의미가 맞으면 `activate_skill(name=...)` 으로 활성화하라.",
-            ]
-            for m in inactive_metas:
-                trigger_hint = (
-                    f"  (예시 트리거: {', '.join(m.trigger[:3])})" if m.trigger else ""
-                )
-                catalog_lines.append(f"- **{m.name}**: {m.description}{trigger_hint}")
-            parts.append("\n".join(catalog_lines))
-
-    if len(skills) > 1:
-        skill_names = ", ".join(f"`{s.meta.name}`" for s in skills)
-        parts.append(
-            f"\n# 멀티 스킬 실행 지침\n"
-            f"현재 {len(skills)}개 스킬이 동시에 활성화되었습니다: {skill_names}.\n"
-            f"실제 작업을 시작하기 전에 반드시 `add_todo` 로 각 스킬의 실행 순서와 단계를 먼저 등록하세요. "
-            f"한 스킬의 작업이 완료될 때마다 즉시 `complete_todo` 로 표시한 뒤 다음 스킬 작업으로 넘어가세요."
-        )
-
-    if state.todo_list:
-        rendered = "\n".join(
-            f"- [{t.status.value}] ({t.task_id}) {t.description}"
-            for t in state.todo_list
-        )
-        parts.append(f"\n# 현재 To-do\n{rendered}")
-
-    artifacts_section = _render_session_artifacts_section()
-    if artifacts_section:
-        parts.append(artifacts_section)
-
-    if state.pending_tool and state.missing_slots:
-        first_q = next(iter(state.missing_slots.values()))
-        parts.append(
-            "\n# Pending Slot\n"
-            f"당신은 직전 턴에 도구 `{state.pending_tool}` 호출을 위해 "
-            f"사용자에게 다음을 물었고 응답을 기다리는 중입니다: '{first_q}'.\n"
-            f"부분적으로 채워진 인자: {state.pending_args}.\n"
-            "사용자의 이번 메시지가 그 질문에 대한 응답이면 같은 도구를 채워서 다시 호출하세요. "
-            "새 주제로 전환된 메시지라면 이 pending 호출을 폐기하고 새 요청을 처리하세요."
-        )
-
-    return "\n".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Planner 도구 핸들러 — harness 가 직접 AgentState 를 갱신
-# ---------------------------------------------------------------------------
-
-
-def _handle_add_todo(state: AgentState, args: dict[str, Any]) -> str:
-    """add_todo 호출을 받아 state.todo_list 에 TodoItem 들을 누적한다."""
-    items = args.get("items") or []
-    if not isinstance(items, list) or not items:
-        return "[planner] add_todo: items 가 비어 있습니다"
-
-    added: list[str] = []
-    for raw in items:
-        if not isinstance(raw, dict):
-            continue
-        description = (raw.get("description") or "").strip()
-        if not description:
-            continue
-        task_id = uuid.uuid4().hex[:8]
-        state.todo_list.append(
-            TodoItem(
-                task_id=task_id,
-                description=description,
-                tool_name=raw.get("tool_name") or None,
-                status=TodoStatus.PENDING,
-            )
-        )
-        added.append(task_id)
-
-    if not added:
-        return "[planner] add_todo: 유효한 description 이 없습니다"
-
-    skipped = len(items) - len(added)
-    msg = f"[planner] added {len(added)} todo(s): {added}"
-    if skipped > 0:
-        msg += f" (skipped {skipped} invalid item(s))"
-    return msg
-
-
-def _handle_complete_todo(state: AgentState, args: dict[str, Any]) -> str:
-    """complete_todo 호출을 받아 task_id 매칭 todo 의 status 를 갱신.
-
-    status 파라미터로 completed / failed / skipped 를 지정할 수 있다.
-    잘못된 값이 오면 completed 로 폴백해 LLM 오타에 관대하게 처리한다.
-    """
-    task_id = (args.get("task_id") or "").strip()
-    summary = (args.get("summary") or "").strip() or None
-    raw_status = (args.get("status") or "completed").strip().lower()
-
-    status_map = {
-        "completed": TodoStatus.COMPLETED,
-        "failed": TodoStatus.FAILED,
-        "skipped": TodoStatus.SKIPPED,
-    }
-    new_status = status_map.get(raw_status, TodoStatus.COMPLETED)
-
-    if not task_id:
-        return "[planner] complete_todo: task_id 누락"
-
-    for item in state.todo_list:
-        if item.task_id == task_id:
-            item.status = new_status
-            item.result_summary = summary
-            return f"[planner] {new_status.value}: {task_id}"
-
-    return f"[planner] complete_todo: task_id '{task_id}' 를 찾을 수 없음"
-
-
-def _mark_running_todo_done(
-    state: AgentState, tool_name: str, result_text: str, *, is_error: bool = False
-) -> bool:
-    """일반 도구 실행 결과를 같은 tool_name 의 활성 todo 에 자동 반영한다.
-
-    PENDING 또는 RUNNING 중 tool_name 이 일치하는 첫 항목을 갱신한다.
-    is_error=True 면 FAILED, 아니면 COMPLETED 로 전이한다.
-
-    Returns:
-        True: todo 가 실제로 갱신된 경우 (호출자가 TodoUpdateEvent 를 yield 해야 함).
-        False: 일치하는 항목 없음.
-    """
-    target_statuses = {TodoStatus.PENDING, TodoStatus.RUNNING}
-    new_status = TodoStatus.FAILED if is_error else TodoStatus.COMPLETED
-    for item in state.todo_list:
-        if item.status in target_statuses and item.tool_name == tool_name:
-            item.status = new_status
-            item.result_summary = result_text[:120]
-            return True
-    return False
-
-
-# ---------------------------------------------------------------------------
 # 메시지 누적 / 도구 실행 헬퍼
 # ---------------------------------------------------------------------------
-
-
-def _balance_unresolved_tool_calls(
-    messages: list[Message],
-    turn_messages: list[Message] | None,
-    assistant_msg: Message,
-) -> None:
-    """중단으로 처리되지 못한 tool_call 에 placeholder tool 응답을 채운다.
-
-    OpenAI 와이어 규약상 assistant 의 모든 tool_call 은 매칭되는 tool 메시지가
-    있어야 한다. 배치 도구 호출 도중 AskUser 등으로 턴이 끊기면 뒤따르는 호출이
-    응답 없이 남아, 이 메시지가 히스토리에 영속되면 다음 턴 요청이 400 으로
-    거부된다. 미해결 tool_call 마다 placeholder 응답을 추가해 쌍을 맞춘다.
-
-    Args:
-        messages: LLM 컨텍스트 (in-place 보정).
-        turn_messages: 영속화 버퍼. 서브 에이전트는 None.
-        assistant_msg: 이번 iteration 의 assistant 메시지 (tool_calls 보유).
-    """
-    if not assistant_msg.tool_calls:
-        return
-    resolved = {m.tool_call_id for m in messages if m.role == "tool" and m.tool_call_id}
-    for tc in assistant_msg.tool_calls:
-        if tc.id in resolved:
-            continue
-        placeholder = "[중단됨] 사용자 입력 대기로 이 도구 호출은 실행되지 않았습니다."
-        tool_msg = Message(role="tool", content=placeholder, tool_call_id=tc.id)
-        messages.append(tool_msg)
-        if turn_messages is not None:
-            turn_messages.append(tool_msg)
-
-
-_ERROR_TOOL_PLACEHOLDER = (
-    "[중단됨] 턴이 오류로 종료되어 이 도구 호출은 완료되지 않았습니다."
-)
-
-
-def _balance_all_unresolved(turn_messages: list[Message]) -> None:
-    """버퍼 전체를 스캔해 모든 미해결 tool_call 에 placeholder 응답을 채운다.
-
-    run_turn 최상위 예외 경로 전용. `_balance_unresolved_tool_calls` 와 달리 예외
-    시점의 in-flight assistant_msg 를 특정할 수 없으므로 전수 검사한다. placeholder
-    는 끝에 append 하지 않고 해당 assistant 의 tool 응답 블록 바로 뒤에 삽입한다 —
-    OpenAI 와이어 규약상 tool 메시지는 자신의 assistant 메시지에 인접해야 한다.
-
-    Args:
-        turn_messages: 영속화 직전의 턴 버퍼 (in-place 보정).
-    """
-    i = 0
-    while i < len(turn_messages):
-        msg = turn_messages[i]
-        if msg.role != "assistant" or not msg.tool_calls:
-            i += 1
-            continue
-        # 이 assistant 에 인접한 tool 응답 블록의 끝(j)과 해결된 id 집합을 수집.
-        j = i + 1
-        resolved: set[str] = set()
-        while j < len(turn_messages) and turn_messages[j].role == "tool":
-            if turn_messages[j].tool_call_id:
-                resolved.add(turn_messages[j].tool_call_id)
-            j += 1
-        for tc in msg.tool_calls:
-            if tc.id in resolved:
-                continue
-            turn_messages.insert(
-                j,
-                Message(
-                    role="tool",
-                    content=_ERROR_TOOL_PLACEHOLDER,
-                    tool_call_id=tc.id,
-                ),
-            )
-            j += 1
-        i = j
-
-
-def _collect_result_path_fingerprints(value: Any, parts: list[str]) -> None:
-    """인자 트리에서 'result/...' 경로 문자열을 찾아 파일 fingerprint 를 수집한다.
-
-    Args:
-        value: tool_call 인자 트리의 한 노드 (str/dict/list/스칼라).
-        parts: 수집된 ``경로:mtime_ns:size`` 문자열이 append 되는 출력 버퍼.
-    """
-    if isinstance(value, str):
-        if value.strip().replace("\\", "/").startswith("result/"):
-            target, error = resolve_result_path(value)
-            if error is None and target is not None:
-                try:
-                    stat = target.stat()
-                except OSError:
-                    return
-                parts.append(f"{value}:{stat.st_mtime_ns}:{stat.st_size}")
-        return
-    if isinstance(value, dict):
-        for item in value.values():
-            _collect_result_path_fingerprints(item, parts)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _collect_result_path_fingerprints(item, parts)
-
-
-def _call_signature(call: ToolCall) -> tuple[str, str, str]:
-    """루프 가드용 호출 시그니처 — (도구명, 인자 JSON, 참조 파일 fingerprint).
-
-    인자만 비교하면 'spec 파일을 고쳐 쓴 뒤 같은 경로로 재호출'(정당한 재시도)을
-    루프로 오인한다. 인자 속 'result/...' 경로가 가리키는 파일의 mtime/size 를
-    시그니처에 포함해, 관측 가능한 상태가 그대로인 진짜 반복만 차단한다.
-    미존재 경로·일반 문자열은 fingerprint 에 기여하지 않는다.
-    """
-    args_str = json.dumps(call.arguments, sort_keys=True) if call.arguments else ""
-    parts: list[str] = []
-    _collect_result_path_fingerprints(call.arguments or {}, parts)
-    return (call.name, args_str, "|".join(sorted(parts)))
-
-
-def _record_invalid_call(
-    call: ToolCall, history_calls: set[tuple[str, str, str]]
-) -> bool:
-    """형식오류 호출 시그니처를 history_calls 에 기록한다.
-
-    같은 시그니처의 형식오류 호출이 반복되면(=self-correct 실패) True 를 반환해
-    호출자가 루프 차단 메시지로 전환하도록 한다. 정상 실행 경로의 dedup 과 동일한
-    history_calls 집합을 공유하므로 형식오류↔정상 호출 간 루프도 함께 감지된다.
-
-    Returns:
-        True: 이미 본 동일 호출(반복). False: 최초 기록.
-    """
-    sig = _call_signature(call)
-    if sig in history_calls:
-        return True
-    history_calls.add(sig)
-    return False
 
 
 def _append_tool_result(

@@ -108,17 +108,6 @@ class AgentRegistry:
                 return a
         return None
 
-    def find_agent_for_skill(self, skill_name: str) -> Agent | None:
-        """주어진 SKILL 을 전담하는 에이전트 조회 (Case 3 라우팅 진단용).
-
-        동점 시 priority 가 높은 에이전트 우선 반환.
-        """
-        candidates = [a for a in self._agents if skill_name in a.meta.skills]
-        if not candidates:
-            return None
-        candidates.sort(key=lambda a: -a.meta.priority)
-        return candidates[0]
-
     def cross_check_skills(self, known_skill_names: set[str]) -> None:
         """등록된 에이전트의 skills 가 실제 SKILLS 에 존재하는지 확인 (J-7).
 
