@@ -41,7 +41,7 @@ requires_tools: ["fetch_sales", "render_report", "send_email"]
 | `trigger` | string[] | 선택 | `[]` | 사용자 메시지에서 찾을 키워드 목록. 대소문자 무관 부분문자열 매칭 |
 | `priority` | int | 선택 | `5` | 여러 스킬이 동시에 매칭될 때 우선순위. 값이 클수록 먼저 선택 |
 | `requires_tools` | string[] | 선택 | `[]` | 이 스킬이 사용하는 도구 이름 힌트. 해당 도구가 미등록이면 priority 에서 감점 |
-| `api_refs` | string[] | 선택 | `[]` | 외부 Python 라이브러리 dotted-path 목록. 활성화 시 시그니처·docstring 이 system prompt 에 자동 주입되고 메타 도구 7종이 자동 노출됨 → [library-runtime.md](library-runtime.md) |
+| `api_refs` | string[] | 선택 | `[]` | 외부 Python 라이브러리 dotted-path 목록. 활성화 시 시그니처·docstring 이 system prompt 에 자동 주입되고 메타 도구 8종이 자동 노출됨 → [library-runtime.md](library-runtime.md) |
 
 ### name
 
@@ -167,6 +167,23 @@ trigger 매칭 없이 특정 스킬을 강제 활성화하려면 UI Composer 에
 
 `force_skills=["report_generator"]` 로 API 에 전달되어 trigger 매칭을 우회하고
 해당 스킬이 바로 시스템 프롬프트에 포함된다.
+
+### LLM 능동 활성화 — `activate_skill` (3번째 경로)
+
+트리거 키워드를 놓쳤거나 어떤 스킬을 써야 할지 LLM이 스스로 판단해야 할 때,
+**비활성 SKILL 카탈로그**를 확인한 후 `activate_skill(name)` 도구를 호출해 해당 스킬을
+런타임에 활성화할 수 있다.
+
+- 활성화하면 system prompt 가 동적으로 재조립되어 그 턴 안에서 스킬 지침이 적용된다
+- 비활성 카탈로그(이름·description·trigger)는 `# Inactive Skills` 섹션으로 system prompt에 포함됨
+- SKILL 수가 많을 때 LLM이 트리거 미스를 보완하는 안전망으로 작동한다
+
+```
+SKILL 활성화 3가지 경로:
+① 트리거 키워드 자동 매칭  (SkillRegistry.select)
+② 슬래시 커맨드 강제 지정  (/skill_name → force_skills)
+③ LLM 능동 활성화           (activate_skill 도구 호출 → 동적 재조립)
+```
 
 ### 멀티 스킬 동시 활성화
 

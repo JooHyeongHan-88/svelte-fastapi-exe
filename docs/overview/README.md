@@ -10,12 +10,14 @@
 
 | 순서 | 문서 | 답하는 질문 |
 |---|---|---|
-| ① | [01-project-overview.md](01-project-overview.md) | 무엇을 만드는 프로젝트인가? 어떻게 빌드·배포되는가? 무엇으로 구성되어 있는가? |
-| ② | [02-ux-ui.md](02-ux-ui.md) | 최종 사용자는 어떤 화면에서 어떤 기능을 쓰는가? |
-| ③ | [03-backend-flow.md](03-backend-flow.md) | 백엔드는 내부적으로 어떻게 동작하는가? 어떤 모듈·도구가 있는가? |
+| ① | [01-project-overview.md](01-project-overview.md) | 무엇을 만드는 프로젝트인가? 기술 스택·3계층 구조·디렉터리 |
+| ② | [02-agent-and-extensibility.md](02-agent-and-extensibility.md) | 에이전트는 어떻게 정의·확장하는가? PROMPTS/SKILLS/AGENTS, 확장 시스템 |
+| ③ | [03-ux-ui.md](03-ux-ui.md) | 최종 사용자는 어떤 화면에서 어떤 기능을 쓰는가? |
+| ④ | [04-backend-flow.md](04-backend-flow.md) | 백엔드는 내부적으로 어떻게 동작하는가? 어떤 모듈·도구가 있는가? |
+| ⑤ | [05-build-and-update.md](05-build-and-update.md) | 어떻게 빌드·배포·자동 업데이트되는가? `.env` 환경 변수 전체 목록 |
 
 ## 더 깊이 들어가려면
 
-- 에이전트 확장(SKILLS/AGENTS/도구 추가) → [docs/README.md](../README.md)
-- 확장 시스템(extensions/ 추가·격리·open_curation) → `.claude/rules/extensions_architecture.md`
+- 에이전트 확장(SKILLS/AGENTS/도구 추가) → [docs/guides/README.md](../guides/README.md)
+- 하니스 내부 흐름 (패키지 구조·이벤트·상태) → [docs/harness/README.md](../harness/README.md)
 - 아키텍처 세부 결정 사항 → `.claude/rules/*.md`

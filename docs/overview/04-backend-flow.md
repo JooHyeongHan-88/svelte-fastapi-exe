@@ -1,4 +1,4 @@
-# ③ Backend 동작 흐름
+# ④ Backend 동작 흐름
 
 > **대상 독자**: 백엔드 내부 구조를 처음 파악하는 개발자
 > **이 문서의 목표**: 기동부터 채팅 한 턴이 처리되는 전 과정을 따라가며, 각 모듈의 역할과 등록된 도구를 파악한다.
@@ -128,11 +128,11 @@ dev 모드에서 `build/web/`이 없으면 ⑤의 SPA 서빙과 ⑥이 생략된
 
 | 파일/폴더 | 역할 |
 |---|---|
-| `harness.py` | **`run_turn()` — 한 턴의 전 과정 오케스트레이션.** provider↔도구 루프, sentinel 분기, 서브 에이전트 디스패치(순차/병렬), 루프 가드, 예산 관리, 영속화 |
+| `harness/` | **`run_turn()` — 한 턴의 전 과정 오케스트레이션.** 패키지(`loop`·`call_handlers`·`dispatch/`·`prompt/`·`state/`·`budget`·`tool_exec`·`constants`)로 구성. provider↔도구 루프, sentinel 분기, 서브 에이전트 디스패치(순차/병렬), 루프 가드, 예산 관리, 영속화 (→ [docs/harness/](../harness/README.md)) |
 | `guard.py` | 슬롯 가드 — 도구 인자 Pydantic 검증 후 **missing(사용자에게 질문) / invalid(LLM 자가수정)** 분기 |
 | `models.py` | 전 데이터 모델 — Message·ToolCall·ToolResult·SSE 이벤트 13종·AgentState·TodoItem |
 | `config.py` | 에이전트 한도 환경 변수 (반복 상한·예산·타임아웃·상태 파일 경로) |
-| `providers/` | LLM 어댑터 — `openai.py`(OpenAI 호환+DTGPT, 재시도·스트림 잘림 대응), `mock.py`(시나리오 A~G), `factory.py`(설정→인스턴스) |
+| `providers/` | LLM 어댑터 — `openai.py`(OpenAI 호환+DTGPT, 재시도·스트림 잘림 대응), `mock.py`(시나리오 A~H), `factory.py`(설정→인스턴스) |
 | `registries/` | 4종 레지스트리 (10절) |
 | `stores/` | `conversation.py`(히스토리+와이어 규약 정합성), `agent_state.py`(todo·pending 디스크 영속) |
 | `tools/` | 내장 도구 구현 (12절) |
@@ -171,7 +171,7 @@ run_turn()
   ③ 프롬프트 합성     PROMPTS + SKILL 본문 + 서브 에이전트 카탈로그
                      + 현재 To-do + Pending 슬롯 + Session Artifacts(과거 산출물 목록)
   ④ SkillActiveEvent → 프론트에 스킬 뱃지 즉시 표시
-  ⑤ 에이전트 루프     _run_agent_turn() — 최대 APP_MAX_AGENT_ITERATIONS(8)회 반복
+  ⑤ 에이전트 루프     _run_agent_turn() — 최대 APP_MAX_AGENT_ITERATIONS(12)회 반복
   │
   │    provider.astream(messages, tools)  ← LLM 호출 (스트리밍)
   │      ├─ delta            → 그대로 프론트에 중계 (실시간 타이핑)
@@ -197,6 +197,7 @@ run_turn()
 루프가 반복되는 이유: LLM이 "도구 호출 → 결과 확인 → 다음 행동 결정"을 여러 번
 거치며 작업을 완성하기 때문. 상한(8회) 도달 시 그때까지의 결과로 **응급 응답(salvage)**을
 만들어 반환한다 — todo가 모두 끝난 상태면 "완료(예산 소진)", 아니면 "미완료 주의"로 구분 표시.
+잔여 2회(wind-down) 시점에 하니스가 마무리 지시문을 자동 주입해 남은 호출을 결과 표시에 쓰게 한다.
 
 ---
 
@@ -341,7 +342,7 @@ async def fetch_sales(
 
 ## 12. Built-in 도구 카탈로그
 
-새 도구를 추가하기 전부터 내장되어 있는 도구 전체. (인자 상세 → [docs/builtin-tools.md](../builtin-tools.md))
+새 도구를 추가하기 전부터 내장되어 있는 도구 전체. (인자 상세 → [docs/guides/builtin-tools.md](../guides/builtin-tools.md))
 
 ### 계획·상호작용 (Sentinel — 하니스가 직접 처리)
 
@@ -476,7 +477,7 @@ result/
 ## 15. 확장 시스템 — 격리된 독립 도구 (`extensions/`)
 
 메인 앱과 분리된 독립 도구(Svelte SPA + FastAPI 라우터)를 폴더 단위로 붙이는 서브시스템.
-호스트는 개별 도구를 모르고 **컨벤션**만 따른다 (개념·격리 보장은 [① 13절](01-project-overview.md)).
+호스트는 개별 도구를 모르고 **컨벤션**만 따른다 (개념·격리 보장은 [② 에이전트·확장성](02-agent-and-extensibility.md)).
 
 ### 로더 — 컨벤션 기반 자동 발견 (`core/extensions_loader.py`)
 
@@ -500,12 +501,10 @@ result/
 open_curation(tool, sources, mapping, mark)
   ① tool 이름 검증(경로 안전) · sources 검증(resolve_result_path + parquet)
   ② 번들 스펙 <tool>.bundle.json 작성 (현재 턴 슬롯)
-  ③ "큐레이션 도구 열기" 마크다운 카드 작성 → 기존 markdown 칩 경로로 패널 표시
-     (전용 프론트 컴포넌트 없이 ToolResult(data={kind:"markdown"}))
+  ③ ToolResult(data={kind:"extension"}) 반환 → extension 칩이 아티팩트 패널에 생성·자동 오픈
+     → 패널 안에 /ext/<tool>/?bundle=... 를 same-origin iframe으로 임베드
+     (패널 헤더 '새 탭' 버튼으로 별도 창도 열 수 있음, 칩은 localStorage 영속)
 ```
-
-카드 링크 `/ext/<tool>/?bundle=...`는 프론트 DOMPurify 훅이 모든 링크에 `target="_blank"`를
-부여해 **새 탭**에서 열린다 (채팅 탭 세션 소실 방지).
 
 ### App.spec 선별 번들
 
@@ -540,7 +539,7 @@ open_curation(tool, sources, mapping, mark)
 | 입력 경계 | 동시 턴 가드 | 같은 세션 중복 요청 → 히스토리 교차 오염 방지 |
 | LLM 오류 | 슬롯 가드 책임자 분기 | 사용자 질문 최소화, LLM 실수는 자가수정 유도 |
 | LLM 오류 | 깨진 tool_call JSON 마커 | 스트림 잘림 시에도 원본 보존 → 재요청 |
-| 폭주 방지 | 반복 상한(8) · 턴 예산(20) · loop-guard | 무한 루프·비용 폭주 차단 |
+| 폭주 방지 | 반복 상한(12) · 턴 예산(20) · loop-guard · wind-down(잔여 2회) | 무한 루프·비용 폭주 차단 |
 | 폭주 방지 | 도구 타임아웃 (기본 30초) | 도구 1회가 턴을 영원히 잡지 못함 |
 | 네트워크 | provider 재시도 (지수 백오프) | 일시 오류(429·연결 끊김) 자동 복구 |
 | 정합성 | tool 쌍 보존 트리밍 + placeholder | OpenAI 와이어 규약 위반(400 거부) 방지 |
@@ -572,7 +571,7 @@ settings.json (dev: backend/settings/ · frozen: %APPDATA%\{APP_NAME}\)
 ## 18. 정리 — 백엔드를 한 장으로
 
 ```
-기동      main.py → 동적 포트 → 레지스트리 로드 → 브라우저 오픈
+기동      main.py → APP_NAME 해시 고정 포트 → 레지스트리 로드 → 브라우저 오픈
 생존      presence SSE = 생존 신호, 탭 닫으면 watchdog이 자가 종료
 한 턴     /api/chat → run_turn → [SKILL 선택 → 프롬프트 합성 → LLM↔도구 루프] → SSE 스트림
 위임      오케스트레이터 → call_sub_agent(순차) / call_sub_agents_parallel(병렬, 격리 실행)
@@ -581,4 +580,5 @@ settings.json (dev: backend/settings/ · frozen: %APPDATA%\{APP_NAME}\)
 안전      Origin·동시 턴·예산·loop-guard·재시도·히스토리 정합성·키 마스킹
 ```
 
-**이전 문서**: [① 프로젝트 전체 흐름](01-project-overview.md) · [② 구현된 UX/UI](02-ux-ui.md)
+**이전 문서**: [③ 구현된 UX/UI](03-ux-ui.md)
+**다음 문서**: [⑤ 빌드 & 업데이트](05-build-and-update.md)

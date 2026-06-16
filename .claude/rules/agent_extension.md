@@ -9,7 +9,7 @@
 | **A. `@register_tool` 1:1 매핑** | 함수가 5개 이하, 인자/반환 타입이 단순(`str`/`int`/`dict`/...), 시그니처가 LLM 에 명시적으로 보이는 게 더 안전한 경우 |
 | **B. `api_refs` 메타 도구** | API 가 많음, DataFrame/ndarray 등 객체 반환·체이닝 필요, 라이브러리가 자주 업데이트되어 wrapper 유지보수 비용이 큼 |
 
-대부분의 도메인 라이브러리(특히 데이터 분석)는 **B 패턴**이 적합하다. `.env` 의 `APP_ALLOWED_LIBRARIES` 에 패키지 루트 한 줄, SKILL/AGENT 의 `api_refs` 에 노출하고 싶은 함수만 적으면 끝. 자세한 내용은 [docs/library-runtime.md](../../docs/library-runtime.md).
+대부분의 도메인 라이브러리(특히 데이터 분석)는 **B 패턴**이 적합하다. `.env` 의 `APP_ALLOWED_LIBRARIES` 에 패키지 루트 한 줄, SKILL/AGENT 의 `api_refs` 에 노출하고 싶은 함수만 적으면 끝. 자세한 내용은 [docs/guides/library-runtime.md](../../docs/guides/library-runtime.md).
 
 A 패턴은 아래 절차를 따른다.
 

@@ -11,7 +11,7 @@
 | [prompts.md](prompts.md) | `PROMPTS/*.md` 수정자 | 파일별 역할, 합성 순서, 핫리로드 정책 |
 | [builtin-tools.md](builtin-tools.md) | SKILL·AGENT 본문 작성자 | add_todo/complete_todo/ask_user/call_sub_agent/complete_subagent 사용법 |
 | [charts.md](charts.md) | `display_chart` 를 쓰는 SKILL·AGENT 작성자 | 차트 유형(mark)별 encoding, parquet+spec 파이프라인, brush 필터가 되는 차트 |
-| [library-runtime.md](library-runtime.md) | 외부 Python 라이브러리 노출 | `api_refs` 패턴, 7개 메타 도구, 세션 namespace, 보안 모델 |
+| [library-runtime.md](library-runtime.md) | 외부 Python 라이브러리 노출 | `api_refs` 패턴, 8개 메타 도구, 세션 namespace, 보안 모델 |
 | [mock-scenarios.md](mock-scenarios.md) | Mock Provider 개발자 | 전체 시나리오 목록·트리거·흐름·산출물 경로·신규 시나리오 추가 방법 |
 
 ## 빠른 참조

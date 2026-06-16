@@ -39,7 +39,7 @@ svelte-fastapi-exe/
 │   ├── scripts/           # 프로젝트 전용 Python 유틸리티 패키지 (__init__.py 필수)
 │   │                      # APP_ALLOWED_LIBRARIES=scripts + api_refs 로 SKILL에서 사용
 │   ├── agent/             # LLM 에이전트 런타임
-│   │   ├── harness.py     # 핵심 턴 루프 (loop detection, error recovery, fallback 포함)
+│   │   ├── harness/       # 핵심 턴 루프 패키지 (loop·call_handlers·dispatch·prompt·state 등)
 │   │   ├── tools/         # @register_tool 기반 사내 API 도구 모음
 │   │   │   ├── runtime.py # 라이브러리 런타임 8개 메타 도구 (exec_code 등)
 │   │   │   └── visualize.py # display_image / display_chart / display_markdown
@@ -83,7 +83,7 @@ release/{AppName}.exe ─(sha256 + copy)─► release/{AppName}-X.X.X.exe + rel
 
 ## Harness 이벤트 & UI 컴포넌트 매핑
 
-백엔드 harness(`backend/agent/harness.py`)는 SSE 스트림으로 이벤트를 발행하고, 프론트엔드는 이를 수신해 컴포넌트를 갱신한다.
+백엔드 harness(`backend/agent/harness/`)는 SSE 스트림으로 이벤트를 발행하고, 프론트엔드는 이를 수신해 컴포넌트를 갱신한다.
 
 | SSE 이벤트 (`type`) | 발생 조건 | 처리 UI 컴포넌트 | 화면 표현 |
 |---|---|---|---|
@@ -107,9 +107,9 @@ release/{AppName}.exe ─(sha256 + copy)─► release/{AppName}-X.X.X.exe + rel
 | 장치 | 구현 위치 | 동작 |
 |---|---|---|
 | **슬롯 가드** | `agent/guard.py` | 도구 인자 누락 시 `AskUserEvent` 발행, 채워지면 다음 턴에 재호출 |
-| **루프 감지** | `harness.py` `history_calls` set | 동일 도구·동일 인자 재호출 차단, RCA 유도 메시지 주입 |
-| **에러 회복** | `harness.py` `_execute_tool` | `is_error=True` 결과에 RCA + 1회 재시도 유도 메시지 자동 append |
-| **Fallback** | `harness.py` else 절 | `max_iterations` 도달 시 tools 없이 LLM 재호출 → `is_fallback=true` ErrorEvent |
+| **루프 감지** | `harness/state/loop_guard.py` | 동일 도구·동일 인자(+파일 fingerprint) 재호출 차단, RCA 유도 메시지 주입 |
+| **에러 회복** | `harness/tool_exec.py` `_execute_tool` | `is_error=True` 결과에 RCA + 1회 재시도 유도 메시지 자동 append |
+| **Fallback** | `harness/loop.py` else 절 | `max_iterations` 도달 시 tools 없이 LLM 재호출 → `is_fallback=true` ErrorEvent |
 | **Budget 가드** | `TurnBudget` | 오케스트레이터 + 서브 에이전트 provider 호출 합산 상한 |
 | **중첩 위임 차단** | L0~L3 (harness + guard) | 서브 에이전트의 `call_sub_agent` 재호출 4중 방어 |
 
@@ -186,8 +186,8 @@ cd backend && uv run python -m pytest tests/ -v
 
 | 에이전트 | 트리거 | 역할 |
 |---|---|---|
-| `coding_agent` | "코딩", "코드 작성" 등 | 코드 작업 전담 |
-| `report_agent` | "리포트 에이전트", "report_agent" | Markdown 리포트 작성·`display_markdown` 렌더링 전담 |
+| `analyst_agent` | "데이터 요약", "요약 통계" 등 | 데이터 분석·차트 생성 전담 (Mock 시나리오 D) |
+| `writer_agent` | "전체 분석 보고서", "종합 보고서" 등 | Markdown 보고서 작성·이미지 생성 전담 (Mock 시나리오 E) |
 
 ### 라이브러리 런타임 (`api_refs`)
 
@@ -204,7 +204,7 @@ LLM 은 `call_function` / `eval_expression` / `exec_code` 등 8개 메타 도구
 `.env` 의 `APP_ALLOWED_LIBRARIES` CSV 에 등록된 패키지만 허용 (보안 화이트리스트).
 App.spec 빌드 시 이 목록을 읽어 `collect_all()` 을 자동 실행 → EXE 에도 번들링됨.
 
-자세한 내용: [docs/library-runtime.md](docs/library-runtime.md)
+자세한 내용: [docs/guides/library-runtime.md](docs/guides/library-runtime.md)
 
 ### 아티팩트 패널 & 산출물 저장
 
@@ -229,12 +229,12 @@ result/{세션제목}-{id[:8]}/{YYYYMMDD-HHmmss}/파일
 
 ```
 App.exe 실행
-  ├─ create_server_socket(): OS 가 빈 포트를 동적 할당 (사용자 PC 포트 점유와 충돌 없음)
+  ├─ create_server_socket(): APP_NAME 해시 기반 고정 포트 바인딩 (47100–48999, 충돌 시 +1..+4 폴백)
   ├─ uvicorn.Server 생성 (소켓 직접 전달) → browser.server 에 보관
   ├─ watchdog 스레드: presence 연결 감시, 모두 사라지면 서버 종료
-  └─ open_browser 스레드: 1초 후 실제 바인딩된 포트로 브라우저 자동 오픈
+  └─ open_browser 스레드: 1초 후 바인딩된 고정 포트로 브라우저 자동 오픈
 
-브라우저 → http://127.0.0.1:{동적 포트}   (frontend 는 상대 경로만 쓰므로 포트를 몰라도 됨)
+브라우저 → http://127.0.0.1:{고정 포트}   (frontend 는 상대 경로만 쓰므로 포트를 몰라도 됨)
   ├─ initApp(): localStorage 에서 세션 복원 → /api/presence SSE 오픈
   ├─ /api/conversation/restore: localStorage 히스토리 → 백엔드 LLM context 주입
   └─ /api/update/check: Nexus latest.json 비교 (5분 캐시)
@@ -356,7 +356,7 @@ pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
 
 ## 보안 가드레일
 
-- **Origin 가드**: EXE 환경에서 실제 바인딩된 origin(`http://127.0.0.1:{동적 포트}`) 이외에서 오는 `/api/*` 요청을 403으로 차단
+- **Origin 가드**: EXE 환경에서 실제 바인딩된 origin(`http://127.0.0.1:{고정 포트}`) 이외에서 오는 `/api/*` 요청을 403으로 차단
 - **sha256 무결성 검증**: 다운로드 후 latest.json의 sha256과 불일치하면 임시 파일 삭제, 현재 EXE 보존
 - **API 키 보안**: settings.json에만 저장, 응답 시 항상 마스킹, localStorage에 저장 안 함
 - **latest.json 나중 업로드**: EXE 업로드 완료 후 latest.json 업로드 — 404 EXE 경쟁 조건 방지
