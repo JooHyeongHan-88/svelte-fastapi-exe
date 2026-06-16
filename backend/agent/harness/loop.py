@@ -399,13 +399,15 @@ async def _run_agent_turn(
         StreamEvent: delta / tool_call / tool_result / reasoning / ask_user
             / todo_update / agent:switch / agent:progress / agent:return / error.
     """
-    # sub-agent context 에서는 agent_registry 가 None 이어야 한다.
-    # turn_messages=None 은 "서브 에이전트로 호출됐다"는 관례적 신호.
-    assert turn_messages is not None or agent_registry is None, (
-        "_run_agent_turn: sub-agent context(turn_messages=None)에서 "
-        "agent_registry 가 None 이 아님 — 중첩 sub-agent dispatch 가 열릴 수 있습니다. "
-        "_dispatch_sub_agent 가 agent_registry=None 으로 호출하는지 확인하세요."
-    )
+    # sub-agent context(turn_messages=None)에서는 agent_registry 가 None 이어야 한다.
+    # 이 불변식은 중첩 sub-agent dispatch 를 막는 보안 방어선(L0)이라, -O/optimize 빌드에서
+    # 떨어져 나가는 assert 대신 명시적 raise 로 못박는다.
+    if turn_messages is None and agent_registry is not None:
+        raise RuntimeError(
+            "_run_agent_turn: sub-agent context(turn_messages=None)에서 "
+            "agent_registry 가 None 이 아님 — 중첩 sub-agent dispatch 가 열릴 수 있습니다. "
+            "_dispatch_sub_agent 가 agent_registry=None 으로 호출하는지 확인하세요."
+        )
 
     ctx = TurnContext(
         agent_id=agent_id,
@@ -442,31 +444,22 @@ async def _run_agent_turn(
         pending_tool_calls.clear()
 
         async for event in provider.astream(messages, sub_specs):
-            if event.type == "delta":
-                assistant_buffer.append(event.content)
-                yield event
-                continue
-
-            if event.type == "tool_call":
-                pending_tool_calls.append(event.call)
-                yield event
-                continue
-
-            if event.type == "reasoning":
-                yield event
-                continue
-
-            if event.type == "skill_active":
-                # provider 가 내부 단계 전환 시점에 직접 emit 하는 경우 (mock 시나리오 등).
-                # 루프를 끊지 않고 그대로 흘려보낸다.
-                yield event
-                continue
-
-            if event.type == "done":
-                break
-
-            yield event
-            return
+            match event.type:
+                case "delta":
+                    assistant_buffer.append(event.content)
+                    yield event
+                case "tool_call":
+                    pending_tool_calls.append(event.call)
+                    yield event
+                case "reasoning" | "skill_active":
+                    # skill_active: provider 가 내부 단계 전환 시점에 직접 emit 하는 경우
+                    # (mock 시나리오 등). 루프를 끊지 않고 그대로 흘려보낸다.
+                    yield event
+                case "done":
+                    break
+                case _:
+                    yield event
+                    return
 
         assistant_text = "".join(assistant_buffer)
 
