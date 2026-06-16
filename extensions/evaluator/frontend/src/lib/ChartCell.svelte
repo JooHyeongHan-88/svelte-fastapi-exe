@@ -1,8 +1,43 @@
 <script>
   import { onDestroy } from "svelte";
   import * as echarts from "echarts";
-  import { buildChartOption } from "./chartOption.js";
+  import { buildChartOption, ECHARTS_PALETTE } from "./chartOption.js";
   import { currentSnapshot } from "./chartState.svelte.js";
+  import { themeState } from "./theme.svelte.js";
+
+  // 현재 테마의 CSS 변수로 ECharts 테마 객체를 만든다(축/텍스트/그리드 색). 옵션이
+  // 축 색을 지정하지 않으므로 이 테마 기본값이 다크에서 가독을 책임진다.
+  function makeEchartsTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
+    const fg = v("--fg", "#1f1e1d");
+    const muted = v("--muted", "#6b6a64");
+    const border = v("--border", "#e5e2d8");
+    const axis = {
+      axisLine: { lineStyle: { color: border } },
+      axisTick: { lineStyle: { color: border } },
+      axisLabel: { color: muted },
+      splitLine: { lineStyle: { color: border } },
+      nameTextStyle: { color: muted },
+    };
+    return {
+      color: ECHARTS_PALETTE,
+      backgroundColor: "transparent",
+      textStyle: { color: fg },
+      title: { textStyle: { color: fg }, subtextStyle: { color: muted } },
+      legend: { textStyle: { color: muted } },
+      categoryAxis: axis,
+      valueAxis: axis,
+      logAxis: axis,
+      timeAxis: axis,
+      visualMap: { textStyle: { color: muted } },
+      tooltip: {
+        backgroundColor: v("--panel", "#ffffff"),
+        borderColor: border,
+        textStyle: { color: fg },
+      },
+    };
+  }
 
   // 단일 ECharts 차트의 생명주기를 자가 관리한다(메인 앱 ChartCell 패턴 복사).
   // points + 뷰 스냅샷(currentSnapshot) + mark(차트 종류)로 option 을 만들고, brush
@@ -23,6 +58,7 @@
 
   let container = $state(null);
   let chart = null;
+  let chartTheme = null; // chart 가 init 된 테마 이름 — 변경 시 재init 트리거
   let resizeObserver = null;
   let renderError = $state(null);
 
@@ -58,6 +94,7 @@
     resizeObserver = null;
     chart?.dispose();
     chart = null;
+    chartTheme = null;
   }
 
   // container 와 유효한 option 이 모두 준비됐을 때만 init/갱신한다. 차트 종류·매핑
@@ -65,8 +102,11 @@
   function renderInto() {
     if (!container || !built?.option) return;
     try {
+      // 테마가 바뀌면 init 인자(테마)는 고정이라 dispose 후 재init 해야 반영된다.
+      if (chart && chartTheme !== themeState.name) disposeChart();
       if (!chart) {
-        chart = echarts.init(container, null, { renderer: "canvas" });
+        chart = echarts.init(container, makeEchartsTheme(), { renderer: "canvas" });
+        chartTheme = themeState.name;
         resizeObserver = new ResizeObserver(() => chart?.resize());
         resizeObserver.observe(container);
       }
@@ -86,6 +126,7 @@
   $effect(() => {
     void built;
     void container;
+    void themeState.name; // 테마 변경 시 재init(renderInto 가 dispose 후 새 테마로)
     if (buildError || !built?.option || !container) {
       if (chart) disposeChart();
       return;

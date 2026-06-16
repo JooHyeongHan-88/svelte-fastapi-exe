@@ -11,6 +11,8 @@ import {
   loadArtifactWidth,
   loadArtifactPanelOpen,
   loadSidebarWidth,
+  loadSidebarCollapsed,
+  saveSidebarCollapsed,
 } from "./storage.js";
 import {
   chat,
@@ -617,6 +619,7 @@ export async function initApp() {
   ui.artifactWidth = loadArtifactWidth();
   ui.artifactPanelOpen = loadArtifactPanelOpen();
   ui.sidebarWidth = loadSidebarWidth();
+  ui.sidebarCollapsed = loadSidebarCollapsed();
 
   const sessions = loadSessions();
   // 앱이 생성 도중 강제 종료되면 localStorage 에 streaming:true 가 잔류할 수 있다.
@@ -674,6 +677,13 @@ export function setTheme(theme) {
   ui.theme = theme;
   saveTheme(theme);
   document.documentElement.setAttribute("data-theme", theme);
+  // same-origin 확장 iframe(evaluator 등)에 테마 변경을 알린다 — iframe 은 부모 CSS
+  // 변수를 상속하지 않으므로 스스로 data-theme 를 적용해야 한다. fire-and-forget.
+  try {
+    const ch = new BroadcastChannel("app:theme");
+    ch.postMessage({ type: "theme", theme });
+    ch.close();
+  } catch {}
 }
 
 export function toggleTheme() {
@@ -682,6 +692,12 @@ export function toggleTheme() {
 
 export function toggleSidebar() {
   ui.sidebarOpen = !ui.sidebarOpen;
+}
+
+// 데스크탑 사이드바 완전 숨김 토글 (모바일 off-canvas 와 별개). 영속해 새로고침 후 복원.
+export function toggleSidebarCollapsed() {
+  ui.sidebarCollapsed = !ui.sidebarCollapsed;
+  saveSidebarCollapsed(ui.sidebarCollapsed);
 }
 
 // ---------- 업데이트 ----------

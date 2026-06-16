@@ -5,7 +5,8 @@
       "name": "backend",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "python", "backend/main.py"],
-      "port": 8765
+      "port": 8765,
+      "autoPort": false
     },
     {
       "name": "frontend",

@@ -3,7 +3,7 @@
   import { ui } from "../lib/state.svelte.js";
   import { loadChartCache, openChartLightbox } from "../lib/artifactActions.svelte.js";
 
-  const PAGE_SIZE = 6;
+  const PAGE_SIZE = 12;
 
   let { payload } = $props();
 

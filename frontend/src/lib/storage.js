@@ -6,6 +6,7 @@ const KEY_THEME = "chat:theme:v1";
 const KEY_ARTIFACT_WIDTH = "chat:artifactWidth:v1";
 const KEY_ARTIFACT_PANEL_OPEN = "chat:artifactPanelOpen:v1";
 const KEY_SIDEBAR_WIDTH = "chat:sidebarWidth:v1";
+const KEY_SIDEBAR_COLLAPSED = "chat:sidebarCollapsed:v1";
 
 const ARTIFACT_WIDTH_MIN = 320;
 // 데이터 칩 head 테이블처럼 와이드 콘텐츠를 위해 1000 — viewport 60% 캡은 별도 유지.
@@ -148,3 +149,18 @@ export const SIDEBAR_WIDTH_BOUNDS = {
   max: SIDEBAR_WIDTH_MAX,
   default: SIDEBAR_WIDTH_DEFAULT,
 };
+
+// 사이드바 접힘(완전 숨김) 상태 영속 — 새로고침 / 세션 전환 후에도 복원.
+export function loadSidebarCollapsed() {
+  try {
+    return localStorage.getItem(KEY_SIDEBAR_COLLAPSED) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveSidebarCollapsed(collapsed) {
+  try {
+    localStorage.setItem(KEY_SIDEBAR_COLLAPSED, collapsed ? "1" : "0");
+  } catch {}
+}

@@ -10,8 +10,8 @@
 
 예전에는 마크다운 카드(``<tool>.curation.md``)를 띄워 사용자가 링크를 새 탭으로
 열게 했지만, 데스크탑 앱에서 새 탭은 맥락을 끊으므로 **패널 내 iframe 임베드**로
-바꿨다. 패널 헤더의 '새 탭' 버튼으로 별도 창에서도 열 수 있다(프론트
-``ArtifactExtension`` 컴포넌트).
+바꿨다. 패널 헤더의 '최대화' 버튼으로 본문을 화면 전체로 키울 수 있다(프론트
+``ArtifactPanel`` 의 최대화 모드).
 
 이 도구는 **evaluator 에 특정되지 않는다** — ``tool`` 인자로 어떤 확장 툴이든 가리킬
 수 있고, ``mapping`` 도 해석하지 않고 번들에 그대로 실어 보낸다(확장 툴이 해석).
@@ -150,7 +150,7 @@ def _write_text(target: Path, text: str) -> str | None:
         "mark 는 기본 차트 종류(선택) — evaluator 는 "
         "scatter/line/bar/box/histogram/ecdf/heatmap 을 받으며 생략 시 scatter. "
         "이 도구는 확장 칩 1개를 우측 패널에 표시하고 확장 도구를 바로 연다 "
-        "(패널 헤더의 '새 탭' 버튼으로 별도 창에서도 열 수 있다)."
+        "(패널 헤더의 '최대화' 버튼으로 본문을 화면 전체로 키울 수 있다)."
     ),
     slot_prompts={
         "tool": "어떤 큐레이션 확장 도구를 열까요? (예: 'evaluator')",

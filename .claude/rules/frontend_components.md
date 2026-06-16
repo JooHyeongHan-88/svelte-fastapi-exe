@@ -27,26 +27,34 @@ lib/
 
 components/
   Sidebar.svelte        세션 목록 + 새 대화 버튼 + 테마 토글 + 설정 아이콘 + ModelPicker
+                        + 데스크탑 접기 버튼(.collapse-btn → toggleSidebarCollapsed, 폭 0 완전 숨김,
+                        ui.sidebarCollapsed 영속). 펼치기는 TopBar .sidebar-expand
   SessionItem.svelte    세션 행 (클릭=선택, 더블클릭=인라인 rename, hover=삭제)
   ChatArea.svelte       메시지 스크롤 영역, 하단 자동 스크롤 + 빈 세션 히어로
                         (Logo 스파크 + 시간대별 세리프 인사말 - App.svelte 의 hero-spacer 와
                         합쳐 인사말+컴포저 쌍을 중앙 부근에 배치, isEmptySession() 공유)
   MessageBubble.svelte  user(plain text) / assistant(markdown) 버블 + 완료 표식
   Composer.svelte       auto-resize textarea, Enter=전송 / Shift+Enter=줄바꿈
-  TopBar.svelte         현재 세션 제목, 모바일 사이드바 토글
+  TopBar.svelte         현재 세션 제목, 모바일 사이드바 토글 + 데스크탑 사이드바 펼치기
+                        버튼(.sidebar-expand, ui.sidebarCollapsed 일 때만 노출)
   ModelPicker.svelte    사이드바 하단 프로바이더/모델 표시 + 빠른 모델 전환 드롭업
   SettingsModal.svelte  LLM 설정 모달 (프로바이더·모델·API키·Base URL)
   UpdateBanner.svelte   업데이트 알림 배너
   UpdateModal.svelte    업데이트 진행 모달
   TurnStatus.svelte     생성 중 진행 표식 - 펄스 점 + 상황별 문구 + 경과 시간
   ArtifactPanel.svelte  우측 아티팩트 패널 - 탭 바(칩) + 활성 칩 콘텐츠 렌더링
+                        + 헤더 '최대화' 버튼(패널-레벨, 모든 kind 공용 → toggleArtifactMaximize).
+                        최대화 시 헤더·탭·핸들 숨기고 본문을 뷰포트 전체로(.maximized: fixed/inset 0/
+                        z 60, 라이트박스 9999 아래). 복귀는 본문 위 떠 있는 .restore-btn(평소 옅게·
+                        hover/진입 hint 또렷, ESC 미지원). ui.artifactMaximized(휘발, 닫으면 리셋)
   ArtifactImage.svelte  이미지 갤러리 - payload.items[] 기반, IntersectionObserver lazy load
-  ArtifactChart.svelte  ECharts 그리드 - 페이지당 6개 페이지네이션, {#key page} remount
+  ArtifactChart.svelte  ECharts 그리드 - 페이지당 12개 페이지네이션, {#key page} remount
   ArtifactData.svelte   parquet 데이터 칩 패널 - GET /api/artifact/preview 로 head(10) 테이블
                         (횡 스크롤·sticky th·dtype 부기) + CSV 다운로드(showSaveFilePicker
                         저장 위치 선택, 미지원 시 앵커 다운로드 폴백)
   ArtifactExtension.svelte 확장(extension) 칩 패널 - 확장 SPA 를 same-origin <iframe src=/ext/<tool>/...>
-                        로 임베드 + 헤더 '새 탭' 버튼(window.open). open_curation 칩·런처 뷰 공용
+                        로 임베드(헤더 없음, iframe 만). src 에 ?theme=<현재> 1회 부착(untrack,
+                        라이브 변경은 BroadcastChannel("app:theme")). open_curation 칩·런처 뷰 공용
   ExtensionMenu.svelte  TopBar 패널-열기 버튼 옆 caret 드롭다운 - ui.extensions(/api/extensions) 나열,
                         고르면 openExtensionPanel(tool)로 확장을 패널에 휘발 뷰로 연다(ModelPicker 패턴)
   ChartCell.svelte      단일 ECharts 인스턴스 자가 관리 - onMount init·onDestroy dispose·ResizeObserver

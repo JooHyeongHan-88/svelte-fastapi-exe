@@ -201,6 +201,7 @@ function _resultUrlToRel(src) {
 /** 패널 닫기 (칩은 메시지에 그대로 — 다시 클릭하면 열림). */
 export function closeArtifactPanel() {
   ui.artifactPanelOpen = false;
+  ui.artifactMaximized = false; // 최대화 상태로 닫혔다 다시 열릴 때 일반 패널로 복귀
   saveArtifactPanelOpen(false);
 }
 
@@ -208,6 +209,11 @@ export function closeArtifactPanel() {
 export function toggleArtifactPanel() {
   ui.artifactPanelOpen = !ui.artifactPanelOpen;
   saveArtifactPanelOpen(ui.artifactPanelOpen);
+}
+
+/** 패널 최대화 토글 (본문을 뷰포트 전체로 확대 ↔ 일반 패널). */
+export function toggleArtifactMaximize() {
+  ui.artifactMaximized = !ui.artifactMaximized;
 }
 
 /**

@@ -113,13 +113,14 @@ if WEB_DIR.exists():
 |---|---|
 | extension 칩 인식 | 프론트 `chatActions.svelte.js` 의 `_ARTIFACT_TOOL_NAMES` 에 `open_curation`, `_ARTIFACT_KINDS` 에 `extension` 등록 -> 칩 자동 생성·패널 자동 오픈 |
 | 패널 iframe 임베드 | `ArtifactPanel` 의 kind 분기가 `ArtifactExtension` 로 `<iframe src=payload.src>` 렌더. evaluator `vite base="/ext/evaluator/"` 라 iframe 내 에셋·`/api/ext` 호출이 same-origin -> Origin 가드 통과 |
-| '새 탭' 버튼 | `ArtifactExtension` 헤더의 버튼이 `window.open(payload.src, "_blank", "noopener,noreferrer")` 로 별도 창 |
+| 테마 동기화 | `ArtifactExtension` 이 iframe src 에 `?theme=<현재>` 1회 부착(비반응 — untrack). 라이브 변경은 호스트 `setTheme` 가 `BroadcastChannel("app:theme")` 로 방송, 확장이 `data-theme` 적용(iframe 은 부모 CSS 변수 미상속) |
+| '최대화' 버튼 | 패널 헤더의 패널-레벨 버튼(`ArtifactPanel`, 모든 kind 공용)이 헤더·탭을 숨기고 본문을 뷰포트 전체로 확대. 복귀는 상단 hover 복귀 버튼(`window.open` 새 탭은 폐지) |
 | 영속 | 칩이 메시지(`artifactChips`)에 임베드되어 localStorage 로 영속 - 세션 재진입 후에도 같은 번들로 iframe 복원 |
 | 폴더 삭제 시 | SKILL 이 `open_curation` 을 호출하지 않으므로 무해(no-op) |
 
 > iframe 임베드로 여는 이유: 데스크탑 앱은 채팅이 곧 전체 창이라 같은 탭 이동 시 세션이 소실되고,
 > 새 탭은 맥락을 끊는다. same-origin iframe 은 격리된 빌드 SPA 를 그대로 재사용하면서 패널 안에서
-> 보게 한다. 별도 창이 필요하면 헤더 '새 탭' 버튼을 쓴다.
+> 보게 한다. 더 크게 보려면 패널 헤더 '최대화' 버튼으로 본문을 뷰포트 전체로 키운다.
 
 ---
 

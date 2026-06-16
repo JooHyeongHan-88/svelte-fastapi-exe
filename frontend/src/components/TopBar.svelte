@@ -1,6 +1,6 @@
 <script>
   import { ui, activeSession } from "../lib/state.svelte.js";
-  import { toggleSidebar, renameSession } from "../lib/chatActions.svelte.js";
+  import { toggleSidebar, toggleSidebarCollapsed, renameSession } from "../lib/chatActions.svelte.js";
   import { toggleArtifactPanel } from "../lib/artifactActions.svelte.js";
   import ExtensionMenu from "./ExtensionMenu.svelte";
 
@@ -40,6 +40,16 @@
 </script>
 
 <header class="topbar">
+  {#if ui.sidebarCollapsed}
+    <!-- 데스크탑 전용 펼치기 버튼 — 사이드바가 접혀 있을 때만 노출 -->
+    <button class="sidebar-expand" onclick={toggleSidebarCollapsed} title="사이드바 펼치기" aria-label="사이드바 펼치기">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d="m13 10 2 2-2 2" />
+      </svg>
+    </button>
+  {/if}
   <button class="menu" onclick={toggleSidebar} aria-label="사이드바">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 12h18" />
@@ -107,6 +117,24 @@
   }
 
   .menu:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  /* 데스크탑 전용 사이드바 펼치기 버튼 (접힘 상태에서만 렌더됨) */
+  .sidebar-expand {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--fg-muted);
+    flex-shrink: 0;
+    transition: background var(--dur-fast), color var(--dur-fast);
+  }
+
+  .sidebar-expand:hover {
     background: var(--bg-hover);
     color: var(--fg);
   }
@@ -185,6 +213,10 @@
   @media (max-width: 768px) {
     .menu {
       display: inline-flex;
+    }
+
+    .sidebar-expand {
+      display: none; /* 모바일은 펼치기 대신 햄버거(.menu) off-canvas */
     }
   }
 </style>

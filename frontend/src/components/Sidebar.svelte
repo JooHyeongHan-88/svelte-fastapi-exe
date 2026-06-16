@@ -1,6 +1,11 @@
 <script>
   import { ui } from "../lib/state.svelte.js";
-  import { createSession, toggleTheme, toggleSidebar } from "../lib/chatActions.svelte.js";
+  import {
+    createSession,
+    toggleTheme,
+    toggleSidebar,
+    toggleSidebarCollapsed,
+  } from "../lib/chatActions.svelte.js";
   import { openSettings } from "../lib/settingsActions.svelte.js";
   import { relativeTimeBucket, BUCKET_ORDER } from "../lib/format.js";
   import { saveSidebarWidth, SIDEBAR_WIDTH_BOUNDS } from "../lib/storage.js";
@@ -56,8 +61,9 @@
 <aside
   class="sidebar"
   class:open={ui.sidebarOpen}
+  class:collapsed={ui.sidebarCollapsed}
   class:resizing
-  style="width: {ui.sidebarWidth}px"
+  style="width: {ui.sidebarCollapsed ? 0 : ui.sidebarWidth}px"
 >
   <!-- 우측 가장자리 드래그 핸들 -->
   <div
@@ -80,6 +86,14 @@
         {/if}
       </div>
     </div>
+    <!-- 데스크탑 전용 접기 버튼 (사이드바 완전 숨김). 모바일은 아래 .mobile-close 사용. -->
+    <button class="icon-btn collapse-btn" onclick={toggleSidebarCollapsed} title="사이드바 접기" aria-label="사이드바 접기">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d="m15 10-2 2 2 2" />
+      </svg>
+    </button>
     <button class="icon-btn mobile-close" onclick={toggleSidebar} aria-label="사이드바 닫기">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 6 6 18" />
@@ -151,7 +165,7 @@
 
 <style>
   .sidebar {
-    /* width 는 ui.sidebarWidth 로 동적 지정 */
+    /* width 는 ui.sidebarWidth 로 동적 지정 (접힘 시 0) */
     background: var(--bg-elevated);
     border-right: 1px solid var(--border);
     display: flex;
@@ -159,11 +173,24 @@
     height: 100%;
     flex-shrink: 0;
     position: relative;
+    transition: width var(--dur-slow) ease;
   }
 
   .sidebar.resizing {
     user-select: none;
     cursor: ew-resize;
+    transition: none; /* 드래그 중에는 폭 전환 애니메이션 끔 */
+  }
+
+  /* 완전 숨김 — 폭 0 + 내용 클립. 채팅(main flex:1)이 빈 폭을 흡수한다. */
+  .sidebar.collapsed {
+    overflow: hidden;
+    border-right: none;
+    min-width: 0;
+  }
+
+  .sidebar.collapsed .resize-handle {
+    display: none;
   }
 
   .resize-handle {
@@ -228,6 +255,22 @@
   }
 
   .mobile-close:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  /* 데스크탑 전용 접기 버튼 (모바일에선 .mobile-close 가 대신 노출) */
+  .collapse-btn {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    color: var(--fg-muted);
+    align-items: center;
+    justify-content: center;
+  }
+
+  .collapse-btn:hover {
     background: var(--bg-hover);
     color: var(--fg);
   }
@@ -349,6 +392,10 @@
 
     .mobile-close {
       display: inline-flex;
+    }
+
+    .collapse-btn {
+      display: none; /* 모바일은 접기 대신 off-canvas(.mobile-close) */
     }
 
     .backdrop {

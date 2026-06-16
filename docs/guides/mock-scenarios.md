@@ -39,7 +39,7 @@ EXE 모드: 설정 UI 에서 Provider 드롭다운을 `mock` 으로 변경.
 | **E** | `전체 분석 보고서`, `종합 보고서` | Case 3 × 2단 체이닝 | 오케스트레이터 `TodoProgress(2)`, `AgentTrail` 칩 2개, sub 내 위젯들, `ArtifactChart`(차트 7개 페이지네이션) + `ArtifactMarkdown` + `ArtifactImage`(이미지 10장 갤러리) |
 | **F** | `병렬 분석`, `동시 분석`, `parallel` | `call_sub_agents_parallel`(analyst ∥ writer 동시) | `AgentTrail` 칩 2개가 **동시에** running → 인터리브 진행, dispatch_id 라우팅, 단일 통합 tool_result → 최종 통합 보고 |
 | **G** | `이전 결과`, `지난 분석`, `예전 데이터`, `아까 저장` | 직접 실행 (오케스트레이터) | `list_artifacts`→`load_artifact`→`exec_code` 읽기 방향 체인. **D 를 먼저 실행**해 디스크에 산출물이 있는 상태를 전제. parquet 없으면 안내 메시지로 graceful 종료 |
-| **H** | `순위 검토`, `후보 큐레이션`, `검토 큐레이션`, `큐레이션 도구` | 직접 실행 (오케스트레이터) | `exec_code`(후보)→`save_artifact`(parquet)→`open_curation` 핸드오프. extension 칩 → 우측 패널에 `/ext/evaluator/?bundle=` iframe 자동 임베드 · 패널 '새 탭' 버튼 · `rank_review` SKILL 의 큐레이션 핸드오프 계약 |
+| **H** | `순위 검토`, `후보 큐레이션`, `검토 큐레이션`, `큐레이션 도구` | 직접 실행 (오케스트레이터) | `exec_code`(후보)→`save_artifact`(parquet)→`open_curation` 핸드오프. extension 칩 → 우측 패널에 `/ext/evaluator/?bundle=` iframe 자동 임베드 · 패널 '최대화' 버튼 · `rank_review` SKILL 의 큐레이션 핸드오프 계약 |
 
 ---
 
@@ -196,7 +196,7 @@ parquet 산출물이 없으면 "먼저 분석을 실행하라" 는 안내로 gra
   턴 3  → save_artifact tool_result 에서 'result/...parquet' 경로 파싱
         → ToolCallEvent(open_curation, tool="evaluator", sources=[<파싱경로>],
                         mapping={select/sort/x/y/legend/desc})
-  턴 4  → DeltaEvent(패널에 도구가 바로 열렸음을 안내 + '새 탭' 버튼 안내)
+  턴 4  → DeltaEvent(패널에 도구가 바로 열렸음을 안내 + '최대화' 버튼 안내)
 ```
 
 `open_curation` 은 번들 스펙(`evaluator.bundle.json`)을 턴 슬롯에 쓰고
@@ -206,7 +206,7 @@ parquet 산출물이 없으면 "먼저 분석을 실행하라" 는 안내로 gra
 `_ARTIFACT_KINDS` 에 `open_curation`·`extension` 등록).
 
 검증 포인트: ① 도구가 우측 패널에 **iframe 으로 자동 임베드**되는지(별도 탭 없이), ②
-패널 헤더의 **'새 탭'** 버튼이 `/ext/evaluator/?bundle=<URL인코딩>` 을 별도 창으로 여는지,
+패널 헤더의 **'최대화'** 버튼이 본문을 뷰포트 전체로 키우고 상단 hover 복귀 버튼으로 돌아오는지,
 ③ iframe 의 evaluator 가 번들의 `sources[0]`+`mapping` 으로 데이터를 로드하는지, ④ 세션을
 나갔다 다시 들어와도 칩이 패널에 복원되는지(메시지 영속). `rank_review` SKILL
 (`SKILLS/rank_review.md`)이 실 LLM 환경에서 따르는 핸드오프 계약과 동일한 흐름이다.

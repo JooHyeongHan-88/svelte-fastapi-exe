@@ -12,7 +12,7 @@
     onopen = null,
   } = $props();
 
-  const PAGE_SIZE = 6;
+  const PAGE_SIZE = 12;
 
   let total = $derived(charts.length);
   let totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));

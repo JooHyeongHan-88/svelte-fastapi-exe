@@ -496,7 +496,7 @@ async def _scenario_G_artifact_reuse(
 # Scenario H — 큐레이션 핸드오프 (rank_review SKILL → open_curation)
 # =============================================================================
 # 오케스트레이터 직접 실행 (sub-agent 없음). 후보 parquet 를 만든 뒤 open_curation
-# 으로 evaluator 진입 카드를 띄운다 — markdown 칩 재사용 + 새 탭 ?bundle= 링크 검증.
+# 으로 evaluator 진입 카드를 띄운다 — extension 칩 + ?bundle= iframe 자동 임베드 검증.
 
 _H_EXEC_PREFIX = "mock-H-exec-"
 _H_PARQUET_PREFIX = "mock-H-parquet-"
@@ -621,7 +621,7 @@ async def _scenario_H_curation(
     reply = (
         "검토 후보 데이터를 준비하고 **우측 패널에서 evaluator 큐레이션 도구를 바로 "
         "열었습니다**. 패널에서 품목을 직접 검토·선별·내보내기 할 수 있습니다.\n\n"
-        "> 패널 헤더의 **'새 탭'** 버튼으로 별도 창에서도 열 수 있고, 소스 선정이 "
+        "> 패널 헤더의 **'최대화'** 버튼으로 본문을 화면 전체로 키울 수 있고, 소스 선정이 "
         "잘못됐다면 도구 안에서 후보를 더하거나 빼며 교정할 수 있습니다."
     )
     for ch in reply:

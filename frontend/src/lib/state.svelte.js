@@ -57,6 +57,9 @@ export const ui = $state({
   // 산출물 payload 는 메시지 안 (message.artifactChips[].payload) 에 영속.
   activeArtifactId: /** @type {string|null} */ (null),
   artifactPanelOpen: false,
+  // 패널 본문을 뷰포트 전체로 확대(헤더·탭·사이드바·채팅 모두 덮음). 휘발 상태 —
+  // 패널을 닫으면 리셋한다. 복귀는 최대화 뷰 상단 hover 버튼으로.
+  artifactMaximized: false,
 
   // 확장(extensions) 런처 — 패널 열기 버튼의 드롭다운이 띄울 수 있는 확장 카탈로그.
   // GET /api/extensions 결과를 부팅 시 1회 캐시한다.
@@ -78,6 +81,10 @@ export const ui = $state({
 
   // 사용자가 마우스 드래그로 조절한 좌측 사이드바 너비 (px). initApp 에서 로드.
   sidebarWidth: 264,
+
+  // 데스크탑에서 사이드바를 완전히 숨겼는지 여부 (Claude Desktop 류 접기). initApp 에서
+  // 로드·영속. sidebarOpen(모바일 off-canvas)과는 별개 개념이다.
+  sidebarCollapsed: false,
 
   // 아티팩트 라이트박스 — 이미지·차트 셀 클릭 시 리사이즈 가능한 모달로 확대 표시.
   // items 는 이미지 전용. 차트는 chartCache 를 통해 읽어 필터 반영을 단일 소스로 관리.

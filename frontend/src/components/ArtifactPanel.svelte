@@ -3,6 +3,7 @@
   import { ui } from "../lib/state.svelte.js";
   import {
     closeArtifactPanel,
+    toggleArtifactMaximize,
     openArtifact,
     listSessionArtifacts,
     artifactRefPath,
@@ -52,6 +53,26 @@
 
   onDestroy(() => clearTimeout(revealFailedTimer));
 
+  // 최대화 뷰의 떠 있는 복귀 버튼 — 평소엔 옅게(idle), hover 시 또렷하게. 최대화 진입
+  // 직후 잠시 또렷하게 띄워 발견성을 준다(Chrome F11 의 상단 hint 와 유사). 본문이
+  // iframe(확장)일 수 있어 부모가 마우스 위치를 알 수 없으므로, 화면을 가리는 hover
+  // 영역 대신 작은 버튼 자체만 항상 클릭 가능하게 둔다(idle 투명도로 hover 느낌 전달).
+  const RESTORE_HINT_MS = 2500;
+  let restoreHint = $state(false);
+  let restoreHintTimer = null;
+
+  $effect(() => {
+    clearTimeout(restoreHintTimer);
+    if (ui.artifactMaximized) {
+      restoreHint = true;
+      restoreHintTimer = setTimeout(() => (restoreHint = false), RESTORE_HINT_MS);
+    } else {
+      restoreHint = false;
+    }
+  });
+
+  onDestroy(() => clearTimeout(restoreHintTimer));
+
   // 드래그 리사이즈 — 화면 우측에서 좌측으로 갈수록 너비 증가.
   let resizing = $state(false);
 
@@ -87,6 +108,7 @@
   <aside
     class="artifact-panel"
     class:resizing
+    class:maximized={ui.artifactMaximized}
     style="width: {ui.artifactWidth}px"
     aria-label="아티팩트 패널"
   >
@@ -143,6 +165,25 @@
             </svg>
           </button>
         {/if}
+        <button
+          class="maximize-btn"
+          onclick={toggleArtifactMaximize}
+          title="최대화 (본문을 화면 전체로)"
+          aria-label="패널 최대화"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M6 2H2v4M14 6V2h-4M10 14h4v-4M2 10v4h4" />
+          </svg>
+        </button>
         <button class="close-btn" onclick={closeArtifactPanel} aria-label="패널 닫기">
           <svg
             width="16"
@@ -218,6 +259,32 @@
         <div class="empty">아티팩트가 없습니다.</div>
       {/if}
     </div>
+
+    <!-- 최대화 시 헤더가 사라지므로, 본문 위에 떠 있는 복귀 버튼을 둔다. 평소 옅게,
+         hover/진입직후 또렷하게. -->
+    {#if ui.artifactMaximized}
+      <button
+        class="restore-btn"
+        class:hint={restoreHint}
+        onclick={toggleArtifactMaximize}
+        title="패널 모드로 복귀"
+        aria-label="패널 모드로 복귀"
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M2 6h4V2M14 10h-4v4M10 2v4h4M6 14v-4H2" />
+        </svg>
+        패널로 복귀
+      </button>
+    {/if}
   </aside>
 {/if}
 
@@ -239,6 +306,51 @@
   .artifact-panel.resizing {
     user-select: none;
     cursor: ew-resize;
+  }
+
+  /* 최대화 — 사이드바·채팅까지 덮어 뷰포트 전체 사용. 라이트박스(z 9999)·모달 아래. */
+  .artifact-panel.maximized {
+    position: fixed;
+    inset: 0;
+    width: 100% !important;
+    z-index: 60;
+    border-left: none;
+    box-shadow: none;
+  }
+
+  /* 최대화 시 패널 크롬(헤더·탭·리사이즈 핸들) 숨김 — 본문만 전체 화면. */
+  .artifact-panel.maximized .resize-handle,
+  .artifact-panel.maximized .panel-header,
+  .artifact-panel.maximized .tab-bar {
+    display: none;
+  }
+
+  /* 떠 있는 복귀 버튼 — 본문 위 우상단. 평소 옅게, hover/진입 hint 시 또렷하게. */
+  .restore-btn {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    z-index: 62;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    opacity: 0.3;
+    transition: opacity var(--dur-slow), background var(--dur-fast);
+  }
+
+  .restore-btn:hover,
+  .restore-btn.hint {
+    opacity: 1;
+    background: var(--bg-hover);
   }
 
   .resize-handle {
@@ -358,6 +470,26 @@
     }
   }
 
+  .maximize-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+    transition: background var(--dur-fast), color var(--dur-fast);
+  }
+
+  .maximize-btn:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
   .close-btn {
     display: flex;
     align-items: center;
@@ -371,7 +503,6 @@
     border-radius: var(--radius-sm);
     flex-shrink: 0;
     transition: background var(--dur-fast), color var(--dur-fast);
-    margin-left: 8px;
   }
 
   .close-btn:hover {

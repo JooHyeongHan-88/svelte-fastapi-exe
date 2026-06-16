@@ -35,29 +35,11 @@
         status = "error";
       });
   });
-
-  function openInNewTab() {
-    window.open(payload.src, "_blank", "noopener,noreferrer");
-  }
 </script>
 
 <div class="artifact-md-wrap">
   <div class="toolbar">
     <span class="md-label">{payload?.title || "마크다운 문서"}</span>
-    <button class="open-btn" onclick={openInNewTab} title="새 탭에서 열기">
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-      >
-        <path d="M6 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3" />
-        <path d="M10 2h4v4M14 2 8 8" />
-      </svg>
-      새 탭
-    </button>
   </div>
 
   <div class="md-body">
@@ -97,27 +79,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 70%;
-  }
-
-  .open-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--accent);
-    background: var(--accent-soft);
-    border: 1px solid var(--accent-border);
-    border-radius: var(--radius-sm);
-    padding: 3px 9px;
-    cursor: pointer;
-    transition: background var(--dur-fast);
-    flex-shrink: 0;
-  }
-
-  .open-btn:hover {
-    background: var(--accent-soft-strong);
+    max-width: 100%;
   }
 
   .md-body {

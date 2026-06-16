@@ -640,25 +640,19 @@
     status = null;
   }
 
-  // ── 일괄 선택 (현재 가시 집합 filteredOrder 대상) ────────────────────
-  function selectAllFiltered() {
+  // ── 일괄 선택 (차트로 표시 선택한 항목 displaySelection 대상) ────────────
+  // 차트로 본(표시 선택) 항목들을 내보내기 선택(체크)에 포함/제외한다.
+  function includeDisplayed() {
+    if (displaySelection.length === 0) return;
     const set = new Set(selected);
-    for (const k of filteredOrder) set.add(k);
+    for (const k of displaySelection) set.add(k);
     selected = [...set];
     status = null;
   }
-  function clearAllFiltered() {
-    const remove = new Set(filteredOrder);
+  function excludeDisplayed() {
+    if (displaySelection.length === 0) return;
+    const remove = new Set(displaySelection);
     selected = selected.filter((k) => !remove.has(k));
-    status = null;
-  }
-  function invertFiltered() {
-    const set = new Set(selected);
-    for (const k of filteredOrder) {
-      if (set.has(k)) set.delete(k);
-      else set.add(k);
-    }
-    selected = [...set];
     status = null;
   }
 
@@ -1009,9 +1003,8 @@
               {#if filteredOrder.length !== items.length}{filteredOrder.length}개 표시 · {/if}{visibleSelectedCount}개 선택
             </span>
             <div class="bulk">
-              <button class="mini-btn" onclick={selectAllFiltered} title="표시된 항목 전체 선택">전체</button>
-              <button class="mini-btn" onclick={clearAllFiltered} title="표시된 항목 선택 해제">해제</button>
-              <button class="mini-btn" onclick={invertFiltered} title="표시된 항목 선택 반전">반전</button>
+              <button class="mini-btn" onclick={includeDisplayed} disabled={displaySelection.length === 0} title="차트로 표시한 항목을 선택에 포함">포함</button>
+              <button class="mini-btn" onclick={excludeDisplayed} disabled={displaySelection.length === 0} title="차트로 표시한 항목을 선택에서 제외">제외</button>
             </div>
           </div>
           <ul class="list">
@@ -1659,9 +1652,13 @@
     font-weight: 600;
     cursor: pointer;
   }
-  .mini-btn:hover {
+  .mini-btn:hover:not(:disabled) {
     border-color: var(--accent-border);
     color: var(--accent);
+  }
+  .mini-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   .empty-row {
     padding: 16px 12px;
