@@ -50,6 +50,7 @@ from agent.registries.tools import (
     SUB_AGENTS_PARALLEL_DISPATCH,
     ToolRegistry,
 )
+from agent.providers.factory import LLMProvider
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
 
@@ -77,6 +78,7 @@ from agent.harness.state.balancing import (
     _balance_all_unresolved,
     _balance_unresolved_tool_calls,
 )
+from agent.harness.state.pending import clear_all_pending
 from agent.harness.state.todo import _TERMINAL_STATUSES, _all_todos_terminal
 
 logger = logging.getLogger(__name__)
@@ -96,7 +98,7 @@ async def run_turn(
     skill_registry: SkillRegistry,
     prompt_registry: PromptRegistry,
     registry: ToolRegistry,
-    provider,
+    provider: LLMProvider,
     max_iterations: int,
     agent_registry: AgentRegistry | None = None,
     max_agent_calls: int = 10,
@@ -159,44 +161,22 @@ async def run_turn(
         has_agents = agent_registry is not None and len(agent_registry.list_meta()) > 0
 
         # 사용자가 SettingsModal 에서 작성한 추가 지침은 PROMPTS/ 합성 결과 뒤에 한 번만
-        # 덧붙인다. 합성 순서는 base → safety → tools_guide → orchestrator → 사용자 지침
-        # 이 된다. orchestrator 보다 뒤에 오지만 LLM 은 prompt 전체를 한 번에 학습하므로
+        # 덧붙인다. orchestrator 보다 뒤에 오지만 LLM 은 prompt 전체를 한 번에 학습하므로
         # 라우팅 규칙이 사용자 지침에 의해 가려지지 않는다.
         cleaned_user_prompt = user_prompt.strip()
         user_prompt_section = (
             f"\n\n# 사용자 지침\n{cleaned_user_prompt}" if cleaned_user_prompt else ""
         )
-
-        # activate_skill 이 호출될 때 새 system prompt 를 동적 재조립하기 위한 클로저.
-        # base prompt 와 state 는 이미 이번 턴 시점으로 확정됐으므로 클로저에 캡처해도 안전.
-        if has_agents:
-            _base_prompt = (
-                prompt_registry.compose(include_orchestrator=True) + user_prompt_section
-            )
-
-            def _recompose(updated_skills: list[Skill]) -> str:
-                return _compose_orchestrator_system_prompt(
-                    base=_base_prompt,
-                    skills=updated_skills,
-                    state=state,
-                    agent_registry=agent_registry,  # type: ignore[arg-type]
-                    skill_registry=skill_registry,
-                )
-
-            composed_system = _recompose(skills)
-        else:
-            # 하위호환 — AGENTS 가 없으면 orchestrator.md 제외하고 단층 동작.
-            _base_prompt = (
-                prompt_registry.compose(include_orchestrator=False)
-                + user_prompt_section
-            )
-
-            def _recompose(updated_skills: list[Skill]) -> str:  # type: ignore[misc]
-                return _compose_system_prompt(
-                    _base_prompt, updated_skills, state, skill_registry
-                )
-
-            composed_system = _recompose(skills)
+        # activate_skill 이 SKILL 을 켜면 system prompt 를 동적 재조립하는 클로저.
+        _recompose = _make_system_prompt_composer(
+            has_agents=has_agents,
+            prompt_registry=prompt_registry,
+            agent_registry=agent_registry,
+            skill_registry=skill_registry,
+            state=state,
+            user_prompt_section=user_prompt_section,
+        )
+        composed_system = _recompose(skills)
 
         # pending_question 은 직전 턴 ask_user 의 잔재 — 시스템 프롬프트에 1회 주입됐으면
         # 즉시 클리어해야 같은 질문이 두 턴 연속 컨텍스트에 남지 않는다.
@@ -214,19 +194,9 @@ async def run_turn(
         if state.todo_list:
             yield TodoUpdateEvent(todos=list(state.todo_list))
 
-        # 오케스트레이터: COMPLETE_SUB_AGENT 는 서브 에이전트 전용이라 숨김.
-        # AGENTS 없으면 위임 도구(순차·병렬)도 제거.
-        _delegation_tools = {SUB_AGENT_DISPATCH, SUB_AGENTS_PARALLEL_DISPATCH}
-        orchestrator_specs = [
-            s
-            for s in registry.specs()
-            if s.name != COMPLETE_SUB_AGENT
-            and (has_agents or s.name not in _delegation_tools)
-        ]
-        # api_refs 가 있는 SKILL 이 활성화되면 infrastructure tools 를 자동 노출한다 —
-        # SKILL 본문에 명시하지 않아도 LLM 이 자체 plan 에 활용 가능.
-        if _skills_require_runtime_tools(skills):
-            orchestrator_specs = _inject_runtime_tools(orchestrator_specs, registry)
+        orchestrator_specs = _build_orchestrator_specs(
+            registry, skills, has_agents=has_agents
+        )
 
         budget = TurnBudget(max_calls=max_agent_calls)
 
@@ -257,11 +227,7 @@ async def run_turn(
         # F11: AskUser 없이 턴이 완료됐으면 pending_tool/missing_slots 는 사용되지 않은
         # 잔재다 — 다음 턴으로 넘기지 않고 클리어해 오염을 방지한다.
         if not ask_user_occurred:
-            state.pending_tool = None
-            state.pending_args = {}
-            state.missing_slots = {}
-            state.pending_sub_agent = None
-            state.pending_sub_task = None
+            clear_all_pending(state)
 
         store.append(client_id, *turn_messages)
         turn_persisted = True
@@ -270,26 +236,115 @@ async def run_turn(
 
     except Exception as exc:  # noqa: BLE001 — 사용자에게 에러 이벤트로 변환해 전달
         logger.exception("harness run_turn failed")
-        # 실패한 턴도 영속한다 — 사용자 메시지까지 증발하면 다음 턴 LLM 컨텍스트가
-        # 끊긴다. 미해결 tool_call 쌍은 영속 전에 보정(OpenAI 400 방지)하고,
-        # mid-mutation pending 은 F11 과 동일하게 클리어한다. 영속 실패가 에러
-        # 알림(ErrorEvent/DoneEvent)을 막으면 안 되므로 best-effort 로 감싼다.
-        try:
-            state.pending_tool = None
-            state.pending_args = {}
-            state.missing_slots = {}
-            state.pending_sub_agent = None
-            state.pending_sub_task = None
-            if not turn_persisted:
-                _balance_all_unresolved(turn_messages)
-                store.append(client_id, *turn_messages)
-            state_store.set(client_id, state)
-        except Exception:  # noqa: BLE001 — 영속은 best-effort, 이중 실패는 로그만
-            logger.exception("run_turn 실패 턴 영속 중 추가 오류 (best-effort 포기)")
+        _persist_failed_turn(
+            client_id=client_id,
+            turn_messages=turn_messages,
+            state=state,
+            store=store,
+            state_store=state_store,
+            turn_persisted=turn_persisted,
+        )
         # F12: str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 타입만 전달.
         safe = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
         yield ErrorEvent(message=safe)
         yield DoneEvent()
+
+
+# ---------------------------------------------------------------------------
+# run_turn 준비 헬퍼 — prompt 조립 클로저 · 도구 스펙 선별 · 실패 턴 영속
+# ---------------------------------------------------------------------------
+
+
+def _make_system_prompt_composer(
+    *,
+    has_agents: bool,
+    prompt_registry: PromptRegistry,
+    agent_registry: AgentRegistry | None,
+    skill_registry: SkillRegistry,
+    state: AgentState,
+    user_prompt_section: str,
+) -> Callable[[list[Skill]], str]:
+    """activate_skill 시 system prompt 를 동적 재조립하는 클로저를 만든다.
+
+    base prompt 와 state 는 이번 턴 시점 확정값이라 클로저에 캡처해도 안전하다.
+    has_agents 면 오케스트레이터(AGENTS 카탈로그 포함) prompt, 아니면 하위호환
+    단층 prompt(orchestrator.md 제외)를 합성한다.
+
+    Args:
+        has_agents: AGENTS 카탈로그 보유 여부 — 오케스트레이터/단층 분기.
+        user_prompt_section: SettingsModal 사용자 지침 (base 뒤에 덧붙음, 빈 문자열 가능).
+
+    Returns:
+        활성 SKILL 목록을 받아 완성된 system prompt 문자열을 돌려주는 클로저.
+    """
+    if has_agents:
+        base = prompt_registry.compose(include_orchestrator=True) + user_prompt_section
+
+        def recompose(updated_skills: list[Skill]) -> str:
+            return _compose_orchestrator_system_prompt(
+                base=base,
+                skills=updated_skills,
+                state=state,
+                agent_registry=agent_registry,  # type: ignore[arg-type]
+                skill_registry=skill_registry,
+            )
+    else:
+        base = prompt_registry.compose(include_orchestrator=False) + user_prompt_section
+
+        def recompose(updated_skills: list[Skill]) -> str:
+            return _compose_system_prompt(base, updated_skills, state, skill_registry)
+
+    return recompose
+
+
+def _build_orchestrator_specs(
+    registry: ToolRegistry, skills: list[Skill], *, has_agents: bool
+) -> list[ToolSpec]:
+    """오케스트레이터 provider 에 노출할 도구 스펙을 선별한다.
+
+    COMPLETE_SUB_AGENT 는 서브 에이전트 전용이라 숨기고, AGENTS 가 없으면 위임
+    도구(순차·병렬)도 제거한다. api_refs 를 가진 SKILL 이 활성화되면 SKILL 본문에
+    명시하지 않아도 infrastructure 도구를 자동 주입해 LLM 이 자체 plan 에 쓰게 한다.
+    """
+    delegation_tools = {SUB_AGENT_DISPATCH, SUB_AGENTS_PARALLEL_DISPATCH}
+    specs = [
+        s
+        for s in registry.specs()
+        if s.name != COMPLETE_SUB_AGENT
+        and (has_agents or s.name not in delegation_tools)
+    ]
+    if _skills_require_runtime_tools(skills):
+        specs = _inject_runtime_tools(specs, registry)
+    return specs
+
+
+def _persist_failed_turn(
+    *,
+    client_id: str,
+    turn_messages: list[Message],
+    state: AgentState,
+    store: ConversationStore,
+    state_store: AgentStateStore,
+    turn_persisted: bool,
+) -> None:
+    """run_turn 예외 경로의 best-effort 영속 (R1).
+
+    실패한 턴도 영속한다 — 사용자 메시지까지 증발하면 다음 턴 LLM 컨텍스트가
+    끊긴다. 미해결 tool_call 쌍은 영속 전에 보정(OpenAI 400 방지)하고, mid-mutation
+    pending 은 F11 과 동일하게 클리어한다. 영속 실패가 호출부의 에러 알림
+    (ErrorEvent/DoneEvent)을 막으면 안 되므로 모든 예외를 내부에서 삼킨다.
+
+    Args:
+        turn_persisted: 성공 경로 append 가 이미 끝났으면 True — 중복 영속 방지.
+    """
+    try:
+        clear_all_pending(state)
+        if not turn_persisted:
+            _balance_all_unresolved(turn_messages)
+            store.append(client_id, *turn_messages)
+        state_store.set(client_id, state)
+    except Exception:  # noqa: BLE001 — 영속은 best-effort, 이중 실패는 로그만
+        logger.exception("run_turn 실패 턴 영속 중 추가 오류 (best-effort 포기)")
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +357,7 @@ async def _run_agent_turn(
     agent_id: str,
     messages: list[Message],
     turn_messages: list[Message] | None,
-    provider,
+    provider: LLMProvider,
     registry: ToolRegistry,
     sub_specs: list[ToolSpec],
     agent_registry: AgentRegistry | None,
@@ -375,7 +430,6 @@ async def _run_agent_turn(
     wind_down_notified = False
 
     for iteration in range(max_iterations):
-        # R7: 남은 호출 여유가 임계 이하로 떨어지면 hard-cut 전에 마무리를 지시한다.
         wind_down_notified = _maybe_inject_wind_down(ctx, iteration, wind_down_notified)
 
         if not budget.try_consume():

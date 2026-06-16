@@ -22,7 +22,6 @@
 
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import Any
 
 from agent.config import MAX_PARALLEL_SUBAGENTS
 from agent.guard import SlotCheckResult, validate_tool_args
@@ -51,6 +50,7 @@ from agent.registries.tools import (
     SUB_AGENTS_PARALLEL_DISPATCH,
     ToolRegistry,
 )
+from agent.providers.factory import LLMProvider
 
 from agent.harness.budget import TurnBudget
 from agent.harness.dispatch.parallel import _dispatch_parallel_sub_agents
@@ -61,6 +61,7 @@ from agent.harness.state.loop_guard import (
     _call_signature,
     _record_invalid_call,
 )
+from agent.harness.state.pending import clear_pending_tool
 from agent.harness.state.todo import (
     _all_todos_terminal,
     _build_skill_complete_event,
@@ -88,7 +89,8 @@ class TurnContext:
     """
 
     agent_id: str
-    provider: Any  # astream(messages, tools) 덕타이핑 어댑터 — 코드베이스 전역 비-typed
+    # astream(messages, tools) 어댑터 — providers.factory 의 Protocol.
+    provider: LLMProvider
     registry: ToolRegistry
     agent_registry: AgentRegistry | None
     prompt_registry: PromptRegistry
@@ -233,12 +235,12 @@ async def _handle_malformed_args(
     )
 
 
-async def _handle_activate_skill(
-    ctx: TurnContext, call: ToolCall, outcome: CallOutcome
-) -> AsyncIterator[StreamEvent]:
-    """activate_skill — SKILL 카탈로그 의미 기반 활성화. turn-local active_skills 갱신."""
+def _activate_skills_in_context(ctx: TurnContext, skill_name: str) -> list[Skill]:
+    """skill_name 을 turn-local active_skills 에 추가하고 새로 활성화된 것만 반환한다.
+
+    이미 활성화됐거나 카탈로그에 없으면 빈 리스트 (호출부가 멱등 응답 분기에 사용).
+    """
     assert ctx.active_skills is not None  # 라우팅 조건 보장
-    skill_name = (call.arguments or {}).get("name", "").strip()
     existing_names = {s.meta.name for s in ctx.active_skills}
     newly_activated = (
         ctx.skill_registry.get_by_names([skill_name])
@@ -246,6 +248,15 @@ async def _handle_activate_skill(
         else []
     )
     ctx.active_skills.extend(newly_activated)
+    return newly_activated
+
+
+async def _handle_activate_skill(
+    ctx: TurnContext, call: ToolCall, outcome: CallOutcome
+) -> AsyncIterator[StreamEvent]:
+    """activate_skill — SKILL 카탈로그 의미 기반 활성화. turn-local active_skills 갱신."""
+    skill_name = (call.arguments or {}).get("name", "").strip()
+    newly_activated = _activate_skills_in_context(ctx, skill_name)
     if newly_activated and ctx.recompose_system is not None:
         ctx.messages[0] = Message(
             role="system", content=ctx.recompose_system(list(ctx.active_skills))
@@ -337,6 +348,21 @@ async def _handle_ask_user(
     outcome.interrupted = True
 
 
+def _clear_pending_sub_agent_on_success(ctx: TurnContext, call: ToolCall) -> None:
+    """위임이 성공 완료되면 그 에이전트에 걸린 pending 재위임 잔재를 비운다.
+
+    직전 턴 서브 에이전트가 슬롯 부족으로 중단됐을 때 걸어둔 pending_sub_agent 가
+    이번 위임으로 해소됐으면 다음 턴 system prompt 오염을 막는다.
+    """
+    if ctx.state is None:
+        return
+    dispatched_name = (call.arguments or {}).get("agent_name")
+    if ctx.state.pending_sub_agent == dispatched_name:
+        ctx.state.pending_sub_agent = None
+        ctx.state.pending_sub_task = None
+        ctx.state.missing_slots = {}
+
+
 async def _handle_sub_agent_dispatch(
     ctx: TurnContext, call: ToolCall, outcome: CallOutcome
 ) -> AsyncIterator[StreamEvent]:
@@ -378,14 +404,7 @@ async def _handle_sub_agent_dispatch(
         outcome.interrupted = True
         return
 
-    # 성공적 완료 — pending_sub_agent 초기화.
-    if ctx.state is not None:
-        dispatched_name = (call.arguments or {}).get("agent_name")
-        if ctx.state.pending_sub_agent == dispatched_name:
-            ctx.state.pending_sub_agent = None
-            ctx.state.pending_sub_task = None
-            ctx.state.missing_slots = {}
-
+    _clear_pending_sub_agent_on_success(ctx, call)
     _append_tool_result(ctx.messages, ctx.turn_messages, call, captured_summary)
     yield ToolResultEvent(tool_call_id=call.id, name=call.name, result=captured_summary)
 
@@ -433,29 +452,62 @@ async def _handle_parallel_dispatch(
 # ---------------------------------------------------------------------------
 
 
+def _loop_guard_denial(ctx: TurnContext, call: ToolCall) -> list[StreamEvent] | None:
+    """동일 시그니처 재호출이면 루프가드 이벤트, 처음 보는 호출이면 기록 후 None.
+
+    ``_guard_tool_args`` 와 같은 "통과면 None, 차단이면 yield 이벤트" 계약을 따른다.
+    R4: 시그니처는 ``result/`` 인자 파일 fingerprint 까지 포함해, 파일을 고쳐 쓴
+    뒤 같은 경로로 재호출하는 정당한 재시도는 차단하지 않는다.
+    """
+    call_sig = _call_signature(call)
+    if call_sig not in ctx.history_calls:
+        ctx.history_calls.add(call_sig)
+        return None
+    _append_tool_result(ctx.messages, ctx.turn_messages, call, _LOOP_GUARD_MESSAGE)
+    if ctx.state is not None and ctx.state.pending_tool == call.name:
+        clear_pending_tool(ctx.state)
+    return [
+        ToolResultEvent(
+            tool_call_id=call.id,
+            name=call.name,
+            result=_LOOP_GUARD_MESSAGE,
+            is_error=True,
+        )
+    ]
+
+
+async def _emit_post_tool_todo_events(
+    ctx: TurnContext, call: ToolCall, result_content: str, *, is_error: bool
+) -> AsyncIterator[StreamEvent]:
+    """도구 실행 직후 todo 상태 전이를 반영하고 pending 슬롯을 정리한다.
+
+    실행 중이던 todo 를 결과에 맞춰 종료시키고, 전원 terminal 이면 완료 통계까지 emit.
+    state 가 없는(서브 에이전트 등) 컨텍스트면 no-op.
+    """
+    if ctx.state is None:
+        return
+    todo_updated = _mark_running_todo_done(
+        ctx.state, call.name, result_content, is_error=is_error
+    )
+    if todo_updated:
+        yield TodoUpdateEvent(todos=list(ctx.state.todo_list))
+        if _all_todos_terminal(ctx.state):
+            yield _build_skill_complete_event(ctx.state)
+    if ctx.state.pending_tool == call.name:
+        clear_pending_tool(ctx.state)
+
+
 async def _handle_normal_tool(
     ctx: TurnContext, call: ToolCall, outcome: CallOutcome
 ) -> AsyncIterator[StreamEvent]:
     """sentinel 이 아닌 일반 등록 도구 — 검증·루프가드 통과 후 실행한다."""
     denial = _guard_tool_args(ctx, call, outcome)
+    if denial is None:
+        denial = _loop_guard_denial(ctx, call)
     if denial is not None:
         for ev in denial:
             yield ev
         return
-
-    call_sig = _call_signature(call)
-    if call_sig in ctx.history_calls:
-        result_content = _LOOP_GUARD_MESSAGE
-        _append_tool_result(ctx.messages, ctx.turn_messages, call, result_content)
-        yield ToolResultEvent(
-            tool_call_id=call.id, name=call.name, result=result_content, is_error=True
-        )
-        if ctx.state is not None and ctx.state.pending_tool == call.name:
-            ctx.state.pending_tool = None
-            ctx.state.pending_args = {}
-            ctx.state.missing_slots = {}
-        return
-    ctx.history_calls.add(call_sig)
 
     result = await _execute_tool(call, ctx.registry)
     _append_tool_result(ctx.messages, ctx.turn_messages, call, result.content)
@@ -467,18 +519,10 @@ async def _handle_normal_tool(
         is_error=result.is_error,
     )
 
-    if ctx.state is not None:
-        todo_updated = _mark_running_todo_done(
-            ctx.state, call.name, result.content, is_error=result.is_error
-        )
-        if todo_updated:
-            yield TodoUpdateEvent(todos=list(ctx.state.todo_list))
-            if _all_todos_terminal(ctx.state):
-                yield _build_skill_complete_event(ctx.state)
-        if ctx.state.pending_tool == call.name:
-            ctx.state.pending_tool = None
-            ctx.state.pending_args = {}
-            ctx.state.missing_slots = {}
+    async for ev in _emit_post_tool_todo_events(
+        ctx, call, result.content, is_error=result.is_error
+    ):
+        yield ev
 
 
 # ---------------------------------------------------------------------------
