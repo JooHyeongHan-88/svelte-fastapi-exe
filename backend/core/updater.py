@@ -18,7 +18,7 @@ from typing import Optional
 
 import httpx
 
-from core import browser
+from core import browser, config
 from core.version import APP_VERSION
 from core.config import (
     LATEST_JSON_URL,
@@ -27,6 +27,21 @@ from core.config import (
     UPDATE_CHECK_TIMEOUT,
     UPDATE_DOWNLOAD_TIMEOUT,
 )
+
+
+def _auth_headers() -> dict[str, str]:
+    """private GHE repo 읽기용 Authorization 헤더.
+
+    config.REPO_READ_TOKEN(읽기 전용 PAT)이 설정돼 있으면 GitHub 규약의
+    `Authorization: token <PAT>` 헤더를 반환한다. 비어 있으면 빈 dict 를 반환해
+    익명 GET(현행 Nexus·공개 저장소)으로 동작한다 — 토큰 도입 전까지 무중단.
+
+    Returns:
+        dict[str, str]: 토큰이 있으면 Authorization 헤더, 없으면 빈 dict.
+    """
+    if config.REPO_READ_TOKEN:
+        return {"Authorization": f"token {config.REPO_READ_TOKEN}"}
+    return {}
 
 
 # in-memory cache
@@ -94,6 +109,17 @@ def _validate_meta(meta: dict) -> Optional[str]:
 
 def check_latest(force: bool = False) -> dict:
     """latest.json 조회. 실패는 update_available=False 로 silently 반환."""
+    # QA 빌드는 자동 업데이트를 받지 않는다 — 네트워크 호출 없이 즉시 차단.
+    # QA EXE 는 prerelease 라 prod latest 포인터에도 안 잡히지만, 폴링 자체를 막아
+    # 검증 중인 빌드가 의도치 않게 교체되는 것을 방지한다.
+    if config.BUILD_CHANNEL == "qa":
+        return {
+            "current": APP_VERSION,
+            "latest": None,
+            "update_available": False,
+            "error": None,
+        }
+
     now = time.time()
 
     with _cache_lock:
@@ -104,8 +130,10 @@ def check_latest(force: bool = False) -> dict:
         return _build_check_response(cached)
 
     try:
-        with httpx.Client(timeout=UPDATE_CHECK_TIMEOUT) as client:
-            r = client.get(LATEST_JSON_URL)
+        with httpx.Client(
+            timeout=UPDATE_CHECK_TIMEOUT, follow_redirects=True
+        ) as client:
+            r = client.get(LATEST_JSON_URL, headers=_auth_headers())
             r.raise_for_status()
             meta = r.json()
     except Exception as e:
@@ -170,7 +198,9 @@ def _download(url: str, dest: Path, expected_size: int) -> None:
     )
 
     with httpx.Client(timeout=UPDATE_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-        with client.stream("GET", url) as r:
+        # GHE 에셋은 서명된 URL 로 302 redirect 된다. httpx 는 cross-host redirect 시
+        # Authorization 을 자동 제거하므로(서명 URL 은 토큰 불필요) 안전하다.
+        with client.stream("GET", url, headers=_auth_headers()) as r:
             r.raise_for_status()
             written = 0
 

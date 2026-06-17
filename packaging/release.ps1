@@ -5,25 +5,32 @@
 #   2. Frontend build (Vite)             -> build/web/
 #   3. Extension frontends (Vite)        -> extensions/*/frontend/dist/  (bundled by App.spec)
 #   4. Updater.exe build                 -> build/updater/Updater.exe
-#   5. App EXE build                     -> release/{AppName}.exe
+#   5. App EXE build (channel baked in)  -> release/{AppName}.exe
 #   6. Compute sha256 + generate          release/latest.json
-#   7. Upload to remote raw repo (currently Nexus; requires -Upload flag)
+#   7. Publish GitHub Release via gh CLI (requires -Upload flag)
+#
+# -Channel qa|prod is MANDATORY:
+#   qa   -> Mock provider visible, auto-update disabled, published as --prerelease
+#   prod -> Mock provider hidden, auto-update enabled, published as full release
+# The channel is injected as APP_BUILD_CHANNEL; App.spec bakes it into the bundled .env.
 #
 # App name is read automatically from the name= field in packaging/App.spec.
 # To rename the output EXE, change name='...' in packaging/App.spec — no other edits needed.
 #
 # Output layout:
 #   build/    intermediate artifacts (bundled into the EXE, never uploaded)
-#   release/  final artifacts (uploaded to the remote repo)
+#   release/  final artifacts (attached to the GitHub Release)
 #
 # Usage:
-#   pwsh packaging/release.ps1
-#   pwsh packaging/release.ps1 -Upload -Notes "변경사항 요약"
+#   pwsh packaging/release.ps1 -Channel qa
+#   pwsh packaging/release.ps1 -Channel prod -Upload -Notes "변경사항 요약"
 #
-# 저장소 URL/자격증명은 .env(APP_REPO_BASE_URL, APP_REPO_USER, APP_REPO_PASSWORD)에서 읽는다.
-# 업로드 실행은 packaging/upload.py 에 위임된다.
+# 저장소 루트 URL 은 .env(APP_REPO_BASE_URL)에서 읽는다. 업로드 인증은 gh CLI 가 담당한다
+# (`gh auth login --hostname <ghe-host>` 또는 GH_HOST + GH_TOKEN). 선택적 APP_GH_REPO 로
+# 레포를 명시할 수 있다(미설정 시 gh 가 local git origin 에서 추론).
 
 param(
+    [ValidateSet("qa", "prod")][string]$Channel,
     [switch]$Upload,
     [switch]$Force,
     [string]$Notes = ""
@@ -32,6 +39,16 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
+
+# Channel is mandatory (explicit selection enforced — no accidental prod builds).
+# ValidateSet checks the value when present; this throw catches omission without
+# triggering an interactive Mandatory prompt (which would hang -NonInteractive).
+if (-not $Channel) {
+    throw "ERROR: -Channel qa|prod is required. (qa = mock on / auto-update off, prod = release build)"
+}
+Write-Host "==> channel   : $Channel"
+# App.spec reads APP_BUILD_CHANNEL to bake the channel into the bundled .env.
+$env:APP_BUILD_CHANNEL = $Channel
 
 # 0. Pre-flight checks
 if (-not $Force) {
@@ -161,7 +178,9 @@ $_repoBase = $_repoBase.TrimEnd('/')
 
 $latest = [ordered]@{
     version               = $version
-    url                   = "$_repoBase/$AppName.exe"
+    # GitHub Release 의 버전-핀 에셋 경로. _repoBase = repo 루트(.../<org>/<repo>).
+    # 버전을 박아 결정론적으로 받게 한다(latest 포인터의 race 회피).
+    url                   = "$_repoBase/releases/download/v$version/$AppName.exe"
     sha256                = $sha256
     size                  = $size
     released_at           = $releasedAt
@@ -185,12 +204,26 @@ Write-Host "    $versionedPath  ($size bytes)"
 Write-Host "    sha256 : $sha256"
 Write-Host "    $latestJsonPath"
 
-# 7. upload — Python 스크립트에 위임 (프록시·SSL 설정은 upload.py 에서 처리)
+# 7. publish — GitHub Release via gh CLI.
+# gh 가 local git origin(=GHE 앱 레포)에서 레포를 추론하고 태그 v$version 을 생성한다.
+# qa 는 --prerelease 라 prod 의 releases/latest 포인터에 잡히지 않는다(prod EXE 격리).
+# 인증은 gh 가 담당한다: `gh auth login --hostname <ghe-host>` 또는
+# GH_HOST + GH_TOKEN(write PAT) 환경변수. write 토큰은 .env/EXE 에 두지 않는다.
 if ($Upload) {
-    Write-Host "==> uploading via packaging/upload.py"
-    uv run packaging/upload.py
-    if ($LASTEXITCODE -ne 0) { throw "upload failed (packaging/upload.py exited $LASTEXITCODE)" }
+    Write-Host "==> publishing GitHub release ($Channel) via gh CLI"
+    $tag = "v$version"
+    $ghArgs = @(
+        "release", "create", $tag,
+        "--title", $tag,
+        "--notes", $Notes,
+        $versionedPath, $exePath, $latestJsonPath
+    )
+    if ($Channel -eq "qa") { $ghArgs += "--prerelease" }
+    if ($env:APP_GH_REPO) { $ghArgs += @("--repo", $env:APP_GH_REPO) }
+    & gh @ghArgs
+    if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit $LASTEXITCODE)" }
+    Write-Host "    released $tag"
 } else {
     Write-Host ""
-    Write-Host "Skipping upload. Add -Upload flag to push to the remote repo."
+    Write-Host "Skipping publish. Add -Upload flag to create the GitHub release."
 }

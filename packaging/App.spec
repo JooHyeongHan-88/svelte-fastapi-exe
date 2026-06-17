@@ -38,6 +38,41 @@ with open(_version_py, 'w', encoding='utf-8', newline='\n') as _f:
 print(f'[spec] _version.py generated: {_version}')
 
 # ---------------------------------------------------------------------------
+# 번들용 .env 생성 — 업로드 전용 비밀(쓰기 자격증명)을 제외하고 빌드 채널을 주입한다.
+# App.spec 이 .env 를 통째로 MEIPASS 에 넣으므로, 쓰기 권한이 있는 APP_REPO_USER/
+# PASSWORD 가 모든 EXE 에 박혀 배포되면 탈취 시 저장소 전체가 노출된다. 런타임은
+# 읽기 토큰(APP_REPO_READ_TOKEN)만 필요하므로 쓰기 자격증명을 제거한 사본을 번들한다.
+# 빌드 채널은 release.ps1 -Channel 이 APP_BUILD_CHANNEL 환경변수로 주입한다(기본 prod).
+# ---------------------------------------------------------------------------
+_build_channel = os.environ.get('APP_BUILD_CHANNEL', 'prod').strip().lower()
+_UPLOAD_ONLY_ENV_KEYS = {'APP_REPO_USER', 'APP_REPO_PASSWORD'}
+_frozen_env_lines = []
+_channel_written = False
+if os.path.exists(env_path):
+    with open(env_path, 'r', encoding='utf-8') as _f:
+        for _line in _f:
+            _stripped = _line.lstrip()
+            if _stripped and not _stripped.startswith('#') and '=' in _stripped:
+                _line_key = _stripped.split('=', 1)[0].strip()
+                if _line_key in _UPLOAD_ONLY_ENV_KEYS:
+                    continue  # 쓰기 자격증명은 EXE 에 번들하지 않는다
+                if _line_key == 'APP_BUILD_CHANNEL':
+                    _frozen_env_lines.append(f'APP_BUILD_CHANNEL={_build_channel}\n')
+                    _channel_written = True
+                    continue
+            if not _line.endswith('\n'):
+                _line += '\n'
+            _frozen_env_lines.append(_line)
+if not _channel_written:
+    _frozen_env_lines.append(f'APP_BUILD_CHANNEL={_build_channel}\n')
+
+_frozen_env_path = os.path.join(root, 'build', '.env')
+os.makedirs(os.path.join(root, 'build'), exist_ok=True)
+with open(_frozen_env_path, 'w', encoding='utf-8', newline='') as _f:
+    _f.writelines(_frozen_env_lines)
+print(f'[spec] frozen .env generated (channel={_build_channel}, upload secrets stripped)')
+
+# ---------------------------------------------------------------------------
 # backend/scripts/ — 사내 스크립트 패키지.
 # backend/ 가 pathex 에 있으므로 collect_submodules 로 전체 서브모듈을 수집한다.
 # scripts/ 에 새 .py 파일을 추가해도 spec 을 수정할 필요가 없다.
@@ -107,7 +142,8 @@ a = Analysis(
     binaries=[] + _allowed_extra_binaries,
     datas=[
         # source -> destination inside sys._MEIPASS
-        (os.path.join(root, '.env'), '.'),
+        # 원본 .env 가 아니라 위에서 생성한 필터링·채널주입본을 번들한다(쓰기 자격증명 제외).
+        (_frozen_env_path, '.'),
         (os.path.join(root, 'build', 'web'), 'web'),
         (os.path.join(root, 'build', 'updater', 'Updater.exe'), 'updater'),
         # Agent guideline directories — backend/agent/registries/{prompts,skills}.py 가 MEIPASS 에서 읽음.
