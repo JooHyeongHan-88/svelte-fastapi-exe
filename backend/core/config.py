@@ -169,6 +169,26 @@ BUILD_CHANNEL: str = os.environ.get("APP_BUILD_CHANNEL", _DEFAULT_BUILD_CHANNEL)
 
 
 # ---------------------------------------------------------------------------
+# 콘텐츠 동기화 — SKILLS/AGENTS/PROMPTS 마크다운을 기동 시 원격 브랜치에서 가져온다.
+#
+# EXE 재빌드 없이 콘텐츠만 갱신하기 위한 런타임 동기화. frozen 에서만 동작하고(dev 는
+# 로컬 워킹트리 + mtime 핫리로드 유지), 채널→브랜치 매핑은 qa→dev, prod→main 이다
+# (content_sync._target_branch). 어떤 실패도 번들된 MEIPASS 콘텐츠로 graceful fallback.
+# ---------------------------------------------------------------------------
+
+# 비-frozen(dev)은 기본 비활성 — 로컬 편집과 원격 fetch 가 싸우지 않게 한다.
+_DEFAULT_CONTENT_SYNC = getattr(sys, "frozen", False)
+CONTENT_SYNC_ENABLED: bool = os.environ.get(
+    "APP_CONTENT_SYNC_ENABLED",
+    "true" if _DEFAULT_CONTENT_SYNC else "false",
+).lower() not in ("0", "false")
+# 채널 매핑을 무시하고 이 브랜치를 직접 본다(카나리 검증용). 빈 값이면 채널 매핑 사용.
+CONTENT_SYNC_BRANCH: str = os.environ.get("APP_CONTENT_SYNC_BRANCH", "").strip()
+# 기동 시 동기화를 블로킹하는 상한(초). 초과·오프라인 시 번들/last-good 으로 폴백.
+CONTENT_SYNC_TIMEOUT: int = int(os.environ.get("APP_CONTENT_SYNC_TIMEOUT", "5"))
+
+
+# ---------------------------------------------------------------------------
 # 앱 이름 — settings.json 경로, EXE 파일명에 공통 사용
 # ---------------------------------------------------------------------------
 
@@ -188,6 +208,11 @@ if getattr(sys, "frozen", False):
     WORKSPACE_DIR: Path = _appdata / APP_NAME / "workspace"
     # 에이전트 산출물 — 세션별·시각별 하위 폴더로 구분.
     RESULT_DIR: Path = _appdata / APP_NAME / "result"
+    # 원격 브랜치에서 동기화한 SKILLS/AGENTS/PROMPTS 마크다운 저장소(쓰기 가능 영역).
+    # MEIPASS 는 read-only 라 그곳에 못 쓰므로 settings.json 과 동일한 APPDATA 하위에 둔다.
+    CONTENT_DIR: Path = _appdata / APP_NAME / "content"
 else:
     WORKSPACE_DIR: Path = _project_root() / "workspace"
     RESULT_DIR: Path = _project_root() / "result"
+    # dev 는 콘텐츠 동기화를 하지 않으므로 실사용되지 않지만, 테스트·일관성을 위해 정의한다.
+    CONTENT_DIR: Path = _project_root() / "backend" / ".runtime" / "content"

@@ -74,6 +74,16 @@ class AgentRegistry:
         # source_path -> mtime — dev 핫리로드 비교용.
         self._mtimes: dict[str, float] = {}
 
+    def use_directory(self, path: Path) -> None:
+        """스캔할 디렉터리를 교체하고 캐시를 비운다(load 전 호출).
+
+        런타임 콘텐츠 동기화(content_sync)가 번들 대신 %APPDATA%/content 의 AGENTS 를
+        쓰게 할 때 main.py 가 부팅 시점에 호출한다.
+        """
+        self._dir = path
+        self._agents = []
+        self._mtimes = {}
+
     def load(self) -> None:
         """부팅 시 — Front Matter 만 파싱하고 body 는 비워 둠."""
         if not self._dir.exists():

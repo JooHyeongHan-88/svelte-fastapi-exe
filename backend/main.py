@@ -15,7 +15,7 @@ from agent.registries.prompts import registry as prompt_registry
 from agent.registries.skills import registry as skill_registry
 from api import router as api_router
 from api.deps import state_store
-from core import browser
+from core import browser, content_sync
 from core.browser import open_browser, watchdog
 from core.config import (
     ASSETS_DIR,
@@ -40,6 +40,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+# frozen 빌드는 기동 시 매핑된 GitHub 브랜치(qa→dev, prod→main)에서 SKILLS/AGENTS/PROMPTS
+# 마크다운을 동기화해 EXE 재빌드 없이 콘텐츠를 갱신한다. 비활성(dev)·실패 시 빈 dict 를
+# 돌려주므로 번들된 MEIPASS 콘텐츠가 그대로 쓰인다(graceful fallback). → content_sync
+_synced_dirs = content_sync.sync_agent_content()
+if _synced_dirs:
+    prompt_registry.use_directory(_synced_dirs["PROMPTS"])
+    skill_registry.use_directory(_synced_dirs["SKILLS"])
+    agent_registry.use_directory(_synced_dirs["AGENTS"])
 
 # PROMPTS / SKILLS 베이스 메타데이터는 1회 캐시. dev 모드 핫리로드는 각 registry 가
 # 본문 읽을 때 mtime 으로 자동 감지하므로 부팅 시점 로드만 명시한다.

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -26,6 +25,10 @@ from urllib.parse import urlparse
 import httpx
 
 from core import browser, config
+from core.github_api import ASSET_ACCEPT as _GITHUB_ASSET_ACCEPT
+from core.github_api import JSON_ACCEPT as _GITHUB_JSON_ACCEPT
+from core.github_api import SSL_VERIFY as _SSL_VERIFY
+from core.github_api import api_headers as _api_headers
 from core.version import APP_VERSION
 from core.config import (
     REPO_BASE_URL,
@@ -34,46 +37,11 @@ from core.config import (
     UPDATE_DOWNLOAD_TIMEOUT,
 )
 
-# GitHub REST API 매체 타입. JSON 은 릴리즈 메타, octet-stream 은 에셋 바이너리.
-_GITHUB_JSON_ACCEPT = "application/vnd.github+json"
-_GITHUB_ASSET_ACCEPT = "application/octet-stream"
-_GITHUB_API_VERSION = "2022-11-28"
-
 # 릴리즈에 첨부되는 업데이트 메타 에셋 파일명 (release.ps1 이 생성·업로드).
 _MANIFEST_ASSET_NAME = "latest.json"
 
-
-def _auth_headers() -> dict[str, str]:
-    """private GHE repo 읽기용 Authorization 헤더.
-
-    config.REPO_READ_TOKEN(읽기 전용 PAT)이 설정돼 있으면 GitHub 규약의
-    `Authorization: token <PAT>` 헤더를 반환한다. 비어 있으면 빈 dict 를 반환해
-    익명 GET(public 저장소)으로 동작한다.
-
-    Returns:
-        dict[str, str]: 토큰이 있으면 Authorization 헤더, 없으면 빈 dict.
-    """
-    if config.REPO_READ_TOKEN:
-        return {"Authorization": f"token {config.REPO_READ_TOKEN}"}
-    return {}
-
-
-def _api_headers(accept: str) -> dict[str, str]:
-    """GitHub REST API 요청 헤더 (인증 + 매체 타입 + API 버전).
-
-    Args:
-        accept: Accept 헤더 값. 릴리즈 메타는 `_GITHUB_JSON_ACCEPT`,
-            에셋 바이너리 다운로드는 `_GITHUB_ASSET_ACCEPT` 를 넘긴다.
-
-    Returns:
-        dict[str, str]: Accept·API 버전 헤더에 인증 헤더를 합친 dict.
-    """
-    headers = {
-        "Accept": accept,
-        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
-    }
-    headers.update(_auth_headers())
-    return headers
+# 인증 헤더·TLS·매체 타입은 github_api 로 공용화됐다(content_sync 와 공유).
+# 모듈 로컬 별칭으로 기존 호출부·테스트가 그대로 동작한다.
 
 
 def _latest_release_url() -> str:
@@ -116,26 +84,6 @@ def _exe_asset_name(meta: dict) -> str:
         str: EXE 에셋 파일명 (예: "MyAgent.exe").
     """
     return Path(urlparse(meta["url"]).path).name
-
-
-def _make_ssl_verify() -> bool | ssl.SSLContext:
-    """httpx SSL 검증 설정.
-
-    APP_REPO_TLS_VERIFY=false: 검증 비활성화 (내부망 자체 서명 인증서 최후 수단).
-    Windows: certifi 대신 Windows 인증서 저장소를 써서 회사 내부 CA 를 자동 신뢰한다.
-    certifi 는 Windows 인증서 저장소를 읽지 않아 기업 내부 CA 가 누락될 수 있다.
-
-    Returns:
-        False(검증 비활성), ssl.SSLContext(Windows 시스템 CA), 또는 True(certifi 기본값).
-    """
-    if not config.REPO_TLS_VERIFY:
-        return False
-    if sys.platform == "win32":
-        return ssl.create_default_context()
-    return True
-
-
-_SSL_VERIFY: bool | ssl.SSLContext = _make_ssl_verify()
 
 
 # in-memory cache

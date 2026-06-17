@@ -38,6 +38,15 @@ class PromptRegistry:
         # path -> (mtime, text) — frozen 에선 mtime=0.0 (의미 없음).
         self._cache: dict[Path, tuple[float, str]] = {}
 
+    def use_directory(self, path: Path) -> None:
+        """읽을 디렉터리를 교체하고 캐시를 비운다(load 전 호출).
+
+        런타임 콘텐츠 동기화(content_sync)가 번들 대신 %APPDATA%/content 의 PROMPTS 를
+        쓰게 할 때 main.py 가 부팅 시점에 호출한다.
+        """
+        self._dir = path
+        self._cache.clear()
+
     def load(self) -> None:
         """부팅 시 명시 호출용. dev 에서도 첫 1회는 미리 캐시해 두면 좋다."""
         fixed_count = 0

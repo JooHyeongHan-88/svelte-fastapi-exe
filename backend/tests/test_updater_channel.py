@@ -1,8 +1,8 @@
 """빌드 채널·인증 헤더·GitHub REST API 에셋 해석 — updater 검증.
 
 - QA 빌드는 check_latest 가 네트워크 호출 없이 update_available=False 로 즉시 차단.
-- _auth_headers 는 REPO_READ_TOKEN 유무에 따라 Authorization 헤더를 분기한다.
-- _api_headers 는 인증 + Accept(JSON/octet-stream) + API 버전 헤더를 합친다.
+- github_api.auth_headers 는 REPO_READ_TOKEN 유무에 따라 Authorization 헤더를 분기한다.
+- github_api.api_headers 는 인증 + Accept(JSON/octet-stream) + API 버전 헤더를 합친다.
 - _resolve_asset_api_url 은 릴리즈 assets[] 에서 파일명으로 API URL 을 역참조한다.
 - _exe_asset_name 은 latest.json 의 브라우저 url 에서 EXE 파일명만 추출한다.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 import core.updater as updater
-from core import config
+from core import config, github_api
 
 
 def test_qa_channel_blocks_check_without_network(
@@ -40,7 +40,7 @@ def test_auth_headers_present_when_token_set(
     """읽기 토큰이 있으면 GitHub 규약의 token 헤더를 만든다."""
     monkeypatch.setattr(config, "REPO_READ_TOKEN", "ghp_example")
 
-    assert updater._auth_headers() == {"Authorization": "token ghp_example"}
+    assert github_api.auth_headers() == {"Authorization": "token ghp_example"}
 
 
 def test_auth_headers_empty_when_token_blank(
@@ -49,19 +49,19 @@ def test_auth_headers_empty_when_token_blank(
     """토큰이 비어 있으면 빈 dict — 익명 GET(public 저장소 한정)."""
     monkeypatch.setattr(config, "REPO_READ_TOKEN", "")
 
-    assert updater._auth_headers() == {}
+    assert github_api.auth_headers() == {}
 
 
 def test_api_headers_merge_accept_and_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_api_headers 는 Accept·API 버전·인증 헤더를 하나로 합친다."""
+    """api_headers 는 Accept·API 버전·인증 헤더를 하나로 합친다."""
     monkeypatch.setattr(config, "REPO_READ_TOKEN", "ghp_example")
 
-    headers = updater._api_headers(updater._GITHUB_ASSET_ACCEPT)
+    headers = github_api.api_headers(github_api.ASSET_ACCEPT)
 
     assert headers["Accept"] == "application/octet-stream"
-    assert headers["X-GitHub-Api-Version"] == updater._GITHUB_API_VERSION
+    assert headers["X-GitHub-Api-Version"] == github_api.API_VERSION
     assert headers["Authorization"] == "token ghp_example"
 
 

@@ -126,3 +126,8 @@
 | `SKILLS/` body | 매칭된 스킬 첫 호출 시 lazy | dev: mtime 재검사 / frozen: 1회 |
 | `AGENTS/` Front Matter | 부팅 시 `load()` 1회 | 메모리 캐시 고정 |
 | `AGENTS/` body | `call_sub_agent` 위임 시점에 lazy | dev: mtime 재검사 / frozen: 1회 |
+
+> **frozen 콘텐츠 소스**: 부팅 시 `content_sync.sync_agent_content()` 가 성공하면 레지스트리가
+> 번들(MEIPASS) 대신 `%APPDATA%/{APP_NAME}/content/<DIR>` 의 동기화본을 읽는다(`use_directory()`
+> 재지정, `load()` 직전). 채널→브랜치 매핑·폴백은 [update_architecture.md](update_architecture.md)
+> "콘텐츠 동기화" 참고. dev 는 동기화하지 않으므로 로컬 워킹트리 + mtime 핫리로드 그대로다.
