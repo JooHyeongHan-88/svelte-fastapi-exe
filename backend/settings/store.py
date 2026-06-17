@@ -5,6 +5,7 @@ import logging
 import threading
 from pathlib import Path
 
+from core import config
 from settings.models import LLMSettings, ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,11 @@ class SettingsStore:
             # 락 안에서 직접 캐시를 참조한다.
             if self._cache is None:
                 self._load()
+
+            # prod 빌드는 mock 으로의 전환을 거부한다(list_providers 가 mock 을
+            # 숨기므로 정상 UI 경로로는 도달 불가 — 심층 방어). mutation 전에 차단.
+            if config.BUILD_CHANNEL == "prod" and patch.get("provider") == "mock":
+                raise ValueError("mock provider is not available in production builds")
 
             new_provider: str = patch.get("provider", self._cache.provider)
             # user_prompt 는 provider/providers 와 직교적 필드 — flat·structured 양쪽
@@ -131,6 +137,7 @@ class SettingsStore:
         if not self._file_path.exists():
             self._cache = self._defaults
             logger.debug("settings file not found, using defaults")
+            self._enforce_channel()
             return
 
         try:
@@ -164,6 +171,26 @@ class SettingsStore:
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning("failed to load settings: %s, using defaults", e)
             self._cache = self._defaults
+
+        self._enforce_channel()
+
+    def _enforce_channel(self) -> None:
+        """prod 빌드에서 저장된 provider 가 mock 이면 안전한 기본값으로 강등한다.
+
+        Mock provider 는 prod 에서 제외되므로(list_providers), 과거 qa/dev 에서 저장된
+        settings.json 이 prod EXE 로 로드될 때 mock 이 남아 있으면 실 LLM 없이 동작이
+        불가능해진다. 강등 대상은 .env 시드(APP_LLM_PROVIDER)가 비-mock 이면 그 값,
+        아니면 dtgpt 로 한다. 반드시 lock 안에서 호출한다(self._save 가 캐시 직접 참조).
+        """
+        if config.BUILD_CHANNEL != "prod" or self._cache.provider != "mock":
+            return
+
+        from agent.config import LLM_PROVIDER
+
+        fallback = LLM_PROVIDER if LLM_PROVIDER != "mock" else "dtgpt"
+        logger.warning("prod build: coercing stored mock provider -> %s", fallback)
+        self._cache = self._cache.model_copy(update={"provider": fallback})
+        self._save()
 
     def _save(self) -> None:
         """Save cached settings to file.

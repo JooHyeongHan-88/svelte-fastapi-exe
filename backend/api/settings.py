@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from agent.models import Message
 from agent.providers.factory import get_provider
 from api.deps import _settings_store, require_local_origin
+from core import config
 from core.config import APP_NAME
 from core.version import APP_VERSION
 from settings.masking import mask_api_key
@@ -47,8 +48,12 @@ async def update_settings(patch: dict) -> LLMSettings:
 
 @router.get("/settings/providers")
 async def list_providers() -> list[ProviderMeta]:
-    """Get metadata for available LLM providers."""
-    return [
+    """Get metadata for available LLM providers.
+
+    Mock provider 는 dev·qa 채널에서만 노출한다. prod 빌드에서는 목록에서 제외해
+    설정 UI 에 뜨지 않게 한다(프론트는 이 응답만으로 구동되므로 별도 처리 불필요).
+    """
+    providers = [
         ProviderMeta(
             id="dtgpt",
             label="DTGPT",
@@ -72,16 +77,22 @@ async def list_providers() -> list[ProviderMeta]:
             ],
             docs_url="https://platform.openai.com/docs/api-reference",
         ),
-        ProviderMeta(
-            id="mock",
-            label="Mock (Test Mode)",
-            requires_api_key=False,
-            requires_base_url=False,
-            requires_model=False,
-            suggested_models=[],
-            docs_url=None,
-        ),
     ]
+
+    if config.BUILD_CHANNEL != "prod":
+        providers.append(
+            ProviderMeta(
+                id="mock",
+                label="Mock (Test Mode)",
+                requires_api_key=False,
+                requires_base_url=False,
+                requires_model=False,
+                suggested_models=[],
+                docs_url=None,
+            )
+        )
+
+    return providers
 
 
 @router.get("/settings/models")

@@ -113,10 +113,33 @@ REPO_BASE_URL: str = os.environ.get(
     "APP_REPO_BASE_URL",
     "https://nexus.internal/repository/app",
 ).rstrip("/")
-LATEST_JSON_URL: str = f"{REPO_BASE_URL}/latest.json"
+# GitHub Releases 전환 시 latest.json 은 release 에셋 경로(.../releases/latest/download/
+# latest.json)라 REPO_BASE_URL 직속이 아니다. 그래서 별도 env 로 오버라이드 가능하게 둔다.
+# 미설정 시 기존 동작(REPO_BASE_URL/latest.json = Nexus) 유지 — 하위호환.
+LATEST_JSON_URL: str = os.environ.get(
+    "APP_LATEST_JSON_URL", f"{REPO_BASE_URL}/latest.json"
+)
+# private GHE repo 의 latest.json·EXE 다운로드를 인증하는 읽기 전용 토큰.
+# 업로드용 쓰기 자격증명(APP_REPO_USER/PASSWORD)과 분리해 EXE 에는 이 토큰만 번들한다.
+# 빈 값이면 Authorization 헤더 없이 익명 GET (Nexus·공개 저장소 하위호환).
+REPO_READ_TOKEN: str = os.environ.get("APP_REPO_READ_TOKEN", "")
+# TLS 검증 — 기본값 True(검증). GHE 내부 CA 를 Windows 인증서 저장소에 추가했는데도
+# SSLError 가 나면 False 로 비활성화한다(내부망 자체 서명 인증서 대응 최후 수단).
+REPO_TLS_VERIFY: bool = os.environ.get("APP_REPO_TLS_VERIFY", "true").lower() not in (
+    "0",
+    "false",
+)
 UPDATE_CHECK_TIMEOUT: int = int(os.environ.get("APP_UPDATE_CHECK_TIMEOUT", "5"))
 UPDATE_DOWNLOAD_TIMEOUT: int = int(os.environ.get("APP_UPDATE_DOWNLOAD_TIMEOUT", "60"))
 UPDATE_CHECK_CACHE_TTL: int = int(os.environ.get("APP_UPDATE_CHECK_CACHE_TTL", "300"))
+
+# 빌드 채널 — frozen 은 App.spec 이 빌드 시 .env 에 주입(release.ps1 -Channel).
+#   qa   : 자동 업데이트 차단 + Mock provider 노출(테스트용)
+#   prod : 정식 배포 — 자동 업데이트 활성 + Mock provider 제외
+# dev(비-frozen)는 기본 qa 로 떨어져 Mock 시나리오(A~H)가 유지된다. frozen 기본값을
+# prod 로 두는 건 채널 미주입 EXE 가 실수로 Mock 을 노출하지 않게 하는 안전판이다.
+_DEFAULT_BUILD_CHANNEL = "prod" if getattr(sys, "frozen", False) else "qa"
+BUILD_CHANNEL: str = os.environ.get("APP_BUILD_CHANNEL", _DEFAULT_BUILD_CHANNEL).lower()
 
 
 # ---------------------------------------------------------------------------
