@@ -1,7 +1,12 @@
 """자동 업데이트.
 
-원격 raw repository(현재 Nexus) 의 latest.json 을 조회하고, 새 버전이 있으면
-sha256 검증 후 번들된 updater.exe 로 self-replace 를 트리거한다.
+GitHub(Enterprise) Releases 의 REST API 로 최신 릴리즈를 조회하고, latest.json 에셋을
+파싱해 새 버전이 있으면 sha256 검증 후 번들된 updater.exe 로 self-replace 를 트리거한다.
+
+private 레포에서는 브라우저 다운로드 URL(`.../releases/latest/download/...`)이 PAT 헤더
+인증을 무시하고 404 를 돌려준다(웹 세션 쿠키 전용 경로). 그래서 메타·에셋 모두 REST API
+(`.../api/v3/repos/.../releases/...`)로 받는다 — 에셋 다운로드는 `Accept:
+application/octet-stream` 헤더가 있어야 메타데이터 JSON 이 아닌 바이너리 본문이 온다.
 """
 
 from __future__ import annotations
@@ -16,18 +21,26 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
 from core import browser, config
 from core.version import APP_VERSION
 from core.config import (
-    LATEST_JSON_URL,
     REPO_BASE_URL,
     UPDATE_CHECK_CACHE_TTL,
     UPDATE_CHECK_TIMEOUT,
     UPDATE_DOWNLOAD_TIMEOUT,
 )
+
+# GitHub REST API 매체 타입. JSON 은 릴리즈 메타, octet-stream 은 에셋 바이너리.
+_GITHUB_JSON_ACCEPT = "application/vnd.github+json"
+_GITHUB_ASSET_ACCEPT = "application/octet-stream"
+_GITHUB_API_VERSION = "2022-11-28"
+
+# 릴리즈에 첨부되는 업데이트 메타 에셋 파일명 (release.ps1 이 생성·업로드).
+_MANIFEST_ASSET_NAME = "latest.json"
 
 
 def _auth_headers() -> dict[str, str]:
@@ -35,7 +48,7 @@ def _auth_headers() -> dict[str, str]:
 
     config.REPO_READ_TOKEN(읽기 전용 PAT)이 설정돼 있으면 GitHub 규약의
     `Authorization: token <PAT>` 헤더를 반환한다. 비어 있으면 빈 dict 를 반환해
-    익명 GET(현행 Nexus·공개 저장소)으로 동작한다 — 토큰 도입 전까지 무중단.
+    익명 GET(public 저장소)으로 동작한다.
 
     Returns:
         dict[str, str]: 토큰이 있으면 Authorization 헤더, 없으면 빈 dict.
@@ -43,6 +56,66 @@ def _auth_headers() -> dict[str, str]:
     if config.REPO_READ_TOKEN:
         return {"Authorization": f"token {config.REPO_READ_TOKEN}"}
     return {}
+
+
+def _api_headers(accept: str) -> dict[str, str]:
+    """GitHub REST API 요청 헤더 (인증 + 매체 타입 + API 버전).
+
+    Args:
+        accept: Accept 헤더 값. 릴리즈 메타는 `_GITHUB_JSON_ACCEPT`,
+            에셋 바이너리 다운로드는 `_GITHUB_ASSET_ACCEPT` 를 넘긴다.
+
+    Returns:
+        dict[str, str]: Accept·API 버전 헤더에 인증 헤더를 합친 dict.
+    """
+    headers = {
+        "Accept": accept,
+        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+    }
+    headers.update(_auth_headers())
+    return headers
+
+
+def _latest_release_url() -> str:
+    """최신(비-prerelease) 릴리즈 메타를 조회하는 REST API URL."""
+    return (
+        f"{config.GITHUB_API_BASE}/repos/"
+        f"{config.REPO_OWNER}/{config.REPO_NAME}/releases/latest"
+    )
+
+
+def _resolve_asset_api_url(release: dict, name: str) -> Optional[str]:
+    """릴리즈 응답의 assets[] 에서 파일명으로 에셋의 API 다운로드 URL 을 찾는다.
+
+    브라우저 URL(`browser_download_url`)이 아니라 PAT 헤더 인증이 통하는 API
+    에셋 URL(`url` = `.../releases/assets/{id}`)을 돌려준다.
+
+    Args:
+        release: `releases/latest` 응답 JSON.
+        name: 찾을 에셋 파일명 (예: "latest.json", "MyAgent.exe").
+
+    Returns:
+        Optional[str]: 일치하는 에셋의 API URL, 없으면 None.
+    """
+    for asset in release.get("assets", []):
+        if asset.get("name") == name:
+            return asset.get("url")
+    return None
+
+
+def _exe_asset_name(meta: dict) -> str:
+    """latest.json 의 url 에서 EXE 에셋 파일명만 추출한다.
+
+    url 은 브라우저 경로(`.../releases/download/v.../MyAgent.exe`)라 직접 다운로드에는
+    못 쓰지만, 끝의 파일명은 릴리즈 assets[] 에서 API URL 을 역참조하는 키로 쓴다.
+
+    Args:
+        meta: 파싱된 latest.json.
+
+    Returns:
+        str: EXE 에셋 파일명 (예: "MyAgent.exe").
+    """
+    return Path(urlparse(meta["url"]).path).name
 
 
 def _make_ssl_verify() -> bool | ssl.SSLContext:
@@ -128,8 +201,51 @@ def _validate_meta(meta: dict) -> Optional[str]:
     return None
 
 
+def _fetch_release_and_meta(client: httpx.Client) -> dict:
+    """최신 릴리즈 메타를 조회하고 latest.json 에셋을 받아 파싱한다.
+
+    ① `releases/latest` REST API 로 릴리즈 응답을 받고
+    ② 그 assets[] 에서 latest.json 에셋의 API URL 을 찾아
+    ③ octet-stream 헤더로 본문(=업데이트 메타)을 다운로드해 파싱한다.
+
+    파싱된 메타에는 다운로드 단계가 쓸 EXE 에셋 API URL 을 `_download_url` 키로
+    함께 실어 둔다(같은 릴리즈 응답에서 역참조 — 재조회 불필요).
+
+    Args:
+        client: 인증·TLS 설정이 적용된 httpx.Client.
+
+    Returns:
+        dict: 파싱된 latest.json + `_download_url`(내부 키).
+
+    Raises:
+        FileNotFoundError: 릴리즈에 latest.json 또는 EXE 에셋이 없을 때.
+        httpx.HTTPStatusError: API 응답이 4xx/5xx 일 때.
+    """
+    r = client.get(_latest_release_url(), headers=_api_headers(_GITHUB_JSON_ACCEPT))
+    r.raise_for_status()
+    release = r.json()
+
+    manifest_url = _resolve_asset_api_url(release, _MANIFEST_ASSET_NAME)
+    if manifest_url is None:
+        raise FileNotFoundError(
+            f"{_MANIFEST_ASSET_NAME} asset not found in latest release"
+        )
+
+    rm = client.get(manifest_url, headers=_api_headers(_GITHUB_ASSET_ACCEPT))
+    rm.raise_for_status()
+    meta = rm.json()
+
+    download_url = _resolve_asset_api_url(release, _exe_asset_name(meta))
+    if download_url is None:
+        raise FileNotFoundError(
+            f"EXE asset '{_exe_asset_name(meta)}' not found in latest release"
+        )
+    meta["_download_url"] = download_url
+    return meta
+
+
 def check_latest(force: bool = False) -> dict:
-    """latest.json 조회. 실패는 update_available=False 로 silently 반환."""
+    """최신 릴리즈 조회. 실패는 update_available=False 로 silently 반환."""
     # QA 빌드는 자동 업데이트를 받지 않는다 — 네트워크 호출 없이 즉시 차단.
     # QA EXE 는 prerelease 라 prod latest 포인터에도 안 잡히지만, 폴링 자체를 막아
     # 검증 중인 빌드가 의도치 않게 교체되는 것을 방지한다.
@@ -154,9 +270,7 @@ def check_latest(force: bool = False) -> dict:
         with httpx.Client(
             timeout=UPDATE_CHECK_TIMEOUT, follow_redirects=True, verify=_SSL_VERIFY
         ) as client:
-            r = client.get(LATEST_JSON_URL, headers=_auth_headers())
-            r.raise_for_status()
-            meta = r.json()
+            meta = _fetch_release_and_meta(client)
     except Exception as e:
         print(f"update check failed: {e}")
         return {
@@ -221,9 +335,10 @@ def _download(url: str, dest: Path, expected_size: int) -> None:
     with httpx.Client(
         timeout=UPDATE_DOWNLOAD_TIMEOUT, follow_redirects=True, verify=_SSL_VERIFY
     ) as client:
-        # GHE 에셋은 서명된 URL 로 302 redirect 된다. httpx 는 cross-host redirect 시
-        # Authorization 을 자동 제거하므로(서명 URL 은 토큰 불필요) 안전하다.
-        with client.stream("GET", url, headers=_auth_headers()) as r:
+        # API 에셋 URL 은 octet-stream Accept 헤더가 있어야 바이너리 본문을 준다(없으면
+        # 에셋 메타데이터 JSON 반환). 서명된 URL 로 302 redirect 되며, httpx 는 cross-host
+        # redirect 시 Authorization 을 자동 제거한다(서명 URL 은 토큰 불필요) — 안전.
+        with client.stream("GET", url, headers=_api_headers(_GITHUB_ASSET_ACCEPT)) as r:
             r.raise_for_status()
             written = 0
 
@@ -272,6 +387,12 @@ def apply_update() -> dict:
     if not _is_newer(meta["version"], APP_VERSION):
         return {"ok": False, "error": "already_latest"}
 
+    # check_latest 가 릴리즈 assets[] 에서 역참조해 stash 한 EXE 에셋 API URL.
+    # 브라우저 url 은 private 레포에서 PAT 인증이 안 되므로 다운로드에 쓰지 않는다.
+    download_url = meta.get("_download_url")
+    if not download_url:
+        return {"ok": False, "error": "no_download_url"}
+
     _set_state(target_version=meta["version"])
 
     try:
@@ -287,7 +408,7 @@ def apply_update() -> dict:
         # 임시 파일명을 실행 중인 EXE 이름 기반으로 생성 (하드코딩 배제).
         new_exe_tmp = tmpdir / (Path(sys.executable).stem + ".new.exe")
 
-        _download(meta["url"], new_exe_tmp, meta.get("size", 0))
+        _download(download_url, new_exe_tmp, meta.get("size", 0))
 
         _set_state(status="verifying", message="무결성 검증 중...")
         actual_sha = _sha256_file(new_exe_tmp)

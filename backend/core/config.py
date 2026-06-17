@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -106,22 +107,47 @@ PRESENCE_RETRY_HINT_MS: int = int(os.environ.get("APP_PRESENCE_RETRY_HINT_MS", "
 
 
 # ---------------------------------------------------------------------------
-# update / 원격 저장소 (repository) — 현재는 Nexus, 저장소 중립적 변수명 사용
+# update / 원격 저장소 (GitHub Enterprise Releases)
 # ---------------------------------------------------------------------------
 
 REPO_BASE_URL: str = os.environ.get(
     "APP_REPO_BASE_URL",
-    "https://nexus.internal/repository/app",
+    "https://github.com/owner/repo",
 ).rstrip("/")
-# GitHub Releases 전환 시 latest.json 은 release 에셋 경로(.../releases/latest/download/
-# latest.json)라 REPO_BASE_URL 직속이 아니다. 그래서 별도 env 로 오버라이드 가능하게 둔다.
-# 미설정 시 기존 동작(REPO_BASE_URL/latest.json = Nexus) 유지 — 하위호환.
-LATEST_JSON_URL: str = os.environ.get(
-    "APP_LATEST_JSON_URL", f"{REPO_BASE_URL}/latest.json"
-)
-# private GHE repo 의 latest.json·EXE 다운로드를 인증하는 읽기 전용 토큰.
-# 업로드용 쓰기 자격증명(APP_REPO_USER/PASSWORD)과 분리해 EXE 에는 이 토큰만 번들한다.
-# 빈 값이면 Authorization 헤더 없이 익명 GET (Nexus·공개 저장소 하위호환).
+
+
+def _derive_github_api(base_url: str) -> tuple[str, str, str]:
+    """레포 루트 URL 에서 GitHub REST API base 와 owner/repo 를 유도한다.
+
+    private 레포의 릴리즈 에셋은 브라우저 다운로드 URL(`.../releases/latest/download/...`)
+    로는 받을 수 없다 — 그 경로는 웹 세션 쿠키 인증만 받아 PAT 헤더를 무시하고 404 를
+    돌려준다. 대신 REST API(`.../api/v3/repos/.../releases/assets/{id}` + PAT 헤더)로만
+    인증 다운로드가 된다. 그래서 런타임 updater 가 쓸 API base 를 레포 루트에서 계산해 둔다.
+
+    Args:
+        base_url: `https://<host>/<owner>/<repo>` 형태의 레포 루트 URL.
+
+    Returns:
+        tuple[str, str, str]: (api_base, owner, repo).
+            github.com 은 `https://api.github.com`, GHE Server 는 `https://<host>/api/v3`.
+            경로에 owner/repo 가 없으면 빈 문자열로 폴백(updater 가 호출 시 에러 처리).
+    """
+    parsed = urlparse(base_url)
+    segments = [s for s in parsed.path.split("/") if s]
+    owner = segments[0] if len(segments) >= 2 else ""
+    repo = segments[1] if len(segments) >= 2 else ""
+    if parsed.netloc == "github.com":
+        api_base = "https://api.github.com"
+    else:
+        api_base = f"{parsed.scheme}://{parsed.netloc}/api/v3"
+    return api_base, owner, repo
+
+
+GITHUB_API_BASE, REPO_OWNER, REPO_NAME = _derive_github_api(REPO_BASE_URL)
+
+# private GHE repo 의 릴리즈 메타·EXE 다운로드를 인증하는 읽기 전용 토큰.
+# 업로드용 쓰기 자격증명(gh CLI 가 담당)과 분리해 EXE 에는 이 토큰만 번들한다.
+# 빈 값이면 Authorization 헤더 없이 익명 GET (public 저장소 한정).
 REPO_READ_TOKEN: str = os.environ.get("APP_REPO_READ_TOKEN", "")
 # TLS 검증 — 기본값 True(검증). GHE 내부 CA 를 Windows 인증서 저장소에 추가했는데도
 # SSLError 가 나면 False 로 비활성화한다(내부망 자체 서명 인증서 대응 최후 수단).

@@ -3,28 +3,48 @@
 ## 자동 업데이트 — 4단계 흐름
 
 ```
-① check_latest()    REPO_BASE_URL/latest.json GET, 5분 캐시
-                    URL prefix·sha256 hex(64자) 검증 → 실패 시 silently update_available=False
-② apply_update()    스트리밍 다운로드 → sha256 검증 → {stem}.new.exe staging
+① check_latest()    GitHub REST API: GET {api_base}/repos/{owner}/{repo}/releases/latest
+                    (api_base·owner·repo 는 APP_REPO_BASE_URL 에서 유도, 5분 캐시)
+                    → assets[] 에서 latest.json 에셋의 API url 찾아 octet-stream 으로 받아 파싱
+                    → 같은 응답에서 EXE 에셋 API url 역참조해 meta["_download_url"] stash
+                    QA 채널은 이 단계 직전 즉시 차단(update_available=False, 네트워크 호출 없음)
+                    url(브라우저) prefix·sha256 hex(64자) 검증 → 실패 시 silently False
+② apply_update()    meta["_download_url"](EXE 에셋 API url)을 read-only PAT + octet-stream 으로
+                    인증 스트리밍 다운로드 → sha256 검증 → {stem}.new.exe staging
                     → DETACHED Updater.exe Popen(pid, new, current) → 1s 후 server.should_exit
 ③ Updater.exe       부모 pid 폴링(최대 60s) → POST_EXIT_GRACE 3s 추가 대기
 ④ rename-to-backup  current → .old (rename은 잠긴 파일도 허용)
                     → new → current → 실패 시 .old 복원 후 재기동
 ```
 
-**절대 변경 금지**: 방금 종료된 EXE의 잔존 잠금 + AV 스캔 때문에 `os.replace(new, current)` 직접 시도는
+**절대 변경 금지 ①**: 방금 종료된 EXE의 잔존 잠금 + AV 스캔 때문에 `os.replace(new, current)` 직접 시도는
 `ERROR_ACCESS_DENIED` 발생. **rename-to-backup 전략**으로 30회 × 0.5s 재시도. 이 전략으로 회귀시키지 말 것.
+
+**절대 변경 금지 ② (private 레포 다운로드 경로)**: 릴리즈 에셋을 브라우저 다운로드 URL
+(`.../releases/latest/download/<asset>` 또는 `.../releases/download/<tag>/<asset>`)로 받지 말 것.
+그 경로는 **웹 세션 쿠키 인증 전용**이라 `Authorization: token <PAT>` 헤더를 무시하고, private 레포면
+**404**(403 아님 — 존재 은닉)를 돌려준다. 반드시 REST API 에셋 엔드포인트
+(`.../api/v3/repos/.../releases/assets/{id}`)에 `Accept: application/octet-stream` 헤더로 받아야
+PAT 인증이 통하고 바이너리 본문이 온다(octet-stream 없으면 에셋 메타데이터 JSON 반환). latest.json 의
+`url`(브라우저 경로)은 **다운로드에 쓰지 않고 EXE 파일명 추출용**으로만 쓴다(`_exe_asset_name`).
 
 진행 상태: `GET /api/update/status` → `{status, progress, total, message, target_version}`  
 (`idle|downloading|verifying|staging|restarting|error`)
+
+### httpx TLS 동작
+
+- `APP_REPO_TLS_VERIFY=false`: SSL 검증 비활성화 (사내 자체 서명 CA 최후 수단).
+- Windows frozen: `ssl.create_default_context()`로 Windows 인증서 저장소를 사용 — certifi가 읽지 못하는 사내 CA를 자동 신뢰. 인증서 관리자가 CA를 Windows에 등록하면 이 설정 불필요.
+- Linux/Mac(dev): certifi 기본값.
+- `_make_ssl_verify()` / `_SSL_VERIFY` 모듈 상수 → `updater.py` 의 두 `httpx.Client` 모두 적용.
 
 ---
 
 ## Release 빌드 순서 (extensions 포함)
 
-`release.ps1` 빌드 순서: ① pyproject 버전 읽기 → ② **메인 프론트**(`frontend` → `build/web/`)
-→ ③ **확장 프론트**(`extensions/*/frontend` → 각 `dist/`) → ④ Updater.exe → ⑤ App EXE(App.spec)
-→ ⑥ sha256·latest.json → ⑦ 업로드(`-Upload`).
+`release.ps1` 빌드 순서: ① `-Channel` 확인(생략 시 즉시 에러) + `APP_BUILD_CHANNEL` 주입 → ② pyproject 버전 읽기 → ③ **메인 프론트**(`frontend` → `build/web/`)
+→ ④ **확장 프론트**(`extensions/*/frontend` → 각 `dist/`) → ⑤ Updater.exe → ⑥ App EXE(App.spec — 채널 번들)
+→ ⑦ sha256·latest.json → ⑧ `gh release create`(`-Upload`).
 
 - **③ 확장 프론트 빌드가 ⑤ App.spec 보다 먼저**여야 한다. `App.spec` 은 `extensions/<tool>/frontend/dist`
   가 **있을 때만** 번들하므로(→ `extensions_architecture.md`), 빌드를 건너뛰면 stale/누락 dist 가
@@ -39,8 +59,13 @@
 ## Release 스크립트 — PowerShell 5.1 주의점
 
 - `param()` 블록은 **반드시 첫 실행문** (앞에 `[Console]::OutputEncoding=` 두면 파싱 에러)
+- `-Channel` 파라미터: `[ValidateSet("qa","prod")]` + 생략 시 `throw`(인터랙티브 Mandatory 프롬프트 방지)
 - `latest.json`은 **BOM 없는 UTF-8** — `[System.IO.File]::WriteAllText(path, content, (New-Object System.Text.UTF8Encoding $false))` 사용  
-  (`Set-Content -Encoding utf8`은 BOM 붙어 `Invoke-RestMethod` 파싱 실패)
+  (`Set-Content -Encoding utf8`은 BOM 붙어 JSON 파싱 실패)
 - `backend/_version.py`는 gitignored 생성물. **App.spec이 Analysis 전에** `tomllib`으로 pyproject.toml 파싱 후 자동 생성한다. release.ps1은 더 이상 이 파일을 쓰지 않는다.
 - `Write-Host` 한글 깨짐 → 스크립트 출력은 영어 유지
-- 저장소 업로드 순서: **EXE 먼저 → latest.json 마지막** (클라이언트가 404 EXE 보지 않도록)
+- **업로드 인증**: `gh auth login --hostname <ghe-host>` 또는 `GH_HOST`+`GH_TOKEN`(write PAT) 환경변수. `.env`/EXE에 쓰기 토큰을 두지 않는다.
+- **QA vs Prod 채널**:
+  - `qa`: `gh release create --prerelease` → `releases/latest` 포인터에 잡히지 않음 (prod EXE가 QA 빌드를 업데이트로 인식하는 것 방지)
+  - `prod`: full release → `releases/latest/download/latest.json` 포인터 갱신
+- `latest.json`의 `url` 필드는 **버전 핀 경로** (`releases/download/v{version}/{AppName}.exe`) — `releases/latest` 포인터 race 조건 회피
