@@ -18,7 +18,7 @@ Vite/Svelte로 만든 AI Agent 채팅 UI를 FastAPI가 서빙하고, PyInstaller
 | 에이전트 런타임 | 계층형 오케스트레이터-서브에이전트 구조 |
 | 패키징 | PyInstaller (onefile) |
 | 패키지 관리 | uv (Python), npm (JS) |
-| 업데이트 배포 | Nexus OSS raw repository |
+| 업데이트 배포 | GitHub Enterprise Releases (gh CLI) |
 
 ---
 
@@ -55,9 +55,9 @@ svelte-fastapi-exe/
 │   └── components/        # UI 컴포넌트
 ├── updater/               # self-replace 부트스트랩 (별도 EXE 로 빌드)
 ├── packaging/
-│   ├── App.spec           # PyInstaller 스펙 — .env에서 APP_NAME 자동 읽음
-│   ├── release.ps1        # 빌드 + sha256 + Nexus 업로드 자동화
-│   └── release-dryrun.ps1 # 로컬 Nexus mock 으로 릴리즈 파이프라인 검증
+│   ├── App.spec           # PyInstaller 스펙 — .env에서 APP_NAME/채널 자동 읽음
+│   ├── release.ps1        # 빌드 + sha256 + GitHub Release 게시 자동화 (-Channel 필수)
+│   └── release-dryrun.ps1 # 로컬 HTTP mock 으로 릴리즈 파이프라인 검증
 ├── docs/                  # 에이전트·도구 개발자 참고 문서
 ├── build/                 # 중간 산출물 (gitignored)
 ├── result/                # 에이전트 실행 산출물 (gitignored) — {제목}-{id8}/{timestamp}/
@@ -75,9 +75,10 @@ updater/updater.py  ─(PyI, Updater.spec)─► build/updater/Updater.exe      
                                                                                 ├─(PyI, App.spec)─► release/{AppName}.exe
                                                                                 ┘
 release/{AppName}.exe ─(sha256 + copy)─► release/{AppName}-X.X.X.exe + release/latest.json
+                                                ─(gh release create)─► GitHub Release 에 첨부
 ```
 
-`build/`는 EXE 안에 임베드되는 중간물, `release/`는 Nexus에 올라가는 최종물.
+`build/`는 EXE 안에 임베드되는 중간물, `release/`는 GitHub Release에 첨부되는 최종물.
 
 ---
 
@@ -260,10 +261,11 @@ App.exe 실행
 ### 자동 업데이트 흐름
 
 ```
-① 앱 시작 → /api/update/check → Nexus latest.json 비교
+① 앱 시작 → /api/update/check → APP_LATEST_JSON_URL(GitHub Releases) latest.json 비교
+   QA 채널은 업데이트 차단(네트워크 호출 없이 즉시 반환)
 ② 새 버전 있으면 UI 배너 표시 → 사용자 "지금 업데이트" 클릭
 ③ /api/update/apply:
-     - 새 App.exe 다운로드 (스트리밍, sha256 검증)
+     - APP_REPO_READ_TOKEN(read-only PAT)으로 새 App.exe 인증 다운로드 (스트리밍, sha256 검증)
      - 번들된 Updater.exe 를 detached 프로세스로 기동
      - uvicorn graceful shutdown
 ④ Updater.exe:
@@ -281,53 +283,71 @@ App.exe 실행
 
 ### 1. 버전 올리기
 
-`pyproject.toml`의 `version`만 수정한다. `_version.py`는 스크립트가 자동 갱신한다.
+`pyproject.toml`의 `version`만 수정한다. `_version.py`는 App.spec이 빌드 시 자동 생성한다.
 
 ```toml
 [project]
 version = "0.2.0"
 ```
 
-### 2. (선택) 앱 이름 / 저장소 URL 변경
+### 2. (선택) 저장소 설정 확인
 
-`.env` 파일을 수정한다. 이 파일이 빌드 파이프라인의 단일 진실 공급원이다.
+`.env` 파일이 빌드 파이프라인의 단일 진실 공급원이다.
 
 ```dotenv
-APP_NAME=MyAgent                         # EXE 파일명, settings.json 경로
-APP_REPO_BASE_URL=https://nexus.internal/repository/myapp   # 원격 raw repo (현재 Nexus)
-APP_REPO_USER=repo_admin                 # 선택 — 없으면 실행 시 프롬프트
-APP_REPO_PASSWORD=secret                 # 선택 — 없으면 실행 시 프롬프트
+APP_NAME=MyAgent                          # EXE 파일명, settings.json 경로
+APP_REPO_BASE_URL=https://<ghe-host>/<org>/<repo>          # 레포 루트
+APP_LATEST_JSON_URL=https://<ghe-host>/<org>/<repo>/releases/latest/download/latest.json
+APP_REPO_READ_TOKEN=ghp_...               # 읽기 전용 PAT — EXE에 번들됨 (latest.json·EXE 다운로드 인증)
+```
+
+업로드 인증은 **gh CLI가 담당**한다. `.env`에 쓰기 토큰을 두지 않는다.
+
+```powershell
+# GitHub.com
+gh auth login
+# GitHub Enterprise
+gh auth login --hostname <ghe-host>
+# 또는 환경 변수로 CI 주입
+$env:GH_HOST = "<ghe-host>"; $env:GH_TOKEN = "<write-PAT>"
 ```
 
 ### 3. 릴리즈 스크립트 실행
 
-```powershell
-# 빌드 + sha256 + latest.json 생성 + 원격 저장소 업로드
-# 저장소 자격증명은 .env 에서 자동 로드, 없으면 대화형 프롬프트
-pwsh packaging/release.ps1 -Upload -Notes "변경사항 요약"
+`-Channel` 옵션이 **필수**다 — 생략하면 에러로 종료한다.
 
-# git dirty 상태이거나 저장소에 동일 버전이 이미 있을 때 강제 진행
-pwsh packaging/release.ps1 -Upload -Force -Notes "핫픽스"
+```powershell
+# QA 빌드: Mock 노출, 자동업데이트 차단, --prerelease 게시
+pwsh packaging/release.ps1 -Channel qa
+
+# Prod 빌드: Mock 제외, 자동업데이트 활성, full release 게시 → latest 포인터 갱신
+pwsh packaging/release.ps1 -Channel prod -Upload -Notes "변경사항 요약"
+
+# git dirty 상태를 강제 통과
+pwsh packaging/release.ps1 -Channel prod -Upload -Force -Notes "핫픽스"
 ```
 
 스크립트 수행 작업:
 
-1. **사전 점검**: git dirty 상태·저장소 버전 중복 확인 (`-Force`로 우회 가능)
-2. `pyproject.toml` 버전 → `backend/_version.py` 동기화
+1. **사전 점검**: git dirty 상태 확인 (`-Force`로 우회 가능)
+2. `pyproject.toml` 버전 읽기 (App.spec이 빌드 중 `_version.py` 자동 생성)
 3. `npm run build` (Svelte → `build/web/`)
-4. `pyinstaller packaging/Updater.spec` → `build/updater/Updater.exe`
-5. `pyinstaller packaging/App.spec` → `release/{AppName}.exe`
-6. sha256 계산 + `release/latest.json` 생성
-7. 원격 저장소에 EXE 업로드 후 `latest.json` 업로드 (순서 보장, 3회 자동 재시도)
+4. 확장 프론트 빌드 (`extensions/*/frontend` → 각 `dist/`)
+5. `pyinstaller packaging/Updater.spec` → `build/updater/Updater.exe`
+6. `pyinstaller packaging/App.spec` → `release/{AppName}.exe`  
+   (채널 정보를 번들 `.env`에 박음 — Mock 노출·업데이트 차단 여부가 EXE에 각인됨)
+7. sha256 계산 + `release/latest.json` 생성
+8. `-Upload` 시: `gh release create v{version}` 으로 GitHub Release에 EXE·latest.json 첨부  
+   (qa: `--prerelease` → `releases/latest` 포인터에 잡히지 않음)
 
 ### 4. Dry-run (업로드 없이 로컬 검증)
 
 ```powershell
-pwsh packaging/release-dryrun.ps1          # 클린 상태 필요
-pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
+pwsh packaging/release-dryrun.ps1                     # 클린 상태 필요
+pwsh packaging/release-dryrun.ps1 -Channel qa -Force  # dirty 브랜치에서도 가능
 ```
 
-로컬 HTTP 서버(기본 19800 포트)로 Nexus를 흉내내고, 업데이트 감지·다운로드·sha256 검증까지 실제 네트워크 없이 테스트.
+로컬 HTTP 서버로 GitHub Releases를 흉내내고, 업데이트 감지·다운로드·sha256 검증까지 실제 네트워크 없이 테스트.
 
 ---
 
@@ -336,7 +356,7 @@ pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
 ```json
 {
   "version": "0.2.0",
-  "url": "https://nexus.internal/repository/myapp/MyAgent-0.2.0.exe",
+  "url": "https://<ghe-host>/<org>/<repo>/releases/download/v0.2.0/MyAgent.exe",
   "sha256": "a1b2c3...64자 hex",
   "size": 18742912,
   "released_at": "2026-05-23T09:00:00+09:00",
@@ -345,13 +365,15 @@ pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
 }
 ```
 
+`url`은 **버전 핀 에셋 경로**(`releases/download/v{version}/...`)다. `releases/latest/download/` 포인터는 full release(비-prerelease)만 가리키므로 QA 빌드는 잡히지 않는다.
+
 ## 업데이트 API
 
 | 엔드포인트 | 설명 |
 |---|---|
 | `GET /api/version` | 현재 버전 반환 |
-| `GET /api/update/check` | Nexus latest.json 조회, 5분 캐시 |
-| `POST /api/update/apply` | 다운로드·검증·updater 기동·graceful shutdown |
+| `GET /api/update/check` | GitHub Releases latest.json 조회, 5분 캐시 (QA 채널은 즉시 `update_available=false`) |
+| `POST /api/update/apply` | 다운로드(read-only PAT 인증)·검증·updater 기동·graceful shutdown |
 | `GET /api/update/status` | 진행 상태 폴링 (`idle\|downloading\|verifying\|staging\|restarting\|error`) |
 
 ## 보안 가드레일
@@ -359,4 +381,5 @@ pwsh packaging/release-dryrun.ps1 -Force   # dirty 브랜치에서도 가능
 - **Origin 가드**: EXE 환경에서 실제 바인딩된 origin(`http://127.0.0.1:{고정 포트}`) 이외에서 오는 `/api/*` 요청을 403으로 차단
 - **sha256 무결성 검증**: 다운로드 후 latest.json의 sha256과 불일치하면 임시 파일 삭제, 현재 EXE 보존
 - **API 키 보안**: settings.json에만 저장, 응답 시 항상 마스킹, localStorage에 저장 안 함
-- **latest.json 나중 업로드**: EXE 업로드 완료 후 latest.json 업로드 — 404 EXE 경쟁 조건 방지
+- **자격증명 분리**: 읽기 전용 PAT(`APP_REPO_READ_TOKEN`)만 EXE에 번들 — 업로드 쓰기 토큰은 gh CLI가 담당하며 EXE에 포함되지 않음
+- **EXE 먼저, latest.json 마지막**: `gh release create`는 EXE와 latest.json을 한 번에 올리지만 GitHub 측에서 EXE가 항상 먼저 조회 가능해짐(파일 단위 원자 업로드)
