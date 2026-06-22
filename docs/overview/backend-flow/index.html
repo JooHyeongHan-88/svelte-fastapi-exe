@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>백엔드 동작 전체 흐름</title>
+<link rel="stylesheet" href="assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="index.html">● 백엔드 흐름도</a>
+    <span class="crumb"><b>전체 흐름</b> — 기동부터 한 턴 처리·영속까지</span>
+    <span class="mark">Local AI Agent Platform</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <header class="hd">
+    <div class="kicker">Backend Operation Flow</div>
+    <h1 class="page-title">백엔드 동작 전체 흐름</h1>
+    <p class="subtitle">
+      EXE 더블클릭(기동)부터 채팅 한 턴이 처리·영속되기까지를 <b>결정 게이트 · 병렬 분기 · 반복 루프</b>로 한 장에 담았다.
+      <span class="gate" style="display:inline-block;padding:1px 14px;font-size:11.5px;vertical-align:middle">◇ 조건</span>
+      는 분기점, <span style="background:var(--dark);color:var(--code-tx);padding:2px 10px;border-radius:5px;font-size:11.5px;font-weight:700">▽ 병렬</span>
+      은 동시 실행, 점선 박스는 루프다. 각 노드는 <b>담당 모듈·함수</b>를 표기하고 클릭하면 상세 흐름도로 간다.
+    </p>
+  </header>
+
+  <!-- 백엔드의 5가지 책임 -->
+  <div class="chips">
+    <span class="chip">① 정적 서빙 <span class="chip mono">main.py</span></span>
+    <span class="chip">② HTTP API <span class="chip mono">api/</span></span>
+    <span class="chip">③ 에이전트 하니스 <span class="chip mono">agent/harness</span></span>
+    <span class="chip">④ 생명주기 <span class="chip mono">core/browser.py</span></span>
+    <span class="chip">⑤ 자동 업데이트 <span class="chip mono">core/updater.py</span></span>
+  </div>
+
+  <!-- 영역 색 범례 -->
+  <div class="legend">
+    <span class="it"><span class="sw" style="background:var(--c-life)"></span> 기동·생명주기</span>
+    <span class="it"><span class="sw" style="background:var(--c-api)"></span> HTTP API 경계</span>
+    <span class="it"><span class="sw" style="background:var(--c-core)"></span> 하니스 코어</span>
+    <span class="it"><span class="sw" style="background:var(--c-state)"></span> 상태·프롬프트</span>
+    <span class="it"><span class="sw" style="background:var(--c-data)"></span> 산출물·차트</span>
+    <span class="it"><span class="sw" style="background:var(--c-safe)"></span> 안전장치·종료</span>
+    <span class="it"><span class="sw" style="background:var(--c-decision)"></span> 결정 게이트</span>
+  </div>
+
+  <!-- ===================== A. 기동 & 생명주기 ===================== -->
+  <div class="sec"><span class="sec-no">A</span><h2>기동 &amp; 생명주기</h2><span class="sec-note">앱이 살아있는 조건</span></div>
+
+  <div class="flow">
+    <div class="term">● 시작 · EXE 더블클릭</div>
+    <div class="arrow"></div>
+
+    <a class="node linked cat-life wide" href="detail/01-boot-lifecycle.html">
+      <div class="node-cat">기동 진입</div>
+      <div class="node-title">create_server_socket() — 고정 포트 바인딩</div>
+      <div class="mod">main.py · core/server_socket.py · APP_PORT 또는 APP_NAME 해시(47100–48999)</div>
+      <div class="desc">단일 인스턴스를 포트 점유로 보장한다.</div>
+      <span class="more">자세히 →</span>
+    </a>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 이미 같은 앱 실행 중?</span><small>ServerAlreadyRunning 예외</small></div>
+
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">예 — 점유됨</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-cat">단일 인스턴스</div>
+          <div class="node-title">기존 탭 열고 sys.exit(0)</div>
+          <div class="mod">_probe_same_app → 기존 인스턴스 재사용</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">아니오 — 계속</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ 후보 포트도 점유?</span><small>+1..+4 체인</small></div>
+        <div class="arrow short lbl" data-label="전수 실패 시"></div>
+        <div class="node cat-life">
+          <div class="node-cat">폴백</div>
+          <div class="node-title">동적 포트 최후수단</div>
+          <div class="mod">core/server_socket — 후보 체인 → OS 동적 할당</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="merge">▽ 바인딩 성공 후 합류</div>
+    <div class="arrow"></div>
+
+    <a class="node linked cat-life wide" href="detail/01-boot-lifecycle.html">
+      <div class="node-cat">초기화</div>
+      <div class="node-title">레지스트리 load → 콘텐츠 동기화 → 라우터·정적 mount</div>
+      <div class="mod">prompt/skill/agent_registry.load() · content_sync.sync_agent_content() · load_extensions()</div>
+      <div class="desc">frozen 이면 매핑 브랜치에서 SKILLS/AGENTS/PROMPTS 동기화 후 그 디렉터리를 읽는다.</div>
+      <span class="more">자세히 →</span>
+    </a>
+    <div class="arrow"></div>
+
+    <div class="fork-bar">▽ 병렬 데몬 스레드 (fork) — 세 스레드가 앱 수명 동안 동시 실행</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">스레드 1</div>
+        <div class="node cat-life"><div class="node-title">watchdog</div><div class="mod">core/browser.py · 클라이언트 0명 감지</div></div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">스레드 2</div>
+        <div class="node cat-life"><div class="node-title">open_browser</div><div class="mod">기본 브라우저로 첫 화면 오픈</div></div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">메인</div>
+        <div class="node cat-life"><div class="node-title">server.run()</div><div class="mod">uvicorn — 요청 수신 시작</div></div>
+      </div>
+    </div>
+    <div class="arrow lbl" data-label="브라우저 로드"></div>
+
+    <!-- 생명주기 루프 -->
+    <div class="loop cycle">
+      <span class="loop-tab">↻ Presence keepalive · 탭이 열려 있는 한 서버 생존</span>
+      <span class="back-lbl">↻ 30s ping</span>
+      <div class="flow">
+        <a class="node linked cat-life wide" href="detail/01-boot-lifecycle.html">
+          <div class="node-cat">생존 신호</div>
+          <div class="node-title">presence SSE 연결 = 살아있음</div>
+          <div class="mod">api/presence.py · core/browser.connect_client() · 30s 마다 : ping</div>
+          <div class="desc">연결 유지가 곧 생존 신호. 세션 전부 삭제돼도 KEEPALIVE_ID 로 유지.</div>
+          <span class="more">자세히 →</span>
+        </a>
+        <div class="arrow"></div>
+        <div class="gate"><span class="q">◇ 탭 닫힘 → 2s grace 후 clients == 0 ?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">예 — 아무도 없음</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">server.should_exit = True</div><div class="mod">watchdog → 서버 종료</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">아니오 — 누군가 봄</span>
+            <div class="arrow short"></div>
+            <div class="node cat-life"><div class="node-title">계속 생존</div><div class="mod">↻ 루프 상단으로</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== B. HTTP 경계 → 턴 진입 ===================== -->
+  <div class="arrow tall lbl" data-label="사용자가 메시지 전송"></div>
+
+  <div class="sec"><span class="sec-no">B</span><h2>HTTP 경계 → 채팅 턴 진입</h2><span class="sec-note">backend/api</span></div>
+
+  <div class="flow">
+    <a class="node linked cat-api wide" href="detail/02-api-boundary.html">
+      <div class="node-cat">HTTP API 경계</div>
+      <div class="node-title">POST /api/chat 수신</div>
+      <div class="mod">api/chat.py · router · 8개 라우터 공통 진입</div>
+      <span class="more">자세히 →</span>
+    </a>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ Origin 가드 통과?</span><small>frozen EXE 만 검사 (dev 는 Vite 프록시로 자동 통과)</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">차단</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe"><div class="node-title">403 거부</div><div class="mod">deps.require_local_origin</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">통과</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-api" href="detail/03-chat-turn.html">
+          <div class="node-title">event_source() 진입</div>
+          <div class="mod">api/chat.py</div>
+          <span class="more">→</span>
+        </a>
+      </div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 같은 client_id 턴 진행 중? (R2)</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">예 — 중복</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe"><div class="node-title">즉시 거부</div><div class="mod">ErrorEvent + DoneEvent (run_turn 미진입)</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">아니오 — 단독</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-api" href="detail/03-chat-turn.html">
+          <div class="node-title">get_provider() → harness.run_turn()</div>
+          <div class="mod">_active_turn_clients.add(id) · 설정으로 provider 즉석 생성</div>
+          <span class="more">→</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== C. run_turn 오케스트레이션 ===================== -->
+  <div class="arrow"></div>
+  <div class="sec"><span class="sec-no">C</span><h2>run_turn — 한 턴의 오케스트레이션</h2><span class="sec-note">agent/harness</span></div>
+
+  <div class="flow">
+    <a class="node linked cat-core wide" href="detail/04-turn-loop.html">
+      <div class="node-cat">턴 준비</div>
+      <div class="node-title">⑤ 상태 로드 → SKILL 선택 → system prompt 합성</div>
+      <div class="mod">harness/loop.py · run_turn() · state_store.get() · _make_system_prompt_composer()</div>
+      <div class="desc">AgentState(todo·pending) 로드 후 도구 스펙 선별, 프롬프트 동적 합성.</div>
+      <span class="more">자세히 →</span>
+    </a>
+    <div class="arrow"></div>
+
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl">todo 전원 terminal? (R5)</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-state" href="detail/08-state.html">
+          <div class="node-title">리셋 / 유지</div>
+          <div class="mod">state/todo.py · _TERMINAL_STATUSES</div>
+          <span class="more">상태 →</span>
+        </a>
+      </div>
+      <div class="col">
+        <span class="edge-lbl">force_skills?</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-state" href="detail/07-prompt.html">
+          <div class="node-title">get_by_names / select()</div>
+          <div class="mod">prompt/compose.py · 슬래시 강제 vs 트리거 매칭</div>
+          <span class="more">프롬프트 →</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- 메인 turn 루프 -->
+    <div class="loop cycle">
+      <span class="loop-tab">↻ _run_agent_turn 루프 · 최대 12회 (APP_MAX_AGENT_ITERATIONS)</span>
+      <span class="back-lbl">↻ CONTINUE → 다음 iteration</span>
+      <div class="flow">
+
+        <a class="node linked cat-safe wide" href="detail/04-turn-loop.html">
+          <div class="node-cat">① 예산 임박 (R7)</div>
+          <div class="node-title">wind-down 주입</div>
+          <div class="mod">_maybe_inject_wind_down() · 남은 호출 ≤ 2 면 마무리 지시 1회</div>
+          <span class="more">자세히 →</span>
+        </a>
+        <div class="arrow"></div>
+
+        <div class="gate"><span class="q">◇ 예산 소진? (used ≥ max_calls)</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">소진</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">ErrorEvent → return</div><div class="mod">루프 탈출 → ⑦ 영속화</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">여유</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core"><div class="node-title">budget.try_consume()</div><div class="mod">budget.py · 1회 소비</div></div>
+          </div>
+        </div>
+        <div class="arrow"></div>
+
+        <div class="node cat-core wide">
+          <div class="node-cat">③ LLM 스트리밍</div>
+          <div class="node-title">provider.astream(messages, specs)</div>
+          <div class="mod">delta·reasoning 즉시 yield · tool_call 누적 · done → break</div>
+        </div>
+        <div class="arrow"></div>
+
+        <div class="gate"><span class="q">◇ tool_call 있음?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">없음</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core"><div class="node-title">assistant 텍스트 append → return</div><div class="mod">턴 정상 종료 → ⑦ 영속화</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">있음</span>
+            <div class="arrow short"></div>
+            <a class="node linked cat-core" href="detail/05-call-handlers.html">
+              <div class="node-title">_handle_tool_call</div>
+              <div class="mod">call_handlers.py · 3단계 결정트리</div>
+              <span class="more">핸들러 →</span>
+            </a>
+          </div>
+        </div>
+        <div class="arrow lbl" data-label="tool_call 1건씩 분기"></div>
+
+        <!-- tool_call 결정트리 -->
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl">깨진 인자? (F3)</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">self-correct 요구</div><div class="mod">_handle_malformed_args · ToolResultEvent(is_error)</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl">sentinel?</span>
+            <div class="arrow short"></div>
+            <a class="node linked cat-core" href="detail/05b-sentinel.html">
+              <div class="node-title">sentinel 디스패치</div>
+              <div class="mod">_select_sentinel_handler · 7종</div>
+              <span class="more">sentinel →</span>
+            </a>
+          </div>
+          <div class="col">
+            <span class="edge-lbl">위임?</span>
+            <div class="arrow short"></div>
+            <a class="node linked cat-core" href="detail/06-dispatch.html">
+              <div class="node-title">서브에이전트 (순차·병렬)</div>
+              <div class="mod">call_sub_agent(s) · fork/join</div>
+              <span class="more">디스패치 →</span>
+            </a>
+          </div>
+          <div class="col">
+            <span class="edge-lbl">일반 도구</span>
+            <div class="arrow short"></div>
+            <a class="node linked cat-core" href="detail/11-tools-registries.html">
+              <div class="node-title">슬롯가드 → loop_guard → 실행</div>
+              <div class="mod">guard.validate_tool_args → _execute_tool</div>
+              <span class="more">도구 →</span>
+            </a>
+          </div>
+        </div>
+        <div class="arrow"></div>
+
+        <div class="gate"><span class="q">◇ CallOutcome?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">interrupted</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">break</div><div class="mod">ask_user·슬롯 누락 → 루프 탈출</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">stop</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">return</div><div class="mod">complete_subagent → 즉시 종료</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">CONTINUE</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core"><div class="node-title">↻ back-edge</div><div class="mod">루프 상단으로 — provider 재호출</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow lbl exit" data-label="반복 상한 소진 (for-else, F6)"></div>
+    <a class="node linked cat-safe wide" href="detail/04-turn-loop.html">
+      <div class="node-cat">Fallback Salvage</div>
+      <div class="node-title">_emit_max_iterations_fallback — 도구 없는 최종 요약</div>
+      <div class="mod">loop.py · gate: todo 전원 terminal? → 초록(복구·is_recovered) / 빨강(미완)</div>
+      <span class="more">자세히 →</span>
+    </a>
+  </div>
+
+  <!-- ===================== D. 스트리밍 → 영속화 ===================== -->
+  <div class="arrow"></div>
+  <div class="sec"><span class="sec-no">D</span><h2>스트리밍 → 영속화</h2><span class="sec-note">SSE · stores</span></div>
+
+  <div class="flow">
+    <a class="node linked cat-core wide" href="detail/03-chat-turn.html">
+      <div class="node-cat">SSE 프로토콜</div>
+      <div class="node-title">⑥ 백엔드 → 프론트 이벤트 13종</div>
+      <div class="mod">agent/models.py · StreamEvent (delta·tool_call·tool_result·todo_update·agent:*·ask_user·error·done)</div>
+      <div class="desc">프론트는 이 이벤트만으로 모든 UI(타이핑·도구 카드·트레일·산출물 칩)를 그린다.</div>
+      <span class="more">자세히 →</span>
+    </a>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 턴 처리 중 예외 발생?</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">예 — 예외</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-safe" href="detail/12-safety.html">
+          <div class="node-title">R1 실패 턴 영속</div>
+          <div class="mod">_persist_failed_turn · 미해결 쌍 보정 + 안전화 ErrorEvent(F12)</div>
+          <span class="more">안전장치 →</span>
+        </a>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">아니오 — 정상</span>
+        <div class="arrow short"></div>
+        <a class="node linked cat-state" href="detail/08-state.html">
+          <div class="node-title">append(F7) + state.set + clear_all_pending(F11)</div>
+          <div class="mod">stores/conversation.py · tool 800자 절단</div>
+          <span class="more">상태 →</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="merge">▽ 양 경로 합류</div>
+    <div class="arrow"></div>
+    <div class="term end">■ 종료 · DoneEvent 정확히 1회</div>
+  </div>
+
+  <!-- ===================== E. cross-cut ===================== -->
+  <div class="sec"><span class="sec-no">E</span><h2>가로지르는 서브시스템</h2><span class="sec-note">턴 흐름을 떠받치는 영역</span></div>
+  <p class="lead">위 한 턴 흐름의 곳곳에서 호출되는 공통 인프라. 각 카드를 클릭하면 그 서브시스템의 상세 흐름도로 이동한다.</p>
+
+  <div class="grid c2">
+    <a class="node linked cat-data" href="detail/09-artifact-pipeline.html">
+      <div class="node-cat">산출물</div>
+      <div class="node-title">산출물 파이프라인 — 세션을 넘는 데이터 영속</div>
+      <div class="mod">tools/artifact.py · core/result_store.py · runtime/namespace.py</div>
+      <div class="desc">save → manifest 기록 → 프롬프트 노출 → list/load 로 재사용. 경로 해석은 resolve_result_path 한 곳으로 일원화.</div>
+      <span class="more">자세히 →</span>
+    </a>
+
+    <a class="node linked cat-data" href="detail/10-chart-pipeline.html">
+      <div class="node-cat">차트</div>
+      <div class="node-title">차트 파이프라인 — 선언적 spec &amp; 인터랙션</div>
+      <div class="mod">agent/charts/ · api/chart.py · api/artifact.py</div>
+      <div class="desc">데이터(parquet)와 선언(spec)을 분리 렌더 → 사후 필터·레전드 편집(undo/redo 스택).</div>
+      <span class="more">자세히 →</span>
+    </a>
+
+    <a class="node linked cat-core" href="detail/11-tools-registries.html">
+      <div class="node-cat">도구 &amp; 레지스트리</div>
+      <div class="node-title">도구 등록·검증·실행 + 4 레지스트리</div>
+      <div class="mod">tools/ · @register_tool · guard.py · registries/ (Prompt·Skill·Agent·Tool)</div>
+      <div class="desc">"파일 하나 = 도구 하나" 자동 등록. 메타는 부팅 1회, 본문은 lazy 로딩.</div>
+      <span class="more">자세히 →</span>
+    </a>
+
+    <a class="node linked cat-core" href="detail/05b-sentinel.html">
+      <div class="node-cat">sentinel</div>
+      <div class="node-title">sentinel 도구 — 하니스가 가로채는 7종</div>
+      <div class="mod">_select_sentinel_handler · add_todo·complete_todo·ask_user·activate_skill·call_sub_agent(s)·complete_subagent</div>
+      <div class="desc">함수 본문 미실행 — 호출이 곧 제어 신호(상태 변형·질문·위임·종료).</div>
+      <span class="more">자세히 →</span>
+    </a>
+
+    <a class="node linked cat-safe" href="detail/12-safety.html">
+      <div class="node-cat">안전장치</div>
+      <div class="node-title">Harness 복원력 카탈로그 (F1~F12 · R1~R8)</div>
+      <div class="mod">.claude/rules/harness_resilience.md 의 불변식</div>
+      <div class="desc">실 LLM 의 비결정성·실패 경로를 흡수하는 방어선 — 슬롯 가드·스트림 잘림·히스토리 정합성·예산·키 마스킹.</div>
+      <span class="more">자세히 →</span>
+    </a>
+
+    <a class="node linked cat-cfg" href="detail/13-settings-update.html">
+      <div class="node-cat">설정 · 업데이트</div>
+      <div class="node-title">설정 hot-swap + 자동 업데이트 / 콘텐츠 동기화</div>
+      <div class="mod">settings/store.py · core/updater.py · core/content_sync.py</div>
+      <div class="desc">요청마다 최신 설정으로 provider 즉석 생성. 4단계 rename-to-backup 자가 교체 + 브랜치 콘텐츠 동기화.</div>
+      <span class="more">자세히 →</span>
+    </a>
+  </div>
+
+  <div class="xlinks">
+    <a href="detail/01-boot-lifecycle.html">01 기동·생명주기</a>
+    <a href="detail/02-api-boundary.html">02 API 경계</a>
+    <a href="detail/03-chat-turn.html">03 채팅 턴·SSE</a>
+    <a href="detail/04-turn-loop.html">04 턴 루프</a>
+    <a href="detail/05-call-handlers.html">05 tool_call 핸들러</a>
+    <a href="detail/05b-sentinel.html">05b sentinel</a>
+    <a href="detail/06-dispatch.html">06 디스패치</a>
+    <a href="detail/07-prompt.html">07 프롬프트</a>
+    <a href="detail/08-state.html">08 상태</a>
+    <a href="detail/09-artifact-pipeline.html">09 산출물</a>
+    <a href="detail/10-chart-pipeline.html">10 차트</a>
+    <a href="detail/11-tools-registries.html">11 도구·레지스트리</a>
+    <a href="detail/12-safety.html">12 안전장치</a>
+    <a href="detail/13-settings-update.html">13 설정·업데이트</a>
+  </div>
+
+  <div class="foot">
+    교육용 시각 자료 · 출처: <code class="i">docs/harness/</code> · <code class="i">docs/overview/04-backend-flow.md</code> · <code class="i">.claude/rules/</code> ·
+    백엔드 소스(읽기 전용 참조). 코드와 어긋나면 소스가 진실원천.
+  </div>
+
+</div>
+</body>
+</html>

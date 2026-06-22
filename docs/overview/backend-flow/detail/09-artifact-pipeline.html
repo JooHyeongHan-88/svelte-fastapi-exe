@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>09 · 산출물 파이프라인</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">E · <b>산출물 파이프라인</b></span>
+    <span class="mark">tools/artifact*.py · core/result_store.py · runtime/namespace.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Artifact Pipeline</div>
+    <h1 class="page-title">⑨ 산출물 파이프라인 — 세션을 넘는 데이터 영속</h1>
+    <p class="subtitle">
+      에이전트 작업 결과가 휘발되지 않고 <b>다음 턴·다음 세션에서 재사용</b>되는 구조.
+      저장 → manifest 기록 → 프롬프트 노출 → list/load 재사용의 순환.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>저장 구조</h2></div>
+  <div class="code">result/
+└─ &lt;세션제목&gt;-&lt;id 앞8자&gt;/          <span class="c">← 세션 단위</span>
+    ├─ _artifacts.jsonl           <span class="c">← 세션 manifest (산출물 장부)</span>
+    └─ &lt;YYYYMMDD-HHmmss&gt;/         <span class="c">← 턴 단위 슬롯 (artifact_slot)</span>
+        ├─ data.parquet           <span class="c">데이터 (표준 포맷)</span>
+        ├─ charts.spec.json       <span class="c">차트 선언</span>
+        ├─ charts.json            <span class="c">렌더된 ECharts option (파생물)</span>
+        └─ report.md              <span class="c">보고서</span></div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>재발견 순환 — "지난번 그 데이터로 이어서"</h2></div>
+  <div class="flow">
+    <div class="node cat-data wide">
+      <div class="node-cat">① 저장</div>
+      <div class="node-title">save_artifact / exec_code 의 artifact_dir()</div>
+      <div class="mod">tools/artifact.py · save_artifact() → core/result_store.py · append_manifest_entry()</div>
+      <div class="desc">kind: markdown/json/text/parquet + 바이너리(png/svg/pdf/pptx/xlsx, namespace 변수 <code class="i">$df</code>). 성공 시 manifest 에 자동 기록(exec_code 직접 쓴 파일도 슬롯 diff 로 등록 — R6).</div>
+    </div>
+    <div class="arrow"></div>
+    <a class="node linked cat-state wide" href="07-prompt.html">
+      <div class="node-cat">② 노출</div>
+      <div class="node-title"># Session Artifacts 섹션 주입</div>
+      <div class="mod">prompt/artifacts.py · _render_session_artifacts_section() ← read_manifest_entries()</div>
+      <div class="desc">매 턴 system prompt 에 최근 N개(기본 10) 산출물 목록 주입. <b>대화 히스토리가 잘려도</b> 디스크 manifest 가 진실원천이라 과거 산출물 재발견이 끊기지 않는다.</div>
+      <span class="more">프롬프트 →</span>
+    </a>
+    <div class="arrow"></div>
+    <div class="node cat-data wide">
+      <div class="node-cat">③ 재사용</div>
+      <div class="node-title">list_artifacts → load_artifact → exec_code</div>
+      <div class="mod">tools/artifact_io.py · list_artifacts() / load_artifact(path, store_as) · ARTIFACT_IO_TOOL_NAMES</div>
+      <div class="desc">목록 재발견 → namespace 변수로 복원 → 후속 분석. 단순 재표시는 display_* 에 경로 직접 전달. 이 두 도구는 화이트리스트 무관 <b>항상 노출</b>.</div>
+    </div>
+  </div>
+  <div class="note"><b>경로 해석 일원화:</b> 모든 경로는 <code class="i">core/result_store.py · resolve_result_path()</code> 한 곳에서 RESULT_DIR 절대 기준 + containment 검증 → frozen EXE 의 CWD 함정 회피, <code class="i">result/</code> 밖 접근 차단.</div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>세션 namespace — LRU spill</h2></div>
+  <div class="flow">
+    <div class="node cat-data wide">
+      <div class="node-cat">변수 저장</div>
+      <div class="node-title">exec_code·call_function → namespace[varname] = 객체</div>
+      <div class="mod">runtime/namespace.py · SessionNamespace</div>
+      <div class="desc">DataFrame·ndarray 등 객체를 세션 namespace 에 등록. 후속 eval_expression·describe_variable 에서 재사용.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ len(_entries) &gt; APP_NAMESPACE_MAX_VARS?</span><small>LRU 상한 초과</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예 — 초과</span>
+        <div class="arrow short"></div>
+        <div class="node cat-data">
+          <div class="node-cat">spill (R6)</div>
+          <div class="node-title">_evict_if_needed() — 가장 오래된 항목을 디스크로 spill</div>
+          <div class="mod">삭제가 아니라 deregister — 재참조 시 lazy 부활</div>
+          <div class="desc">요약 크기는 bounded 유지. crash 복구용 __init__ eager 재색인.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-data"><div class="node-title">메모리 그대로</div></div>
+      </div>
+    </div>
+    <div class="merge">▽ 합류</div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ presence 단절 2초 후?</span><small>의도적 휘발 — 브라우저 탭 닫힘</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">cleanup_namespace() — 디렉터리째 삭제</div>
+          <div class="desc">세션 간 영속의 정식 경로는 save_artifact → load_artifact. namespace 는 연결 동안만 유효.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-data"><div class="node-title">namespace 유지</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>코드 실행 보안 모델 — evaluator.py</h2></div>
+  <div class="card">
+    <p style="color:var(--ink)">단일 사용자 로컬 데스크탑 앱 위협 모델에 맞춘 가드 (완전한 sandbox 아님 — LLM 실수·폭주 방지용).</p>
+    <ul style="margin:10px 0 0 18px; color:var(--mut); font-size:13.5px; line-height:1.8">
+      <li><b>차단:</b> <code class="i">exec</code>/<code class="i">eval</code>/<code class="i">compile</code>(재귀 인젝션), <code class="i">os</code>·<code class="i">sys</code>·<code class="i">subprocess</code>·<code class="i">socket</code>·<code class="i">shutil</code></li>
+      <li><b>허용:</b> 그 외 builtin 전부 + stdlib 안전 목록 + <code class="i">APP_ALLOWED_LIBRARIES</code> 등록 패키지</li>
+      <li><code class="i">safe_exec</code>/<code class="i">safe_eval</code> 은 globals/locals 를 단일 dict(module scope)로 실행 — genexpr·nested def 의 NameError 회피. 실행 후 <code class="i">__builtins__</code> 제거</li>
+    </ul>
+  </div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="07-prompt.html">07 Session Artifacts →</a>
+    <a href="10-chart-pipeline.html">10 차트(parquet+spec) →</a>
+    <a href="11-tools-registries.html">11 도구 카탈로그 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">.claude/rules/agent_runtime.md</code> · <code class="i">docs/overview/04-backend-flow.md</code> §13 · <code class="i">backend/core/result_store.py</code></div>
+</div>
+</body>
+</html>

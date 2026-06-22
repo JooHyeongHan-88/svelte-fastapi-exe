@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>11 · 도구 &amp; 레지스트리</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">E · <b>도구 &amp; 레지스트리</b></span>
+    <span class="mark">agent/tools/ · agent/registries/ · agent/guard.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Tools &amp; Registries</div>
+    <h1 class="page-title">⑪ 도구 등록·검증·실행 + 4 레지스트리</h1>
+    <p class="subtitle">
+      "파일 하나 = 도구 하나" 자동 등록과, 마크다운/데코레이터 정의를 런타임 객체로 공급하는
+      4개 레지스트리. 메타는 부팅 1회, 본문은 lazy.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>도구 생애 — 등록 → 검증 → 실행</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-cat">등록</div>
+      <div class="node-title">@register_tool — 부팅 시 자기등록</div>
+      <div class="mod">registries/tools.py · register_tool() · ToolRegistry · RegisteredTool · registry</div>
+      <div class="desc">import agent.tools 부수효과로 _REGISTRY 채움. 시그니처의 <code class="i">Annotated[T, "설명"]</code> → Pydantic create_model 로 JSON Schema(LLM 노출) + TypeAdapter(검증) 1회 생성.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-safe wide">
+      <div class="node-cat">검증</div>
+      <div class="node-title">guard.validate_tool_args() → _split_errors()</div>
+      <div class="mod">guard.py · MissingSlot · SlotCheckResult</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ ValidationError 종류?</span><small>책임자별 분기 — 사용자 책임 vs LLM 책임</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl">missing — 값 부재</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">AskUserEvent → 사용자에게 재질문</div>
+          <div class="mod">slot_prompts 에서 질문 문구 · outcome.interrupted=True</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl">invalid — 형식 오류</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">ToolResultEvent(is_error) → LLM self-correct</div>
+          <div class="mod">사용자 미개입. 동시에 missing 도 있으면 이 경로가 포함 안내.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">통과</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core wide">
+          <div class="node-cat">실행 — 일등시민 타임아웃</div>
+          <div class="node-title">tool_exec._execute_tool()</div>
+          <div class="mod">asyncio.wait_for(timeout=tool.timeout_seconds) · 기본 APP_TOOL_DEFAULT_TIMEOUT(30s)</div>
+          <div class="desc">timeout → [timeout], 예외 → [error type]. sentinel 이 흘러오면 명시적 에러(L3).</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Sentinel 도구:</b> <code class="i">add_todo</code> 처럼 하니스가 직접 가로채는 도구는 <code class="i">sentinel=True</code> 로 등록 — 함수 본문 미실행, 호출 신호 역할만.</div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>Built-in 도구 카탈로그</h2></div>
+  <table class="tbl">
+    <thead><tr><th>군</th><th>도구 (모듈)</th></tr></thead>
+    <tbody>
+      <tr><td>계획·상호작용 (sentinel)</td><td class="mono">add_todo · complete_todo (planner.py) · ask_user (clarify.py) · activate_skill · call_sub_agent · call_sub_agents_parallel · complete_subagent (dispatch.py)</td></tr>
+      <tr><td>산출물 저장·재발견</td><td class="mono">save_artifact (artifact.py) · list_artifacts · load_artifact (artifact_io.py, 항상 노출)</td></tr>
+      <tr><td>시각화·핸드오프</td><td class="mono">display_image · display_chart · display_markdown (visualize.py) · open_curation (curation.py)</td></tr>
+      <tr><td>라이브러리 런타임 메타 (8종, api_refs 시 자동 주입)</td><td class="mono">inspect_callable · list_module_members · call_function · eval_expression · exec_code · list_namespace · describe_variable · delete_variable (runtime.py · INFRASTRUCTURE_TOOL_NAMES)</td></tr>
+      <tr><td>데모</td><td class="mono">now (builtin.py)</td></tr>
+    </tbody>
+  </table>
+  <div class="code"><span class="c"># 도구 노출 규칙 요약</span>
+오케스트레이터  = 전체 도구 − complete_subagent
+서브 에이전트   = tools 화이트리스트(비면 전체) − 위임 도구
+항상 노출       = list_artifacts · load_artifact
+조건부 자동 주입 = 메타 도구 8종 (api_refs 있을 때)</div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>4개의 Registry — "정의 파일 → 런타임 객체"</h2></div>
+  <table class="tbl">
+    <thead><tr><th>Registry</th><th>원천</th><th>관리 대상 / 로딩 정책</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">PromptRegistry</td><td>PROMPTS/*.md</td><td>기반 system prompt 합성 <code class="i">compose()</code> — 매 턴 읽기, dev mtime 핫리로드</td></tr>
+      <tr><td class="mono">SkillRegistry</td><td>SKILLS/*.md</td><td>트리거 매칭 <code class="i">select()</code> / 슬래시 <code class="i">get_by_names()</code> — 메타 부팅 1회, 본문 lazy</td></tr>
+      <tr><td class="mono">AgentRegistry</td><td>AGENTS/*.md</td><td>서브에이전트 카탈로그, Case 3 매핑 — 메타 부팅 1회, 본문 위임 시 lazy</td></tr>
+      <tr><td class="mono">ToolRegistry</td><td>@register_tool</td><td>스키마·검증기·실행 함수 — import 시 자기등록(부팅 1회)</td></tr>
+    </tbody>
+  </table>
+  <div class="note">공통 패턴: <b>메타데이터(Front Matter)는 가볍게 미리, 본문은 필요할 때 lazy</b> — 파일이 늘어나도 부팅 비용이 늘지 않는다. frozen 은 부팅 시 <code class="i">content_sync</code> 가 성공하면 <code class="i">use_directory()</code> 로 동기화본을 읽는다.</div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>오케스트레이터 라우팅 — Case 0~5</h2></div>
+  <table class="tbl">
+    <thead><tr><th>Case</th><th>조건 → 행동</th></tr></thead>
+    <tbody>
+      <tr><td class="c">0</td><td>요청 모호 → ask_user 로 먼저 질문</td></tr>
+      <tr><td class="c">1</td><td>일상 대화 → 도구 없이 즉시 텍스트</td></tr>
+      <tr><td class="c">2</td><td>에이전트 지명 → 즉시 위임</td></tr>
+      <tr><td class="c">3</td><td>SKILL 트리거 + 전담 에이전트 존재 → 자동 위임(직접 실행 금지)</td></tr>
+      <tr><td class="c">4</td><td>SKILL 매칭 but 전담 에이전트 없음 → 직접 도구 실행</td></tr>
+      <tr><td class="c">5</td><td>마지막 응답 → "무엇을/결과는/다음은" 완료 보고</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>Case 3 가 핵심:</b> SKILL(무엇을) × AGENT(누가)의 결정론 매핑 — LLM 임의 판단이 아니라 설정 파일이 라우팅을 결정.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="05-call-handlers.html">05 슬롯 가드(핸들러) →</a>
+    <a href="06-dispatch.html">06 위임(Case 3) →</a>
+    <a href="07-prompt.html">07 카탈로그 →</a>
+    <a href="12-safety.html">12 슬롯 가드(안전) →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/overview/04-backend-flow.md</code> §10–12 · <code class="i">.claude/rules/agent_extension.md</code> · <code class="i">backend/agent/registries/</code></div>
+</div>
+</body>
+</html>

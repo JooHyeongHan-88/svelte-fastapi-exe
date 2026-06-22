@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · 채팅 턴 진입</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">B · <b>채팅 턴 진입</b></span>
+    <span class="mark">api/chat.py · agent/models.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Chat Turn Entry</div>
+    <h1 class="page-title">③ 채팅 턴 진입 — SSE 스트림 &amp; 동시 턴 가드</h1>
+    <p class="subtitle">
+      사용자 메시지 전송 → Provider 선택 → <code class="i">harness.run_turn</code> 호출까지.
+      동시 턴 가드(R2) · provider 스트리밍 경계(F2·F4) · SSE 13종 이벤트를 결정트리로 표현한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>SSE 스트림 진입 — 결정트리</h2></div>
+
+  <div class="flow">
+    <div class="term">● POST /api/chat — 사용자 메시지 수신</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-api wide">
+      <div class="node-cat">요청 파싱</div>
+      <div class="node-title">ChatRequest 역직렬화</div>
+      <div class="mod">api/chat.py · ChatRequest(client_id, message, force_skills)</div>
+      <div class="desc">force_skills: 슬래시 커맨드로 프론트가 지정한 SKILL 이름 목록. 없으면 자동 트리거 매칭 경로.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 같은 client_id 로 턴 진행 중? (R2)</span><small>_active_turn_clients: set[str] — uvicorn 단일 event loop, await 없이 원자적 check-add</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">예 — 이미 실행 중</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-cat">즉시 거부 (R2)</div>
+          <div class="node-title">ErrorEvent + DoneEvent</div>
+          <div class="mod">run_turn 미진입 · 2건으로 스트림 종결</div>
+          <div class="desc">탭 복제(같은 client_id 공유) 시 양쪽 동시 전송 차단. 프론트 ui.streaming 가드는 탭 단위라 막지 못해 서버 레벨에서 차단.</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="term">■ 종료</div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core">
+          <div class="node-title">_active_turn_clients.add(client_id)</div>
+          <div class="mod">finally 에서 반드시 remove</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core wide">
+          <div class="node-cat">Provider 선택</div>
+          <div class="node-title">get_provider(settings)</div>
+          <div class="mod">agent/providers/factory.py · 매 요청 SettingsStore.get() 재조회</div>
+          <div class="desc">서버 재시작 없이 provider/모델 hot-swap. mock·dtgpt·openai_compatible 분기.</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core wide">
+          <div class="node-cat">하니스 위임</div>
+          <div class="node-title">harness.run_turn(...) → AsyncGenerator</div>
+          <div class="mod">agent/harness/loop.py</div>
+          <div class="desc">SSE 이벤트 generator 를 async for 로 소비해 클라이언트에 스트리밍. 상세 → 04 턴 루프.</div>
+        </div>
+      </div>
+    </div>
+    <div class="merge">▽ 이벤트 스트림 합류 (정상 경로)</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-api wide">
+      <div class="node-cat">SSE 직렬화</div>
+      <div class="node-title">StreamEvent → "data: {json}\n\n"</div>
+      <div class="mod">api/chat.py · StreamingResponse(EventSourceResponse)</div>
+      <div class="desc">CancelledError(ESC/disconnect)는 debug 로그 후 재전파(F12 — 에러 노이즈 방지).</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="term">■ DoneEvent 수신 시 스트림 닫힘</div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>Provider 스트리밍 경계 (F2·F3·F4)</h2></div>
+
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-cat">스트림 생성 with 재시도 (F4)</div>
+      <div class="node-title">_create_stream_with_retry(messages, tools)</div>
+      <div class="mod">agent/providers/openai.py · _MAX_RETRIES=2 · _RETRY_BASE_DELAY=0.5s+jitter</div>
+      <div class="desc">일시 오류(APIConnectionError·APITimeoutError·RateLimitError·InternalServerError) → 지수 백오프 재시도. 영구 오류(401·400) → 즉시 전파. 재시도는 스트림 생성 전 단계에서만.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 스트림이 잘렸나? (F2)</span><small>finish_reason=="length" 또는 연결 종료</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예 — 잘림</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-cat">잘림 대응 (F2)</div>
+          <div class="node-title">tool_calls_buffer flush → DoneEvent ×1</div>
+          <div class="mod">버퍼된 tool_call 항상 emit</div>
+          <div class="desc">잘림이어도 버퍼된 tool_call 은 emit. DoneEvent 정확히 1회 보장 — harness 루프가 멈추지 않음.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오 — 정상</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ tool_call 인자 JSON 불완전? (F3)</span><small>스트리밍 잘림으로 파싱 실패</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">예</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe">
+              <div class="node-title">MALFORMED_TOOL_ARGS_KEY 에 원본 보존</div>
+              <div class="desc">{"__malformed_arguments__": "..."} — harness 에서 감지 → ToolResultEvent(is_error) self-correct 요구.</div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">정상</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core"><div class="node-title">정상 ToolCallEvent yield</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>SSE 이벤트 13종 카탈로그</h2></div>
+  <table class="tbl">
+    <thead><tr><th>type</th><th>핵심 필드</th><th>프론트 처리</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">delta</td><td>text</td><td>어시스턴트 버블 텍스트 누적</td></tr>
+      <tr><td class="mono">tool_call</td><td>id, name, arguments</td><td>도구 카드 진입 애니메이션</td></tr>
+      <tr><td class="mono">tool_result</td><td>tool_call_id, content, is_error, data</td><td>도구 결과 + 아티팩트 칩 생성</td></tr>
+      <tr><td class="mono">todo_update</td><td>items(전체 스냅샷)</td><td>TodoProgress 패널 교체</td></tr>
+      <tr><td class="mono">skill_active</td><td>skills</td><td>SkillBadge 표시</td></tr>
+      <tr><td class="mono">skill_complete</td><td>skills</td><td>SkillBadge 완료 표식</td></tr>
+      <tr><td class="mono">agent:switch</td><td>agent_id, reason, dispatch_id</td><td>AgentTrail 세그먼트 push</td></tr>
+      <tr><td class="mono">agent:progress</td><td>agent_id, event, dispatch_id</td><td>dispatch_id 로 트레일 라우팅</td></tr>
+      <tr><td class="mono">agent:return</td><td>agent_id, summary, dispatch_id</td><td>트레일 done 마킹</td></tr>
+      <tr><td class="mono">ask_user</td><td>question, slot_key, options, input_type</td><td>AskUserCard 렌더 + 입력 대기</td></tr>
+      <tr><td class="mono">reasoning</td><td>text</td><td>ReasoningBlock(접힘·펼침)</td></tr>
+      <tr><td class="mono">error</td><td>message, is_recovered</td><td>빨강(미완)/초록(복구) 점선 버블</td></tr>
+      <tr><td class="mono">done</td><td>(없음)</td><td>스트림 닫기 + streaming=false</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note"><b>아티팩트 칩:</b> <code class="i">tool_result.data.kind</code> 가 <code class="i">markdown/chart/image/extension/parquet</code> 이면 <code class="i">chatActions._ARTIFACT_TOOL_NAMES</code> 기반으로 칩 자동 생성 + 패널 자동 오픈.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="02-api-boundary.html">← 02 API 경계</a>
+    <a href="04-turn-loop.html">04 턴 루프 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/overview/04-backend-flow.md</code> §6–7 · <code class="i">harness_resilience.md</code> F2·F3·F4·R2 · <code class="i">backend/api/chat.py</code></div>
+</div>
+</body>
+</html>

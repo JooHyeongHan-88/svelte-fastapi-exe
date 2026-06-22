@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>08 · 상태 변형</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">C · <b>상태 변형</b></span>
+    <span class="mark">harness/state/</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">State Mutation</div>
+    <h1 class="page-title">⑧ 상태 변형 — AgentState 조작</h1>
+    <p class="subtitle">
+      <code class="i">AgentState</code> 를 직접 조작하는 네 모듈. <code class="i">loop</code> · <code class="i">call_handlers</code> 양쪽이 공유하므로
+      단방향 의존으로 분리됐다(<code class="i">state/</code> 는 상위 모듈을 import 하지 않음 — 순환 없음).
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">0</span><h2>모듈 구성</h2></div>
+  <table class="tbl">
+    <thead><tr><th>모듈</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">todo.py</td><td>Planner 핸들러 — add_todo/complete_todo 처리, terminal 판정, 통계 이벤트</td></tr>
+      <tr><td class="mono">balancing.py</td><td>미해결 tool_call 에 placeholder 를 채워 OpenAI 와이어 규약 준수 (F1b · R1)</td></tr>
+      <tr><td class="mono">loop_guard.py</td><td>호출 시그니처 fingerprint 기반 동일 호출 반복 감지 (R4)</td></tr>
+      <tr><td class="mono">pending.py</td><td>턴 경계 pending 잔재 클리어 (F11)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">1</span><h2>Planner — todo.py</h2></div>
+  <div class="flow">
+    <div class="fork-bar">▽ todo 이벤트 종류에 따른 세 핸들러</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">add_todo sentinel</div>
+        <div class="node cat-state">
+          <div class="node-title">_handle_add_todo</div>
+          <div class="mod">TodoItem(task_id=uuid4().hex[:8], PENDING) append</div>
+          <div class="desc">description 없으면 silent skip.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">complete_todo sentinel</div>
+        <div class="node cat-state">
+          <div class="node-title">_handle_complete_todo</div>
+          <div class="mod">task_id 첫 일치 → status 전이 + result_summary</div>
+          <div class="desc">completed/failed/skipped 허용. 범위 밖 → COMPLETED 폴백(LLM 오타 관대).</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ 전원 _TERMINAL_STATUSES?</span></div>
+        <div class="split">
+          <div class="col"><span class="edge-lbl yes">예</span><div class="arrow short"></div><div class="node cat-api"><div class="node-title">SkillCompleteEvent</div></div></div>
+          <div class="col"><span class="edge-lbl no">아니오</span><div class="arrow short"></div><div class="node cat-state"><div class="node-title">계속</div></div></div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">도구 실행 직후</div>
+        <div class="node cat-state">
+          <div class="node-title">_mark_running_todo_done</div>
+          <div class="mod">tool_name 일치 첫 항목 → COMPLETED/FAILED</div>
+          <div class="desc">result_text[:120] 저장.</div>
+        </div>
+      </div>
+    </div>
+    <div class="join-bar">∥ TodoUpdateEvent(전체 스냅샷) yield</div>
+  </div>
+  <div class="note"><code class="i">_TERMINAL_STATUSES</code> = {COMPLETED, FAILED, SKIPPED} — R5(턴 시작 리셋)·F6(fallback is_recovered)·<code class="i">_all_todos_terminal</code> 이 공통 참조.</div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>히스토리 정합성 — balancing.py (F1b · R1)</h2></div>
+  <p class="lead">OpenAI 와이어 규약상 assistant 의 모든 tool_call 에는 매칭되는 <code class="i">role="tool"</code> 메시지가 인접해야 한다. 배치 도중 AskUser·예외로 끊기면 응답 없는 호출이 남아 다음 턴 요청이 <b>400</b> 으로 거부된다.</p>
+  <div class="grid c2">
+    <div class="card">
+      <h3>_balance_unresolved_tool_calls (F1b)</h3>
+      <p><b>중단(AskUser) 경로 전용.</b> <code class="i">if interrupted:</code> 블록에서 호출. in-flight assistant_msg 의 미해결 tool_call 에 placeholder append.</p>
+      <p style="margin-top:6px; color:var(--acc-dk)">"[중단됨] 사용자 입력 대기로 …"</p>
+    </div>
+    <div class="card">
+      <h3>_balance_all_unresolved (R1)</h3>
+      <p><b>예외 경로 전용.</b> in-flight assistant 를 특정할 수 없어 버퍼 전체 순회. 미해결 placeholder 를 해당 tool 블록 <b>바로 뒤(j)에 insert</b>(끝 append 는 인접성 규약 위반).</p>
+      <p style="margin-top:6px; color:var(--acc-dk)">"[중단됨] 턴이 오류로 종료되어 …"</p>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>루프가드 — loop_guard.py (R4)</h2></div>
+  <div class="code">_call_signature(call) → (
+  call.name,
+  json.dumps(call.arguments, <span class="k">sort_keys=True</span>),
+  <span class="a">"|"</span>.join(sorted(parts)),   <span class="c"># result/ 참조 파일 fingerprint "경로:mtime_ns:size"</span>
+)   <span class="c"># history_calls: set[tuple] 의 원소 타입</span></div>
+  <p class="lead"><b>파일 fingerprint</b> 를 시그니처에 포함해 "spec 파일을 고쳐 쓴 뒤 같은 경로로 재호출"(정당한 재시도)을 오탐 차단하지 않는다. <code class="i">_record_invalid_call</code>(형식오류 경로)도 같은 <code class="i">history_calls</code> 집합·시그니처를 공유 — 한쪽만 바꾸지 말 것.</p>
+
+  <div class="sec"><span class="sec-no">4</span><h2>Pending 클리어 — pending.py (F11)</h2></div>
+  <table class="tbl">
+    <thead><tr><th>함수</th><th>비우는 필드</th><th>호출 위치</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">clear_pending_tool</td><td>pending_tool · pending_args · missing_slots</td><td>일반 도구가 같은 턴에 실행·차단될 때</td></tr>
+      <tr><td class="mono">clear_all_pending</td><td>위 + pending_sub_agent · pending_sub_task</td><td>run_turn 마무리(F11) · _persist_failed_turn(R1)</td></tr>
+    </tbody>
+  </table>
+  <div class="note">AskUser 없이 턴이 완료됐다 = 사용자 입력 없이 해결됐다 = 어떤 pending 도 다음 턴으로 넘길 필요 없다. stale pending 이 다음 턴 system prompt 를 오염시키는 것 방지.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="05-call-handlers.html">← 05 핸들러</a>
+    <a href="04-turn-loop.html">04 턴 루프 →</a>
+    <a href="12-safety.html">12 안전장치(F1b·R1·R4·R5·F11) →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/harness/state.md</code></div>
+</div>
+</body>
+</html>

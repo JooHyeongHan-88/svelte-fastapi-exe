@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>07 · system prompt 조립</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">C · <b>system prompt 조립</b></span>
+    <span class="mark">harness/prompt/</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">System Prompt Composition</div>
+    <h1 class="page-title">⑦ system prompt 조립</h1>
+    <p class="subtitle">
+      <code class="i">run_turn</code> 이 매 턴 system prompt 를 동적으로 합성하는 서브패키지.
+      오케스트레이터 / 서브에이전트 / 단층 세 경로를 공통 섹션 렌더러로 조립한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">0</span><h2>모듈 구성</h2></div>
+  <table class="tbl">
+    <thead><tr><th>모듈</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">compose.py</td><td>세 경로 최종 조립 (_compose_orchestrator / _compose_sub_agent / _compose_system_prompt)</td></tr>
+      <tr><td class="mono">sections.py</td><td>공통 섹션 렌더러 (비활성 카탈로그·멀티스킬·To-do·Pending) — 모두 <code class="i">str | None</code> 순수 함수</td></tr>
+      <tr><td class="mono">artifacts.py</td><td>_render_session_artifacts_section — 세션 manifest 기반 과거 산출물 목록</td></tr>
+      <tr><td class="mono">api_refs.py</td><td>_render_skills_api_refs · _collect_agent_api_refs_section — api_refs → ApiDoc 섹션</td></tr>
+      <tr><td class="mono">wind_down.py</td><td>_build_wind_down_message — 반복 예산 임박 마무리 지시문 (R7)</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>base prompt</b>(<code class="i">PROMPTS/base.md</code> + <code class="i">safety.md</code> (+ <code class="i">orchestrator.md</code>))는 <code class="i">PromptRegistry.compose()</code> 가 만든다. 이 서브패키지는 그 base 뒤에 <b>런타임 상태</b>(SKILL 본문·todo·산출물·카탈로그)를 이어 붙인다.</div>
+
+  <div class="sec"><span class="sec-no">1</span><h2>오케스트레이터 프롬프트 — 합성 순서</h2></div>
+  <div class="code">_compose_orchestrator_system_prompt   <span class="c"># AGENTS 보유 시</span>
+  base (+orchestrator.md +사용자 지침)
++ 활성 SKILL 본문                <span class="a"># Skill: &lt;name&gt;</span>
++ 비활성 SKILL 카탈로그          <span class="k">_render_inactive_skill_catalog</span>  <span class="c"># → activate_skill 유도</span>
++ 멀티 스킬 실행 지침            <span class="k">_render_multi_skill_instruction</span>  <span class="c"># 2개+ 활성 시</span>
++ 현재 To-do                    <span class="k">_render_todo_section</span>
++ Session Artifacts             <span class="k">_render_session_artifacts_section</span>
++ Pending 슬롯                  Sub-Agent Slot &gt; Slot &gt; User Question (우선순위)
++ 가용 서브에이전트 카탈로그     + <span class="a">## Case 3 결정론 매핑</span> (skill→agent)
++ Library API 섹션              <span class="k">_render_skills_api_refs</span></div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>세 경로 비교</h2></div>
+  <div class="grid c3">
+    <div class="card">
+      <h3>오케스트레이터</h3>
+      <p><code class="i">_compose_orchestrator_system_prompt</code></p>
+      <p style="margin-top:6px">AGENTS 보유 시. 카탈로그 + Case 3 결정론 매핑("X 트리거 → 반드시 agent 위임")으로 설정이 라우팅을 결정.</p>
+    </div>
+    <div class="card">
+      <h3>서브에이전트</h3>
+      <p><code class="i">_compose_sub_agent_system_prompt</code></p>
+      <p style="margin-top:6px">base(orchestrator 제외) + 페르소나 본문 + 학습 SKILL + api_refs + <b>종료 규약</b>(complete_subagent 필수). call_sub_agent 도구는 시야에서 제거.</p>
+    </div>
+    <div class="card">
+      <h3>단층 (하위호환)</h3>
+      <p><code class="i">_compose_system_prompt</code></p>
+      <p style="margin-top:6px">AGENTS 부재 시. 카탈로그·Case 3 없이 base + SKILL + todo + 산출물 + Pending.</p>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>SKILL 활성화의 세 경로</h2></div>
+  <div class="flow">
+    <div class="fork-bar">▽ 세 경로 중 하나로 진입</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">① 트리거 매칭 (턴 시작)</div>
+        <div class="node cat-state">
+          <div class="node-title">skill_registry.select(user_message)</div>
+          <div class="mod">Front Matter trigger 키워드 자동 매칭</div>
+          <div class="desc">force_skills 없을 때 메시지로 트리거. 복수 매칭 시 모두 활성.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">② 슬래시 커맨드</div>
+        <div class="node cat-state">
+          <div class="node-title">force_skills → get_by_names()</div>
+          <div class="mod">ChatRequest.force_skills — 프론트 /skill_name 입력</div>
+          <div class="desc">사용자가 명시 지정. 트리거 매칭을 건너뜀.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">③ activate_skill (턴 도중)</div>
+        <a class="node linked cat-state" href="05b-sentinel.html">
+          <div class="node-title">_handle_activate_skill → recompose_system</div>
+          <div class="mod">sentinel → 프롬프트[0] 동적 교체</div>
+          <div class="desc">LLM 이 비활성 카탈로그 보고 스스로 켬.</div>
+          <span class="more">05b →</span>
+        </a>
+      </div>
+    </div>
+    <div class="join-bar">∥ 활성 SKILL 본문 → 프롬프트 합성에 포함</div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>핵심 섹션 렌더러</h2></div>
+  <table class="tbl">
+    <thead><tr><th>함수</th><th>출력</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">_render_inactive_skill_catalog</td><td># 가용 SKILL 카탈로그(비활성) — 이름·설명·예시 트리거 + "activate_skill 로 활성화하라"</td></tr>
+      <tr><td class="mono">_render_multi_skill_instruction</td><td>2개+ 동시 활성 시 — add_todo 단계 등록 후 단계마다 complete_todo 강제</td></tr>
+      <tr><td class="mono">_render_todo_section</td><td># 현재 To-do — <code class="i">[status] (task_id) 설명</code> 목록</td></tr>
+      <tr><td class="mono">_render_session_artifacts_section</td><td># Session Artifacts — manifest 최근 N개(경로·kind·shape·설명 80자). 히스토리 잘려도 과거 parquet 경로 인지</td></tr>
+      <tr><td class="mono">_build_wind_down_message</td><td>잔여 2+: "새 분석 금지·저장 산출물 즉시 표시·다음 응답 도구 없이 요약" / 잔여 1: "도구 금지·최종 답변"</td></tr>
+    </tbody>
+  </table>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="04-turn-loop.html">← 04 턴 루프(합성기)</a>
+    <a href="09-artifact-pipeline.html">09 Session Artifacts →</a>
+    <a href="11-tools-registries.html">11 api_refs·레지스트리 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/harness/prompt.md</code></div>
+</div>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>05b · Sentinel 도구</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">C · <b>Sentinel 도구</b></span>
+    <span class="mark">harness/call_handlers.py · _SENTINEL_ROUTES</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Sentinel Tools</div>
+    <h1 class="page-title">⑤b Sentinel 도구 — 7가지 하니스 분기</h1>
+    <p class="subtitle">
+      sentinel 은 <code class="i">_execute_tool</code> 에 도달하지 않고 하니스가 직접 가로채는 도구.
+      <code class="i">_SENTINEL_ROUTES</code> 스캔 알고리즘과 7개 sentinel 의 미니 플로우를 각각 표현한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>_select_sentinel_handler — 스캔 알고리즘</h2></div>
+
+  <div class="flow">
+    <div class="term">● _select_sentinel_handler(ctx, call) 진입</div>
+    <div class="arrow"></div>
+    <div class="loop cycle">
+      <span class="loop-tab">↻ _SENTINEL_ROUTES 목록 순서대로 스캔</span>
+      <span class="back-lbl">↻ 다음 route 로</span>
+      <div class="flow">
+        <div class="gate"><span class="q">◇ call.name == route.name AND route.condition(ctx)?</span><small>이름 일치 + 컨텍스트 조건(is_sub_agent 등) 동시 충족</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">예 — 첫 매칭</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core">
+              <div class="node-title">route.handler 반환</div>
+              <div class="desc">스캔 즉시 중단. 순서가 우선순위 — activate_skill 이 call_sub_agent 보다 앞에 있어 조건 분기가 명확히 갈림.</div>
+            </div>
+            <div class="arrow short"></div>
+            <div class="term">■ 반환</div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">아니오</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core">
+              <div class="node-title">↻ 다음 route</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ 목록 끝까지 매칭 없음?</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">없음</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core">
+          <div class="node-title">None 반환 → 일반도구 경로</div>
+          <div class="desc">조건 미충족 sentinel(agent_registry=None 인데 call_sub_agent 호출) → 일반 경로 → _execute_tool 의 L3 에러로 잡힘.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>Sentinel 적용 조건 표</h2></div>
+  <table class="tbl">
+    <thead><tr><th>sentinel</th><th>적용 조건</th><th>조건 의미</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">activate_skill</td><td class="mono">active_skills is not None</td><td>오케스트레이터 컨텍스트(서브에이전트는 activate_skill 불가)</td></tr>
+      <tr><td class="mono">complete_subagent</td><td class="mono">is_sub_agent</td><td>서브에이전트 전용 종료 도구</td></tr>
+      <tr><td class="mono">add_todo</td><td class="mono">state is not None</td><td>AgentState 가 있는 컨텍스트(오케스트레이터·서브에이전트 공용)</td></tr>
+      <tr><td class="mono">complete_todo</td><td class="mono">state is not None</td><td>위와 동일</td></tr>
+      <tr><td class="mono">ask_user</td><td class="mono">항상(True)</td><td>모든 컨텍스트</td></tr>
+      <tr><td class="mono">call_sub_agent</td><td class="mono">agent_registry is not None</td><td>오케스트레이터 전용(서브에이전트에서는 L0 차단으로 None)</td></tr>
+      <tr><td class="mono">call_sub_agents_parallel</td><td class="mono">agent_registry is not None</td><td>위와 동일</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">3</span><h2>add_todo</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">add_todo(title, description?) 호출</div>
+      <div class="mod">harness/state/todo.py · _handle_add_todo</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-core wide">
+      <div class="node-title">TodoItem(id=uuid, title, status="pending") → state.todo_list.append</div>
+      <div class="mod">append only — 리셋은 run_turn 시작 시(R5)만</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-api">
+      <div class="node-title">TodoUpdateEvent(items=전체 스냅샷) yield</div>
+      <div class="desc">프론트 TodoProgress 패널 교체.</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>complete_todo</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">complete_todo(id, status="completed"|"failed"|"skipped") 호출</div>
+      <div class="mod">harness/state/todo.py · _handle_complete_todo</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-core">
+      <div class="node-title">todo.status = 요청 상태 전이</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-api"><div class="node-title">TodoUpdateEvent yield</div></div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ 모든 todo 가 _TERMINAL_STATUSES?</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-api"><div class="node-title">SkillCompleteEvent(skills) yield</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core"><div class="node-title">계속</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">5</span><h2>ask_user — 슬롯 영속</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">ask_user(slot_key, question, options?, input_type?) 호출</div>
+      <div class="mod">harness/call_handlers.py · _handle_ask_user</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-core wide">
+      <div class="node-title">tool_call 에 placeholder ToolResult 추가</div>
+      <div class="desc">OpenAI 와이어 규약 — tool_call 마다 tool_result 가 있어야 함.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-core wide">
+      <div class="node-title">state.pending_tool = call.name + pending_args + missing_slots 영속</div>
+      <div class="mod">agent/stores/state.py · 다음 턴 시스템 프롬프트 "# Pending Sub-Agent Slot"</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-api wide">
+      <div class="node-title">AskUserEvent(question, slot_key, options, input_type) yield</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-safe">
+      <div class="node-title">outcome.interrupted = True → 루프 break</div>
+      <div class="desc">이번 턴 종료. 사용자가 답하면 다음 턴에 pending 재시도.</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">6</span><h2>activate_skill — 동적 프롬프트 재조립</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">activate_skill(name) 호출</div>
+      <div class="mod">harness/call_handlers.py · _handle_activate_skill</div>
+      <div class="desc">LLM 이 비활성 SKILL 카탈로그를 보고 턴 도중 스스로 켜는 제3의 경로(트리거 매칭·슬래시 외).</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ 이미 active_skills 에 있거나 카탈로그 부재?</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core">
+          <div class="node-title">멱등 응답 — "이미 활성"</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오 — 새 활성화</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core wide">
+          <div class="node-title">_activate_skills_in_context(ctx, name) → turn-local active_skills 추가</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core wide">
+          <div class="node-title">ctx.messages[0] = Message("system", recompose_system(active_skills))</div>
+          <div class="desc">시스템 프롬프트 동적 교체 — 새 SKILL 본문 포함.</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-api">
+          <div class="node-title">SkillActiveEvent(skills=[...]) yield</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core"><div class="node-title">state.active_skills 갱신</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">7</span><h2>call_sub_agent / call_sub_agents_parallel</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">call_sub_agent(agent_name, task) → 순차 디스패치</div>
+      <div class="mod">→ <a href="06-dispatch.html">06 dispatch</a> _dispatch_sub_agent</div>
+      <div class="desc">오케스트레이터만 가능(agent_registry is not None). 서브가 재호출하면 L0 차단.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-core wide">
+      <div class="node-title">call_sub_agents_parallel(tasks=[...]) → 병렬 디스패치</div>
+      <div class="mod">→ <a href="06-dispatch.html">06 dispatch</a> _dispatch_parallel_sub_agents</div>
+      <div class="desc">독립 작업 N개를 semaphore(APP_MAX_PARALLEL_SUBAGENTS) 안에서 동시 실행. 단일 tool_result 로 fan-in.</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">8</span><h2>complete_subagent — 서브에이전트 종료</h2></div>
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-title">complete_subagent(summary) 호출 (서브에이전트 전용)</div>
+      <div class="mod">harness/call_handlers.py · sentinel=True</div>
+      <div class="desc">tools 화이트리스트에 명시하지 않아도 harness 가 항상 자동 주입.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-api wide">
+      <div class="node-title">ToolResultEvent(content=summary) yield</div>
+      <div class="desc">summary 는 AgentReturnEvent.summary 로 캡처. 우선순위: complete_subagent → _extract_task_summary("Task Summary:" 헤더) → 마지막 200자 폴백.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node cat-safe">
+      <div class="node-title">outcome.stop = True → _run_agent_turn 즉시 종료</div>
+    </div>
+  </div>
+
+  <div class="note"><b>sentinel vs 일반 도구:</b> <code class="i">@register_tool(sentinel=True)</code> 로 등록된 도구는 <code class="i">_execute_tool</code> 에 도달하면 명시적 에러(L3). 하니스의 분기 처리가 먼저 가로채야 하므로, <code class="i">_SENTINEL_ROUTES</code> 의 조건이 뚫려야만 L3 에 닿는다.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="05-call-handlers.html">← 05 핸들러</a>
+    <a href="06-dispatch.html">06 디스패치 →</a>
+    <a href="08-state.html">08 상태(todo) →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/harness/call-handlers.md</code> §sentinel · <code class="i">agent_runtime.md</code></div>
+</div>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · 턴 루프</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">C · <b>턴 루프</b></span>
+    <span class="mark">harness/loop.py · harness/prompt/</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Turn Loop</div>
+    <h1 class="page-title">④ 턴 루프 — run_turn &amp; _run_agent_turn</h1>
+    <p class="subtitle">
+      상태 로드 → 프롬프트 합성 → provider 루프 → tool_call 처리 → 5개 exit 엣지.
+      예산 게이트 · wind-down(R7) · fallback(F6) · 실패턴 영속(R1)까지 알고리즘적으로 표현한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>run_turn — 준비 단계</h2></div>
+
+  <div class="flow">
+    <div class="term">● run_turn(client_id, message, provider, force_skills) 진입</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">상태 로드</div>
+      <div class="node-title">state_store.get(client_id) → AgentState</div>
+      <div class="mod">agent/stores/state.py · todo_list · pending_* · active_skills</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ todo_list 비어있지 않고 전원 terminal? (R5)</span><small>_TERMINAL_STATUSES = completed/failed/skipped</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-cat">이전 턴 todo 리셋 (R5)</div>
+          <div class="node-title">state.todo_list = []</div>
+          <div class="desc">이전 완료 todo 가 새 턴 TodoUpdateEvent 에 누적 표시되고 system prompt 를 오염시키는 것을 방지. 비-terminal 하나라도 있으면 보존(AskUser 연속 흐름 유지).</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-core"><div class="node-title">todo 보존</div></div>
+      </div>
+    </div>
+    <div class="merge">▽ 합류</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">SKILL 선택</div>
+      <div class="node-title">force_skills → get_by_names / 트리거 매칭 → select_for_message</div>
+      <div class="mod">registries/skills.py · SKILL Front Matter trigger 키워드 매칭</div>
+      <div class="desc">force_skills 있으면 이름으로 직접 조회(슬래시 커맨드). 없으면 메시지 트리거 자동 매칭. pending_sub_agent 재위임이면 skill_names 를 pending 에서 복원.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">히스토리 로드</div>
+      <div class="node-title">conversation_store.get(client_id) → Message[]</div>
+      <div class="mod">agent/stores/conversation.py · tool 쌍 보존 트리밍 (F1a)</div>
+      <div class="desc">OpenAI 와이어 규약: tool 메시지는 선행 assistant.tool_calls 에 반드시 대응. 고아 tool 남지 않도록 cut 경계 자동 보정.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">프롬프트 합성</div>
+      <div class="node-title">_make_system_prompt_composer(active_skills, api_refs) → system_prompt</div>
+      <div class="mod">harness/prompt/ · sections · artifacts · api_refs · wind_down</div>
+      <div class="desc">base·safety·SKILL·카탈로그·pending·todo·artifact·api_refs 를 순서대로 합성. 상세 → 07 프롬프트.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">도구 스펙 빌드</div>
+      <div class="node-title">_build_orchestrator_specs(active_skills, api_refs)</div>
+      <div class="mod">LLM 에 노출할 tool JSON Schema 목록 + api_refs 주입 여부 결정</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">예산 초기화</div>
+      <div class="node-title">TurnBudget(max_iterations, max_agent_calls)</div>
+      <div class="mod">APP_MAX_AGENT_ITERATIONS(12) · APP_MAX_AGENT_CALLS_PER_TURN(20)</div>
+      <div class="desc">오케스트레이터+서브에이전트 합산 provider 호출 상한. 서브 위임 1회 = 호출 1회로 차감.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">에이전트 실행</div>
+      <div class="node-title">_run_agent_turn(ctx, agent_registry, state, budget, ...) — 아래 §2 루프</div>
+      <div class="mod">run_turn 에서 yield from 으로 이벤트 전달</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>_run_agent_turn — provider 루프</h2></div>
+
+  <div class="flow">
+    <div class="loop cycle">
+      <span class="loop-tab">↻ _run_agent_turn 루프 — 최대 MAX_ITERATIONS(12회)</span>
+      <span class="back-lbl">↻ CONTINUE → 다음 iteration</span>
+
+      <div class="flow">
+        <div class="gate"><span class="q">◇ 반복 잔여 ≤ _WIND_DOWN_REMAINING_CALLS(2)? (R7)</span><small>min(반복 잔여, budget 잔여) 계산</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">예 — 임박</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe">
+              <div class="node-cat">Wind-down 주입 (R7)</div>
+              <div class="node-title">[System] 마무리 지시문 messages 에 1회 삽입</div>
+              <div class="mod">prompt/wind_down.py · 히스토리 비영속</div>
+              <div class="desc">잔여 1회면 "도구 금지·최종 답변" 변형 문구. LLM 이 무시하면 for-else fallback(F6) 이 안전망.</div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">아니오</span>
+          </div>
+        </div>
+        <div class="arrow"></div>
+
+        <div class="gate"><span class="q">◇ budget.try_consume() 성공?</span><small>max_agent_calls 상한 검사</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">예산 소진</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe">
+              <div class="node-title">ErrorEvent(budget 초과) + DoneEvent</div>
+            </div>
+            <div class="arrow short"></div>
+            <div class="term">■ exit — 예산 소진</div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">소비 성공</span>
+            <div class="arrow short"></div>
+            <div class="node cat-core wide">
+              <div class="node-cat">스트리밍</div>
+              <div class="node-title">provider.astream(messages, tool_specs) → 이벤트 yield</div>
+              <div class="mod">delta·reasoning·tool_call·DoneEvent 를 순서대로 emit</div>
+            </div>
+            <div class="arrow"></div>
+
+            <div class="gate"><span class="q">◇ tool_call 있음?</span></div>
+            <div class="split">
+              <div class="col">
+                <span class="edge-lbl no">없음 — assistant text</span>
+                <div class="arrow short"></div>
+                <div class="node cat-core">
+                  <div class="node-title">assistant 메시지 append</div>
+                  <div class="mod">turn_messages 에 추가 후 break</div>
+                </div>
+                <div class="arrow short"></div>
+                <div class="term">■ exit — 정상 완료</div>
+              </div>
+              <div class="col">
+                <span class="edge-lbl yes">있음</span>
+                <div class="arrow short"></div>
+                <div class="node cat-core wide">
+                  <div class="node-cat">tool_call 처리</div>
+                  <div class="node-title">_handle_tool_call(ctx, call, outcome) — 상세 → 05</div>
+                  <div class="mod">harness/call_handlers.py · outcome.interrupted / outcome.stop / CONTINUE</div>
+                </div>
+                <div class="arrow"></div>
+
+                <div class="gate"><span class="q">◇ outcome 결과?</span></div>
+                <div class="split">
+                  <div class="col">
+                    <span class="edge-lbl">interrupted</span>
+                    <div class="arrow short"></div>
+                    <div class="node cat-safe">
+                      <div class="node-title">_balance_unresolved_tool_calls (F1b)</div>
+                      <div class="mod">AskUser 등으로 턴이 끊기면 미해결 tool_call 에 placeholder 쌍 완성</div>
+                    </div>
+                    <div class="arrow short"></div>
+                    <div class="term">■ exit — 사용자 입력 대기</div>
+                  </div>
+                  <div class="col">
+                    <span class="edge-lbl">stop</span>
+                    <div class="arrow short"></div>
+                    <div class="node cat-core">
+                      <div class="node-title">complete_subagent → 즉시 종료</div>
+                    </div>
+                    <div class="arrow short"></div>
+                    <div class="term">■ exit — 서브에이전트 완료</div>
+                  </div>
+                  <div class="col">
+                    <span class="edge-lbl">CONTINUE</span>
+                    <div class="arrow short"></div>
+                    <div class="node cat-core">
+                      <div class="node-title">↻ 다음 iteration 으로</div>
+                      <div class="desc">back-edge — 루프 상단으로 돌아가 wind-down·budget 재검사.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+    <div class="node cat-safe wide">
+      <div class="node-cat">for-else — 상한 도달 (F6)</div>
+      <div class="node-title">_emit_max_iterations_fallback(state, messages)</div>
+      <div class="mod">harness/loop.py · todo 완료 여부에 따라 is_recovered 분기</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 모든 todo 가 terminal 상태? (F6)</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예 — 작업 완료됨</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">ErrorEvent(is_recovered=True)</div>
+          <div class="desc">초록 점선 — "완료됐지만 예산 소진"</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오 — 미완료</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">ErrorEvent(is_recovered=False)</div>
+          <div class="desc">빨강 점선 — "미완료 주의"</div>
+        </div>
+      </div>
+    </div>
+    <div class="merge">▽ 합류</div>
+    <div class="arrow"></div>
+    <div class="term">■ exit — fallback</div>
+  </div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>영속화 &amp; 실패 턴 복구 (R1)</h2></div>
+
+  <div class="flow">
+    <div class="node cat-core wide">
+      <div class="node-cat">정상 영속화</div>
+      <div class="node-title">conversation_store.append(F7) + state_store.set + clear_all_pending(F11)</div>
+      <div class="mod">tool 결과 800자 절단(F7) · pending 클리어(AskUser 없이 완료됐으면)</div>
+      <div class="desc">F11: AskUserEvent 가 한 번도 yield 되지 않았으면 pending_tool·pending_args·missing_slots·pending_sub_agent 전부 클리어. stale pending 이 다음 턴 system prompt 오염 방지.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="term">■ DoneEvent 정확히 1회 — 정상 종료</div>
+
+    <div class="node cat-safe wide" style="margin-top:24px">
+      <div class="node-cat">예외 경로 (R1)</div>
+      <div class="node-title">run_turn() 최상위 except Exception</div>
+      <div class="mod">harness/loop.py · turn_persisted 플래그로 재-append 방지</div>
+      <div class="desc">
+        <b>순서:</b> ① _balance_all_unresolved(turn_messages) — 미해결 tool_call placeholder 전수 삽입.
+        ② F11 pending 클리어 → store.append + state_store.set. ③ ErrorEvent(F12 안전화 — str(exc) 대신 타입명만).
+        ④ DoneEvent 정확히 1회.
+        <b>영속 실패 시:</b> 로그만 남기고 ErrorEvent/DoneEvent 는 막지 않음.
+        <b>CancelledError(ESC)는 BaseException:</b> 이 경로를 타지 않음(중단 턴 미영속 = 의도된 동작).
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>상수 &amp; 예산 요약</h2></div>
+  <table class="tbl">
+    <thead><tr><th>상수</th><th>기본값</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">APP_MAX_AGENT_ITERATIONS</td><td>12</td><td>한 턴 반복 상한(for 루프 range)</td></tr>
+      <tr><td class="mono">APP_MAX_AGENT_CALLS_PER_TURN</td><td>20</td><td>오케스트레이터+서브 합산 provider 호출 상한</td></tr>
+      <tr><td class="mono">_WIND_DOWN_REMAINING_CALLS</td><td>2</td><td>임박 판정 임계 — 이 이하면 wind-down 지시 주입</td></tr>
+      <tr><td class="mono">APP_TOOL_DEFAULT_TIMEOUT</td><td>30s</td><td>도구 1회 실행 asyncio.wait_for 타임아웃</td></tr>
+      <tr><td class="mono">_TOOL_HISTORY_MAX_CHARS</td><td>800</td><td>히스토리 저장 시 tool 결과 절단(F7)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="03-chat-turn.html">← 03 턴 진입</a>
+    <a href="05-call-handlers.html">05 핸들러 →</a>
+    <a href="07-prompt.html">07 프롬프트 →</a>
+    <a href="08-state.html">08 상태 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/harness/turn-loop.md</code> · <code class="i">harness_resilience.md</code> F1b·F6·F7·F11·R1·R5·R7</div>
+</div>
+</body>
+</html>

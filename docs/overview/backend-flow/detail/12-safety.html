@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>12 · 안전장치 카탈로그</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">E · <b>안전장치 카탈로그</b></span>
+    <span class="mark">.claude/rules/harness_resilience.md</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Harness Resilience</div>
+    <h1 class="page-title">⑫ 안전장치 카탈로그 (F1~F12 · R1~R8)</h1>
+    <p class="subtitle">
+      실 LLM 의 비결정성·실패 경로를 흡수하는 방어선들. Mock 시나리오는 happy path 만 검증하므로,
+      이 불변식들이 실 LLM 투입 시 임계적이다. <b>"이 방어 코드가 왜 있나, 회귀 금지"</b>의 카탈로그.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>분류별 요약</h2></div>
+  <table class="tbl">
+    <thead><tr><th>분류</th><th>장치</th><th>효과</th></tr></thead>
+    <tbody>
+      <tr><td>입력 경계</td><td>Origin 가드 + 루프백 고정</td><td>외부 네트워크에서 API 접근 불가</td></tr>
+      <tr><td>입력 경계</td><td>동시 턴 가드 <span class="badge r">R2</span></td><td>같은 세션 중복 요청 → 히스토리 교차 오염 방지</td></tr>
+      <tr><td>LLM 오류</td><td>슬롯 가드 책임자 분기</td><td>사용자 질문 최소화, LLM 실수는 자가수정 유도</td></tr>
+      <tr><td>LLM 오류</td><td>깨진 tool_call JSON 마커 <span class="badge">F3</span></td><td>스트림 잘림 시에도 원본 보존 → 재요청</td></tr>
+      <tr><td>폭주 방지</td><td>반복 상한(12)·턴 예산(20)·loop-guard·wind-down <span class="badge r">R7</span></td><td>무한 루프·비용 폭주 차단</td></tr>
+      <tr><td>폭주 방지</td><td>도구 타임아웃(30s)</td><td>도구 1회가 턴을 영원히 잡지 못함</td></tr>
+      <tr><td>네트워크</td><td>provider 재시도(지수 백오프) <span class="badge">F4</span></td><td>일시 오류(429·연결 끊김) 자동 복구</td></tr>
+      <tr><td>정합성</td><td>tool 쌍 보존 트리밍 + placeholder <span class="badge">F1a</span><span class="badge">F1b</span></td><td>OpenAI 와이어 규약 위반(400) 방지</td></tr>
+      <tr><td>정합성</td><td>실패 턴 영속 + DoneEvent 보장 <span class="badge r">R1</span></td><td>예외가 나도 턴이 증발하지 않고 스트림이 닫힘</td></tr>
+      <tr><td>비밀 보호</td><td>에러 메시지 안전화 <span class="badge">F12</span> · API 키 마스킹</td><td>키·URL 이 사용자 화면에 노출되지 않음</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">2</span><h2>F 계열 — 실패 경로 흡수 (Failure)</h2></div>
+  <table class="tbl">
+    <thead><tr><th>코드</th><th>위치</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td class="c"><span class="badge">F1a</span></td><td class="mono">stores/conversation.py</td><td>Tool 쌍 보존 트리밍 — 고아 role=tool 이 첫 메시지로 남지 않게 cut 경계 보정</td></tr>
+      <tr><td class="c"><span class="badge">F1b</span></td><td class="mono">state/balancing.py</td><td>배치 중단 시 미해결 tool_call 에 placeholder 채움(_balance_unresolved_tool_calls)</td></tr>
+      <tr><td class="c"><span class="badge">F2</span></td><td class="mono">providers/openai.py</td><td>스트림 잘림(finish_reason=length)에도 tool_calls flush + DoneEvent 정확히 1회</td></tr>
+      <tr><td class="c"><span class="badge">F3</span></td><td class="mono">providers/openai.py · call_handlers</td><td>깨진 인자 JSON 을 MALFORMED_TOOL_ARGS_KEY 에 원본 보존 → self-correct 요구</td></tr>
+      <tr><td class="c"><span class="badge">F4</span></td><td class="mono">providers/openai.py</td><td>_create_stream_with_retry — 일시 오류 지수 백오프(영구 오류는 즉시 전파)</td></tr>
+      <tr><td class="c"><span class="badge">F6</span></td><td class="mono">harness/loop.py + frontend</td><td>max_iterations fallback salvage — todo 전원 terminal=초록(복구), 아니면 빨강(미완)</td></tr>
+      <tr><td class="c"><span class="badge">F7</span></td><td class="mono">stores/conversation.py</td><td>Tool 결과 히스토리 800자 절단(현재 턴 컨텍스트는 full 유지)</td></tr>
+      <tr><td class="c"><span class="badge">F11</span></td><td class="mono">harness/loop.py · state/pending.py</td><td>AskUser 없이 끝나면 pending 전부 클리어 — stale pending 오염 방지</td></tr>
+      <tr><td class="c"><span class="badge">F12</span></td><td class="mono">harness/loop.py · api/chat.py</td><td>에러 메시지 안전화 — <code class="i">[{type}] 처리 중 오류</code> (키·URL 미노출)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">3</span><h2>R 계열 — 복원력 불변식 (Resilience)</h2></div>
+  <table class="tbl">
+    <thead><tr><th>코드</th><th>위치</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td class="c"><span class="badge r">R1</span></td><td class="mono">harness/loop.py</td><td>실패 턴 영속 + DoneEvent 보장 — _persist_failed_turn(_balance_all_unresolved)</td></tr>
+      <tr><td class="c"><span class="badge r">R2</span></td><td class="mono">api/chat.py</td><td>동시 턴 가드 — 같은 client_id 두 번째 POST 즉시 거부(_active_turn_clients)</td></tr>
+      <tr><td class="c"><span class="badge r">R4</span></td><td class="mono">state/loop_guard.py</td><td>루프가드 파일 fingerprint — spec 수정 후 재시도는 오탐 차단 안 함</td></tr>
+      <tr><td class="c"><span class="badge r">R5</span></td><td class="mono">harness/loop.py</td><td>턴 시작 terminal todo 리셋 — 완료 todo 가 새 턴 UI·프롬프트 오염 방지</td></tr>
+      <tr><td class="c"><span class="badge r">R6</span></td><td class="mono">tools/runtime.py</td><td>exec_code 산출물 manifest 동기화 — 슬롯 diff 로 신규 파일 자동 등록</td></tr>
+      <tr><td class="c"><span class="badge r">R7</span></td><td class="mono">harness/loop.py · prompt/wind_down.py</td><td>반복 예산 임박 wind-down — 잔여 ≤2 시 마무리 지시 1회 주입</td></tr>
+      <tr><td class="c"><span class="badge r">R8</span></td><td class="mono">agent/charts/</td><td>차트 spec 관용 파싱 + 레전드 보정 — alias 정규화·histogram color·mismatch 복원</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">4</span><h2>슬롯 가드 — 오류 책임자 분기 (핵심 패턴)</h2></div>
+  <div class="flow">
+    <div class="node cat-safe wide">
+      <div class="node-title">guard.validate_tool_args() → _split_errors()</div>
+      <div class="mod">agent/guard.py</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ ValidationError 종류?</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl">missing — 사용자 책임</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">MissingSlot → AskUserEvent</div>
+          <div class="desc">slot_prompts 질문 문구. 사용자가 값을 주면 다음 턴 재시도.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl">invalid — LLM 책임</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-title">invalid_message → ToolResultEvent(is_error)</div>
+          <div class="desc">사용자 미개입. 동일한 잘못된 호출 반복은 R4 loop-guard 차단.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>주의:</b> <code class="i">save_artifact(kind='json', content=&lt;dict&gt;)</code> 처럼 값은 줬는데 타입이 str 대신 dict 면 형식 오류 → LLM self-correct 경로(사용자 미개입).</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="04-turn-loop.html">04 R1·R7·F6 →</a>
+    <a href="08-state.html">08 F1b·R4·R5·F11 →</a>
+    <a href="03-chat-turn.html">03 R2·F12 →</a>
+    <a href="10-chart-pipeline.html">10 R8 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">.claude/rules/harness_resilience.md</code> · <code class="i">docs/overview/04-backend-flow.md</code> §16</div>
+</div>
+</body>
+</html>

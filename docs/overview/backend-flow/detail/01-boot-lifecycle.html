@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · 기동 &amp; 생명주기</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">A · <b>기동 &amp; 생명주기</b></span>
+    <span class="mark">main.py · core/browser.py · api/presence.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Boot &amp; Lifecycle</div>
+    <h1 class="page-title">① 기동 &amp; 생명주기</h1>
+    <p class="subtitle">
+      EXE 더블클릭부터 첫 화면까지. 단일 인스턴스 게이트 · 포트 폴백 체인 · 병렬 데몬 스레드 fork ·
+      Presence keepalive 루프 · Origin 가드 결정트리로 알고리즘적으로 표현한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>기동 시퀀스 — 소켓 바인딩 &amp; 초기화</h2></div>
+
+  <div class="flow">
+    <div class="term">● 시작 · EXE 더블클릭</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-life wide">
+      <div class="node-cat">소켓 바인딩</div>
+      <div class="node-title">create_server_socket() — 고정 포트 바인딩 시도</div>
+      <div class="mod">core/server_socket.py · APP_PORT 또는 APP_NAME 해시(47100–48999)</div>
+      <div class="desc">frozen 은 결정론적 고정 포트(해시 기반). dev 는 APP_DEV_PORT(8765). 바인딩 소켓을 그대로 uvicorn 에 넘겨 TOCTOU 회피.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ 이미 같은 앱 실행 중?</span><small>ServerAlreadyRunning — 동일 포트에 프로브 응답</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe">
+          <div class="node-cat">단일 인스턴스</div>
+          <div class="node-title">기존 탭 열고 sys.exit(0)</div>
+          <div class="mod">_probe_same_app → webbrowser.open</div>
+          <div class="desc">기존 인스턴스 재사용. 새 프로세스 없음.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">아니오</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ 후보 포트 +1..+4 도 전부 점유?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">전수 실패</span>
+            <div class="arrow short"></div>
+            <div class="node cat-life">
+              <div class="node-title">OS 동적 포트 (최후수단)</div>
+              <div class="mod">bind(('127.0.0.1', 0))</div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">후보 성공</span>
+            <div class="arrow short"></div>
+            <div class="node cat-life">
+              <div class="node-title">후보 포트 바인딩 성공</div>
+              <div class="mod">set_runtime_port() 갱신</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="merge">▽ 바인딩 완료 합류</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-life wide">
+      <div class="node-cat">도구 자기등록</div>
+      <div class="node-title">import agent.tools → @register_tool 부수효과</div>
+      <div class="mod">agent/tools/__init__.py · 모든 서브모듈 import → ToolRegistry 채움</div>
+      <div class="desc">모듈 import 만으로 모든 도구가 자동 등록. 명시적 register() 호출 불필요.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ frozen 이고 CONTENT_SYNC_ENABLED?</span><small>dev 는 동기화 안 함 — 로컬 워킹트리 mtime 핫리로드</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-life">
+          <div class="node-cat">콘텐츠 동기화</div>
+          <div class="node-title">sync_agent_content() → registry.use_directory()</div>
+          <div class="mod">core/content_sync.py · qa→dev / prod→main 브랜치</div>
+          <div class="desc">SKILLS/AGENTS/PROMPTS 를 원격 브랜치에서 받아 EXE 재빌드 없이 갱신. 실패 시 번들 폴백.</div>
+        </div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-life">
+          <div class="node-title">번들 디렉터리 그대로</div>
+          <div class="mod">MEIPASS/SKILLS 또는 로컬 워킹트리</div>
+        </div>
+      </div>
+    </div>
+    <div class="merge">▽ 합류</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-life wide">
+      <div class="node-cat">레지스트리 로드</div>
+      <div class="node-title">prompt/skill/agent_registry.load() + cross_check_skills()</div>
+      <div class="mod">registries/ · Front Matter 1회 파싱 · AGENTS.skills↔SKILLS 교차 검증(부팅 경고)</div>
+      <div class="desc">메타(Front Matter)만 1회 로드. 본문(페르소나·SKILL body)은 첫 호출 시 lazy 로딩.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-api wide">
+      <div class="node-cat">라우터 &amp; 정적 마운트 (순서 중요)</div>
+      <div class="node-title">api_router → load_extensions() → SPA catch-all</div>
+      <div class="mod">main.py · /api/* 먼저 · /api/ext/*·/ext/* 두 번째 · SPA /{path:path} 마지막</div>
+      <div class="desc">Starlette 등록 순서로 매칭. 순서 위반 시 /api가 SPA catch-all에 잡힘. /workspace · /result · /assets 정적 마운트 포함.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="fork-bar">▽ 병렬 데몬 스레드 fork — 세 흐름이 앱 수명 내내 동시 실행</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">데몬 스레드 1</div>
+        <div class="node cat-life">
+          <div class="node-title">watchdog()</div>
+          <div class="mod">core/browser.py · STARTUP_GRACE / SHUTDOWN_GRACE</div>
+          <div class="desc">첫 연결 전 STARTUP_GRACE 대기. 연결 후 비면 SHUTDOWN_GRACE 경과 시 server.should_exit=True.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">데몬 스레드 2</div>
+        <div class="node cat-life">
+          <div class="node-title">open_browser()</div>
+          <div class="mod">webbrowser.open(localhost:PORT)</div>
+          <div class="desc">build/web 존재(=frozen 또는 빌드 완료) 시에만. dev 는 Vite Dev Server 직접.</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-life">
+          <div class="node-title">cleanup_stale_backup()</div>
+          <div class="mod">core/updater.py · .old 잔존 삭제</div>
+          <div class="desc">이전 업데이트의 .old EXE 잔재 스윕(안전망).</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">메인 스레드</div>
+        <div class="node cat-life">
+          <div class="node-title">server.run(sockets=[sock])</div>
+          <div class="mod">uvicorn · 요청 수신 시작</div>
+          <div class="desc">바인딩한 소켓을 그대로 넘겨 포트 재-바인딩 없이 서빙 시작.</div>
+        </div>
+      </div>
+    </div>
+    <div class="join-bar">∥ 브라우저 로드 → Presence SSE 연결 시작</div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>Presence &amp; 생명주기 루프</h2></div>
+  <p class="lead">presence SSE 연결 <b>자체</b>가 생존 신호다. 세션 삭제와 서버 생존은 분리돼 있다 — 모든 세션을 지워도 탭이 열려 있으면 서버는 유지된다.</p>
+
+  <div class="flow">
+    <div class="loop cycle">
+      <span class="loop-tab">↻ Presence keepalive · 탭이 열려 있는 한 무한 반복</span>
+      <span class="back-lbl">↻ 30s ping</span>
+      <div class="flow">
+
+        <div class="node cat-life wide">
+          <div class="node-cat">연결</div>
+          <div class="node-title">GET /api/presence (SSE, 연결 유지)</div>
+          <div class="mod">api/presence.py · core/browser.connect_client(id)</div>
+          <div class="desc">세션 있으면 세션 ID, 없으면 BROWSER_KEEPALIVE_ID 로 연결. 30초마다 ": ping" idle timeout 방지.</div>
+        </div>
+        <div class="arrow"></div>
+
+        <div class="gate"><span class="q">◇ 탭 닫힘? (EventSource 종료)</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">아니오 — 살아있음</span>
+            <div class="arrow short"></div>
+            <div class="node cat-life">
+              <div class="node-title">연결 유지 · ↻ 계속</div>
+              <div class="mod">30s ping → 루프 상단으로</div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">예 — 닫힘</span>
+            <div class="arrow short"></div>
+            <div class="node cat-life">
+              <div class="node-cat">유예</div>
+              <div class="node-title">disconnect_client(id) — 2s grace</div>
+              <div class="mod">_pending_disconnects: threading.Timer · PRESENCE_RECONNECT_GRACE</div>
+              <div class="desc">새로고침·탭 복제 흡수. 탭 복제는 _connections 카운트로 — 마지막 연결이 끊겨야 유예 진입.</div>
+            </div>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ 2s 후 clients == 0?</span></div>
+            <div class="split">
+              <div class="col">
+                <span class="edge-lbl yes">아니오 — 다른 탭 있음</span>
+                <div class="arrow short"></div>
+                <div class="node cat-life">
+                  <div class="node-title">타이머 취소 · 계속</div>
+                  <div class="mod">Timer.cancel() — lock 밖에서 호출</div>
+                </div>
+              </div>
+              <div class="col">
+                <span class="edge-lbl no">예 — 아무도 없음</span>
+                <div class="arrow short"></div>
+                <div class="node cat-safe">
+                  <div class="node-title">server.should_exit = True</div>
+                  <div class="mod">watchdog → uvicorn 종료</div>
+                  <div class="desc">Windows 는 SIGTERM 대신 이 경로만 사용.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="note warn"><b>동시성:</b> <code class="i">_connections</code>·<code class="i">_pending_disconnects</code> 는 event-loop·watchdog 스레드·Timer 콜백 3곳에서 접근. 모든 read/write 는 <code class="i">_lock</code> 안에서, <code class="i">Timer.cancel/start</code> 는 lock ordering 때문에 <code class="i">_lock</code> <b>밖</b>에서 호출.</div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>Origin 가드 — 보안 경계</h2></div>
+
+  <div class="flow">
+    <div class="node cat-api wide">
+      <div class="node-cat">HTTP 요청 진입</div>
+      <div class="node-title">모든 /api/* 라우터 — require_local_origin 의존성 적용</div>
+      <div class="mod">api/deps.py · Depends(require_local_origin) · 라우터 레벨 적용</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ frozen(EXE) 환경?</span><small>dev 는 Vite 프록시라 origin 이 달라 → 가드 비활성</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">아니오 (dev)</span>
+        <div class="arrow short"></div>
+        <div class="node cat-life"><div class="node-title">자동 통과</div><div class="mod">가드 비활성</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">예 (frozen)</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ Origin 헤더 있음?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">있음</span>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ ALLOWED_ORIGIN 일치?</span><small>config.ALLOWED_ORIGIN — 런타임 포트 매 요청 참조</small></div>
+            <div class="split">
+              <div class="col"><span class="edge-lbl yes">일치</span><div class="arrow short"></div><div class="node cat-life"><div class="node-title">통과</div></div></div>
+              <div class="col"><span class="edge-lbl no">불일치</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403</div></div></div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">없음</span>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ sec-fetch-site: same-origin/none?</span></div>
+            <div class="split">
+              <div class="col"><span class="edge-lbl yes">예</span><div class="arrow short"></div><div class="node cat-life"><div class="node-title">통과</div></div></div>
+              <div class="col"><span class="edge-lbl no">아니오</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><b>경로 단일 진실원천:</b> <code class="i">core/config.py · _project_root()</code> 가 frozen(<code class="i">sys._MEIPASS</code>)/dev(프로젝트 루트) 분기를 한 곳에서 결정. 모든 경로 계산의 기반.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="02-api-boundary.html">02 API 경계 →</a>
+    <a href="13-settings-update.html">13 콘텐츠 동기화 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/overview/04-backend-flow.md</code> §2–3 · <code class="i">.claude/rules/app_lifecycle.md</code> · <code class="i">backend/main.py</code></div>
+</div>
+</body>
+</html>

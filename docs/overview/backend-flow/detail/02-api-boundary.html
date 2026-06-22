@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · HTTP API 경계</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">B · <b>HTTP API 경계</b></span>
+    <span class="mark">backend/api/ · 8 라우터</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">HTTP Boundary</div>
+    <h1 class="page-title">② HTTP API 경계</h1>
+    <p class="subtitle">
+      <code class="i">backend/api/</code> 의 라우터 8개. 모든 엔드포인트에 <b>Origin 가드</b>가 적용되는
+      보안 경계이자, 프론트(브라우저)와 백엔드(하니스)를 잇는 유일한 통로다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>요청 진입 흐름 — Origin 가드 결정트리</h2></div>
+  <div class="flow">
+    <div class="node cat-api wide">
+      <div class="node-cat">브라우저</div>
+      <div class="node-title">fetch / EventSource 요청</div>
+      <div class="mod">frontend/src/lib/api.js · sse.js</div>
+      <div class="desc">컴포넌트는 URL 을 직접 모르고 api 래퍼만 호출.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ frozen(EXE) 환경?</span><small>dev 는 Vite 프록시라 origin 이 달라 → 가드 비활성</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">dev</span>
+        <div class="arrow short"></div>
+        <div class="node cat-api"><div class="node-title">자동 통과</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">frozen</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ Origin 헤더 있음?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">있음</span>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ ALLOWED_ORIGIN 일치?</span><small>config.ALLOWED_ORIGIN — 런타임 포트 매 요청 참조</small></div>
+            <div class="split">
+              <div class="col"><span class="edge-lbl yes">일치</span><div class="arrow short"></div><div class="node cat-api"><div class="node-title">통과</div></div></div>
+              <div class="col"><span class="edge-lbl no">불일치</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403 Forbidden</div></div></div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">없음</span>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ sec-fetch-site: same-origin/none?</span></div>
+            <div class="split">
+              <div class="col"><span class="edge-lbl yes">예</span><div class="arrow short"></div><div class="node cat-api"><div class="node-title">통과</div></div></div>
+              <div class="col"><span class="edge-lbl no">아니오</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403 Forbidden</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="merge">▽ 통과 — 라우터 분배</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-api wide">
+      <div class="node-cat">공유 의존성 + 라우팅</div>
+      <div class="node-title">store 싱글톤 + 8개 APIRouter</div>
+      <div class="mod">api/deps.py · _store · _state_store · _settings_store · api/__init__.py</div>
+      <div class="desc">conversation·state·settings 단일 인스턴스를 주입받아 아래 표의 라우터로 분배.</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>HTTP API 전체 지도</h2></div>
+  <table class="tbl">
+    <thead><tr><th>메서드 · 경로</th><th>라우터</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">POST /api/chat</td><td class="mono">chat.py</td><td>채팅 턴 실행 — SSE 이벤트 스트림. <code class="i">force_skills</code>(슬래시) 지원</td></tr>
+      <tr><td class="mono">GET /api/conversation</td><td class="mono">chat.py</td><td>백엔드 보관 히스토리 조회(검증용)</td></tr>
+      <tr><td class="mono">DELETE /api/conversation</td><td class="mono">chat.py</td><td>세션 삭제 시 히스토리·상태 제거</td></tr>
+      <tr><td class="mono">POST /api/conversation/restore</td><td class="mono">chat.py</td><td>프론트 localStorage → 백엔드 컨텍스트 복원(hydrate)</td></tr>
+      <tr><td class="mono">GET /api/presence</td><td class="mono">presence.py</td><td>SSE 생존 채널</td></tr>
+      <tr><td class="mono">GET /api/app-info</td><td class="mono">settings.py</td><td>앱 이름·버전</td></tr>
+      <tr><td class="mono">GET · POST /api/settings</td><td class="mono">settings.py</td><td>LLM 설정 조회(키 마스킹)·부분 업데이트</td></tr>
+      <tr><td class="mono">GET /api/settings/providers</td><td class="mono">settings.py</td><td>가용 프로바이더 메타데이터</td></tr>
+      <tr><td class="mono">GET /api/settings/models</td><td class="mono">settings.py</td><td>프로바이더 모델 목록(<code class="i">{base_url}/models</code> 프록시)</td></tr>
+      <tr><td class="mono">POST /api/settings/test</td><td class="mono">settings.py</td><td>연결 테스트(저장 없이 ping)</td></tr>
+      <tr><td class="mono">GET /api/skills</td><td class="mono">skills.py</td><td>SKILL 목록(슬래시 자동완성)</td></tr>
+      <tr><td class="mono">GET /api/version</td><td class="mono">update.py</td><td>현재 버전</td></tr>
+      <tr><td class="mono">GET /api/update/check</td><td class="mono">update.py</td><td>latest.json 확인(5분 캐시)</td></tr>
+      <tr><td class="mono">POST /api/update/apply</td><td class="mono">update.py</td><td>다운로드·검증·Updater 기동</td></tr>
+      <tr><td class="mono">GET /api/update/status</td><td class="mono">update.py</td><td>진행 상태 폴링</td></tr>
+      <tr><td class="mono">POST /api/chart/filter</td><td class="mono">chart.py</td><td>차트 인터랙션 — exclude/legend/undo/redo/reset</td></tr>
+      <tr><td class="mono">GET /api/chart/filter-state</td><td class="mono">chart.py</td><td>세션 재진입 시 필터 상태 복원</td></tr>
+      <tr><td class="mono">GET /api/artifact/preview</td><td class="mono">artifact.py</td><td>parquet head(N) 미리보기(데이터 칩)</td></tr>
+      <tr><td class="mono">GET /api/artifact/csv</td><td class="mono">artifact.py</td><td>parquet → CSV 변환 다운로드</td></tr>
+      <tr><td class="mono">POST /api/artifact/reveal</td><td class="mono">artifact.py</td><td>산출물 폴더를 OS 탐색기에서 열기</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note"><b>정적 mount:</b> <code class="i">/</code>(SPA) · <code class="i">/assets</code> · <code class="i">/result</code>(산출물) · <code class="i">/workspace</code>(도구 생성 파일).
+  <b>확장 라우트:</b> <code class="i">extensions/</code> 의 각 도구가 <code class="i">/api/ext/&lt;tool&gt;/*</code>(API)와 <code class="i">/ext/&lt;tool&gt;</code>(SPA)로 컨벤션 기반 자동 마운트(host 코드 등록 불필요).</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="03-chat-turn.html">03 채팅 턴 진입 →</a>
+    <a href="10-chart-pipeline.html">10 차트 API →</a>
+    <a href="13-settings-update.html">13 설정·업데이트 API →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/overview/04-backend-flow.md</code> §4 · <code class="i">backend/api/chat.py</code> · <code class="i">backend/api/deps.py</code></div>
+</div>
+</body>
+</html>

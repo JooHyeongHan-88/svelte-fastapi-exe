@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>13 · 설정 &amp; 자동 업데이트</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">E · <b>설정 &amp; 자동 업데이트</b></span>
+    <span class="mark">settings/ · core/updater.py · core/content_sync.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Settings &amp; Auto-update</div>
+    <h1 class="page-title">⑬ 설정 hot-swap + 자동 업데이트 / 콘텐츠 동기화</h1>
+    <p class="subtitle">
+      LLM 설정의 멀티 프로바이더 저장·hot-swap, 그리고 EXE 자가 교체(4단계 rename-to-backup)와
+      EXE 재빌드 없이 콘텐츠를 갱신하는 브랜치 동기화.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>설정 저장 — 멀티 프로바이더 슬롯</h2></div>
+  <div class="code">settings.json   <span class="c">// dev: backend/settings/ · frozen: %APPDATA%\{APP_NAME}\</span>
+{
+  <span class="a">"provider"</span>: <span class="a">"dtgpt"</span>,                          <span class="c">// 현재 활성</span>
+  <span class="a">"providers"</span>: {                                <span class="c">// 프로바이더별 슬롯(전환해도 보존)</span>
+    <span class="a">"dtgpt"</span>:             {<span class="a">"model"</span>:..., <span class="a">"api_key"</span>:..., <span class="a">"base_url"</span>:<span class="a">""</span>},
+    <span class="a">"openai_compatible"</span>: {<span class="a">"model"</span>:..., <span class="a">"api_key"</span>:..., <span class="a">"base_url"</span>:<span class="a">"https://..."</span>}
+  }
+}</div>
+  <div class="grid c2">
+    <div class="card">
+      <h3>SettingsStore</h3>
+      <p><code class="i">settings/store.py · SettingsStore</code> — <code class="i">threading.Lock</code>(non-reentrant) 주의: update 내에서 get 호출 금지(데드락). 구 포맷(top-level model/api_key) 자동 마이그레이션.</p>
+    </div>
+    <div class="card">
+      <h3>API Key 보안</h3>
+      <p><code class="i">settings/masking.py</code> 단일 지점에서 <code class="i">sk-p••••••4f2a</code> 마스킹. localStorage 저장 금지. <code class="i">_apply_api_key_rule</code>: null=변경없음 · ""=삭제 · "sk-"=교체.</p>
+    </div>
+  </div>
+  <div class="note"><b>Provider hot-swap:</b> <code class="i">/api/chat</code> 요청마다 <code class="i">_settings_store.get()</code> → <code class="i">get_provider(settings)</code> 로 인스턴스 즉석 생성 — 서버 재시작 없이 전환이 다음 메시지부터 적용.</div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>자동 업데이트 — 4단계 결정트리</h2></div>
+  <div class="flow">
+    <div class="term">● GET /api/update/check 요청</div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ QA 채널? (APP_BUILD_CHANNEL==qa)</span></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예 — QA</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe"><div class="node-title">즉시 차단 — update_available=False</div><div class="desc">네트워크 호출 없음. prod EXE 가 QA 빌드를 업데이트로 인식하는 것 방지.</div></div>
+        <div class="arrow short"></div>
+        <div class="term">■ 종료</div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오 — prod</span>
+        <div class="arrow short"></div>
+        <div class="node cat-cfg wide">
+          <div class="node-cat">① check_latest</div>
+          <div class="node-title">GitHub REST API → latest.json 에셋 파싱</div>
+          <div class="mod">updater.py · _fetch_release_and_meta() · 5분 캐시</div>
+          <div class="desc">releases/latest → latest.json(octet-stream) → EXE 에셋 API url stash. url prefix·sha256(64hex) 검증 실패 시 silently False.</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-cfg wide">
+          <div class="node-cat">② apply_update</div>
+          <div class="node-title">PAT + octet-stream 인증 스트리밍 다운로드 → {stem}.new.exe</div>
+          <div class="mod">updater.py · _download() · REST API 에셋 엔드포인트 + Accept:application/octet-stream</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ sha256 검증 일치?</span></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl no">불일치</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">staging 파일 삭제 + 에러 반환</div></div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl yes">일치</span>
+            <div class="arrow short"></div>
+            <div class="node cat-cfg wide">
+              <div class="node-cat">③ Updater.exe 기동</div>
+              <div class="node-title">DETACHED Popen(Updater.exe, pid, new, current) → 1s 후 server.should_exit</div>
+              <div class="mod">부모 pid 폴링 최대 60s + POST_EXIT_GRACE 3s</div>
+            </div>
+            <div class="arrow short"></div>
+            <div class="loop cycle">
+              <span class="loop-tab">↻ rename 재시도 — 최대 30회 × 0.5s</span>
+              <span class="back-lbl">↻ 0.5s sleep</span>
+              <div class="flow">
+                <div class="gate"><span class="q">◇ ④ current→.old rename 성공?</span><small>AV 스캔·EXE 잠금 해제 대기</small></div>
+                <div class="split">
+                  <div class="col">
+                    <span class="edge-lbl yes">성공</span>
+                    <div class="arrow short"></div>
+                    <div class="node cat-cfg">
+                      <div class="node-title">new→current rename → 새 EXE spawn</div>
+                      <div class="mod">notify_shell(SHChangeNotify) → 탐색기 갱신</div>
+                    </div>
+                    <div class="arrow short"></div>
+                    <div class="node cat-cfg"><div class="node-title">cleanup_stale_backup() — .old 삭제</div></div>
+                    <div class="arrow short"></div>
+                    <div class="term">■ 업데이트 완료</div>
+                  </div>
+                  <div class="col">
+                    <span class="edge-lbl no">실패 — 잠금</span>
+                    <div class="arrow short"></div>
+                    <div class="node cat-safe"><div class="node-title">↻ 재시도</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="arrow"></div>
+            <div class="node cat-safe">
+              <div class="node-title">30회 전수 실패 → .old 복원 후 재기동</div>
+              <div class="desc">current→.old 는 성공했으나 new→current 가 실패한 경우 .old→current 복원.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note warn"><b>절대 변경 금지:</b> private 레포 에셋은 브라우저 URL 이 아니라 <b>REST API 에셋 엔드포인트 + <code class="i">Accept: application/octet-stream</code> + PAT 헤더</b>로 받아야 한다. 브라우저 URL 은 쿠키 인증 전용 → private 이면 404.</div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>콘텐츠 동기화 — content_sync.py</h2></div>
+  <p class="lead">frozen EXE 가 <b>기동 시 매핑된 GitHub 브랜치에서 마크다운을 가져와</b> EXE 재빌드 없이 SKILLS/AGENTS/PROMPTS 를 갱신한다.</p>
+  <table class="tbl">
+    <thead><tr><th>빌드</th><th>콘텐츠 소스</th></tr></thead>
+    <tbody>
+      <tr><td>dev (비-frozen)</td><td>로컬 워킹트리(동기화 안 함 — mtime 핫리로드)</td></tr>
+      <tr><td>frozen <code class="i">qa</code></td><td>원격 <code class="i">dev</code> 브랜치</td></tr>
+      <tr><td>frozen <code class="i">prod</code></td><td>원격 <code class="i">main</code> 브랜치</td></tr>
+    </tbody>
+  </table>
+  <div class="flow">
+    <div class="term">● sync_agent_content() (registry.load() 직전)</div>
+    <div class="arrow"></div>
+    <div class="gate"><span class="q">◇ 동기화 게이트 통과?</span><small>frozen AND CONTENT_SYNC_ENABLED AND owner·repo 설정됨</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="node cat-cfg"><div class="node-title">{} 반환 — 번들 그대로</div><div class="desc">네트워크 0회. dev·비활성·미설정 전부 이 경로.</div></div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl yes">통과</span>
+        <div class="arrow short"></div>
+        <div class="node cat-cfg wide">
+          <div class="node-title">② Contents API — 디렉터리별 파일 목록</div>
+          <div class="mod">GET /repos/{o}/{r}/contents/&lt;DIR&gt;?ref=&lt;branch&gt; · .md·blob 만 · 파일명 안전성 검사</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-cfg wide">
+          <div class="node-title">③ manifest blob sha 비교 → 증분 다운로드</div>
+          <div class="mod">GET /git/blobs/&lt;sha&gt; (base64) — 변경/신규만 받음</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ 전부 성공? (all-or-nothing)</span><small>어느 하나라도 실패 시 디스크 미반영</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">전부 성공</span>
+            <div class="arrow short"></div>
+            <div class="node cat-cfg">
+              <div class="node-title">④ 디스크 반영 + manifest 갱신</div>
+              <div class="desc">%APPDATA%/{APP_NAME}/content/{DIR}/ 저장 → registry.use_directory() 재지정</div>
+            </div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">부분 실패</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe">
+              <div class="node-title">last-good 유지 → 번들 폴백</div>
+              <div class="desc">네트워크·404·TLS·파싱 어떤 실패도 raise 하지 않음. dev 브랜치 없어도 부팅 유지.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">인증/SSL 은 <code class="i">core/github_api.py</code>(auth_headers·SSL_VERIFY)로 updater 와 공용. <code class="i">APP_CONTENT_SYNC_BRANCH</code> 오버라이드로 채널 매핑 무시 → 카나리 검증 가능.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="01-boot-lifecycle.html">01 기동 시 동기화 →</a>
+    <a href="02-api-boundary.html">02 settings/update API →</a>
+    <a href="03-chat-turn.html">03 provider hot-swap →</a>
+  </div>
+  <div class="foot">출처: <code class="i">.claude/rules/settings_architecture.md</code> · <code class="i">.claude/rules/update_architecture.md</code> · <code class="i">backend/core/updater.py</code> · <code class="i">backend/core/content_sync.py</code></div>
+</div>
+</body>
+</html>

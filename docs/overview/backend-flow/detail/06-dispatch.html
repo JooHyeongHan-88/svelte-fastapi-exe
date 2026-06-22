@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 · 서브에이전트 디스패치</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">C · <b>서브에이전트 디스패치</b></span>
+    <span class="mark">harness/dispatch/</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Sub-Agent Dispatch</div>
+    <h1 class="page-title">⑥ 서브에이전트 디스패치 — 순차 · 병렬 · 격리</h1>
+    <p class="subtitle">
+      오케스트레이터가 복잡한 작업을 전문 서브에이전트에게 위임하는 경로.
+      순차(<code class="i">call_sub_agent</code>)와 병렬(<code class="i">call_sub_agents_parallel</code>) 두 방식을 게이트·fork/join·루프로 표현한다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>순차 위임 — _dispatch_sub_agent</h2></div>
+
+  <div class="flow">
+    <div class="term">● call_sub_agent(agent_name, task) 진입</div>
+    <div class="arrow"></div>
+
+    <div class="gate"><span class="q">◇ depth &gt; MAX_AGENT_DEPTH? (L2)</span><small>중첩 위임 깊이 가드</small></div>
+    <div class="split">
+      <div class="col">
+        <span class="edge-lbl yes">예 — 초과</span>
+        <div class="arrow short"></div>
+        <div class="node cat-safe"><div class="node-title">중첩 거부 요약 반환</div><div class="mod">AgentReturnEvent(summary="depth 초과")</div></div>
+        <div class="arrow short"></div>
+        <div class="term">■ exit</div>
+      </div>
+      <div class="col">
+        <span class="edge-lbl no">아니오</span>
+        <div class="arrow short"></div>
+        <div class="gate"><span class="q">◇ budget.check_dispatch(name) — 연속 3회?</span><small>같은 에이전트 3회 연속 위임 = 루프</small></div>
+        <div class="split">
+          <div class="col">
+            <span class="edge-lbl yes">예 — 연속 초과</span>
+            <div class="arrow short"></div>
+            <div class="node cat-safe"><div class="node-title">연속 위임 차단 요약</div></div>
+            <div class="arrow short"></div>
+            <div class="term">■ exit</div>
+          </div>
+          <div class="col">
+            <span class="edge-lbl no">아니오</span>
+            <div class="arrow short"></div>
+            <div class="gate"><span class="q">◇ agent_registry.get_by_name(name) 존재?</span></div>
+            <div class="split">
+              <div class="col">
+                <span class="edge-lbl no">없음</span>
+                <div class="arrow short"></div>
+                <div class="node cat-safe"><div class="node-title">unknown agent 요약</div></div>
+                <div class="arrow short"></div>
+                <div class="term">■ exit</div>
+              </div>
+              <div class="col">
+                <span class="edge-lbl yes">있음</span>
+                <div class="arrow short"></div>
+                <div class="node cat-core wide">
+                  <div class="node-cat">위임 시작</div>
+                  <div class="node-title">AgentSwitchEvent(agent_id, reason, dispatch_id) yield</div>
+                  <div class="mod">dispatch_id = call.id — 이벤트 라우팅 상관키</div>
+                </div>
+                <div class="arrow short"></div>
+                <div class="node cat-core wide">
+                  <div class="node-cat">격리 프롬프트</div>
+                  <div class="node-title">_compose_sub_agent_system_prompt(agent, skills)</div>
+                  <div class="desc">base + safety + 에이전트 본문 + 학습 SKILL + 종료 규약(complete_subagent 호출 명시).</div>
+                </div>
+                <div class="arrow short"></div>
+                <div class="node cat-core wide">
+                  <div class="node-cat">격리 실행 (L0)</div>
+                  <div class="node-title">_run_agent_turn(agent_registry=None, turn_messages=None, state=sub_state)</div>
+                  <div class="mod">별도 AgentState · 별도 messages — 메인 컨텍스트 오염 없음</div>
+                  <div class="desc">raw 이벤트를 _progress() 로 AgentProgressEvent(dispatch_id) 래핑 후 오케스트레이터로 전달. complete_subagent 결과를 summary 로 캡처.</div>
+                </div>
+                <div class="arrow short"></div>
+                <div class="node cat-core wide">
+                  <div class="node-cat">복귀</div>
+                  <div class="node-title">AgentReturnEvent(summary, dispatch_id) yield</div>
+                  <div class="desc">summary 우선순위: complete_subagent → _extract_task_summary("Task Summary:" 헤더) → 마지막 200자 폴백. 부모 _run_agent_turn 이 summary 를 tool_result 로 변환.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>ask_user_mode — 사용자 입력 필요 시</h2></div>
+  <table class="tbl">
+    <thead><tr><th>mode</th><th>사용처</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">"surface"</td><td>call_sub_agent (순차)</td><td>orchestrator_state 에 pending_sub_agent/task/missing_slots 저장 후 AskUserEvent 를 직접 사용자에게 yield → 다음 턴 재위임 유도</td></tr>
+      <tr><td class="mono">"abort"</td><td>call_sub_agents_parallel (병렬)</td><td>묻지 않고 해당 작업만 "입력 필요" 에러 요약으로 변환. 오케스트레이터가 순차 재위임</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">3</span><h2>병렬 위임 — _dispatch_parallel_sub_agents</h2></div>
+
+  <div class="flow">
+    <div class="term">● call_sub_agents_parallel(tasks=[{agent_name, task}, ...]) 진입</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">준비</div>
+      <div class="node-title">각 task에 dispatch_id = f"{call.id}::p{i}" 부여</div>
+      <div class="mod">asyncio.Queue (fan-in) · Semaphore(APP_MAX_PARALLEL_SUBAGENTS) 초기화</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="fork-bar">▽ asyncio.create_task 로 N개 _produce 비동기 태스크 동시 시작</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">task 0</div>
+        <div class="node cat-core">
+          <div class="node-title">async with sem:</div>
+          <div class="desc">_dispatch_sub_agent(ask_user_mode="abort", skip_consecutive_guard=True, ...)</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core"><div class="node-title">이벤트 → queue.put</div><div class="node-title">AgentReturnEvent → summaries[did]</div></div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">task 1 … N-1</div>
+        <div class="node cat-core">
+          <div class="node-title">async with sem:</div>
+          <div class="desc">동일 패턴. Semaphore 로 동시 실행 수 ≤ APP_MAX_PARALLEL_SUBAGENTS(기본 3)</div>
+        </div>
+        <div class="arrow short"></div>
+        <div class="node cat-core"><div class="node-title">이벤트 → queue.put / summaries[did]</div></div>
+      </div>
+    </div>
+    <div class="join-bar">∥ 소비 루프 — queue 에서 꺼내 yield / done 카운트</div>
+    <div class="arrow"></div>
+
+    <div class="node cat-safe wide">
+      <div class="node-cat">정리 (finally)</div>
+      <div class="node-title">미완 task cancel + asyncio.gather</div>
+      <div class="desc">ESC·탭 종료 시 고아 task 방지. 모든 경로에서 실행.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node cat-core wide">
+      <div class="node-cat">fan-in</div>
+      <div class="node-title">입력 순서대로 summaries 합쳐 단일 tool_result 생성</div>
+      <div class="desc">call ↔ tool_result 1:1 쌍 유지 → 히스토리 정합성(F1a·F1b·F7) 로직 건드리지 않음.</div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>중첩 위임 4중 방어선</h2></div>
+  <table class="tbl">
+    <thead><tr><th>계층</th><th>위치</th><th>방식</th></tr></thead>
+    <tbody>
+      <tr><td class="c"><span class="badge">L0</span></td><td class="mono">_dispatch_sub_agent</td><td>서브 turn 을 agent_registry=None 으로 실행 → call_sub_agent 분기 자체 비활성</td></tr>
+      <tr><td class="c"><span class="badge">L1</span></td><td class="mono">spec_filter._filter_specs_for_sub_agent</td><td>위임 도구 스펙을 LLM 시야에서 제거(forbidden)</td></tr>
+      <tr><td class="c"><span class="badge">L2</span></td><td class="mono">_dispatch_sub_agent depth guard</td><td>depth &gt; MAX_AGENT_DEPTH 이면 위임 거부</td></tr>
+      <tr><td class="c"><span class="badge">L3</span></td><td class="mono">_execute_tool</td><td>sentinel 도구가 실행 단계까지 흘러오면 명시적 에러</td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec"><span class="sec-no">5</span><h2>노출 도구 선별 — _filter_specs_for_sub_agent</h2></div>
+  <table class="tbl">
+    <thead><tr><th>구분</th><th>도구</th></tr></thead>
+    <tbody>
+      <tr><td>금지 (L1)</td><td class="mono">call_sub_agent · call_sub_agents_parallel</td></tr>
+      <tr><td>항상 허용</td><td class="mono">complete_subagent · add_todo · complete_todo</td></tr>
+      <tr><td>자동 주입</td><td class="mono">api_refs 보유 시 INFRASTRUCTURE_TOOL_NAMES(8) + ARTIFACT_IO_TOOL_NAMES(list/load_artifact)</td></tr>
+      <tr><td>화이트리스트</td><td>agent.meta.tools 비었으면 금지 외 전체 / 채워져 있으면 그 목록만</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn"><b>상호재귀 late import:</b> <code class="i">loop._run_agent_turn</code> ↔ <code class="i">sequential._dispatch_sub_agent</code> 는 서로를 호출. 순환 import 회피를 위해 <code class="i">sequential.py</code> 가 <code class="i">_run_agent_turn</code> 을 함수 본문 안에서 late import.</div>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="05b-sentinel.html">← 05b sentinel</a>
+    <a href="04-turn-loop.html">04 턴 루프 →</a>
+    <a href="07-prompt.html">07 프롬프트 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">docs/harness/dispatch.md</code> · <code class="i">agent_runtime.md</code> §서브에이전트</div>
+</div>
+</body>
+</html>

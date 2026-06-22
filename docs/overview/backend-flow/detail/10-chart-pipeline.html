@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10 · 차트 파이프라인</title>
+<link rel="stylesheet" href="../assets/theme.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="inner">
+    <a class="home" href="../index.html">← 메인 흐름도</a>
+    <span class="crumb">E · <b>차트 파이프라인</b></span>
+    <span class="mark">agent/charts/ · api/chart.py · api/artifact.py</span>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="hd">
+    <div class="kicker">Chart Pipeline</div>
+    <h1 class="page-title">⑩ 차트 파이프라인 — 선언적 spec &amp; 인터랙션</h1>
+    <p class="subtitle">
+      <code class="i">display_chart</code> 는 "이미지 생성"이 아니라 <b>데이터(parquet)와 선언(spec)을 분리</b>해
+      렌더링하는 파이프라인. 덕분에 사후 필터링·레전드 편집(undo/redo)이 가능하다.
+    </p>
+  </header>
+
+  <div class="sec"><span class="sec-no">1</span><h2>생성 → 상호작용 흐름</h2></div>
+  <div class="grid c2">
+    <div class="card soft">
+      <h3>생성 (에이전트)</h3>
+      <ol class="steps" style="margin-top:8px">
+        <li><div class="s-body"><b>데이터 저장</b><span class="mod">save_artifact(parquet)</span></div></li>
+        <li><div class="s-body"><b>차트 선언</b><span class="mod">charts.spec.json (ChartSpecV1)</span></div></li>
+        <li><div class="s-body"><b>표시 호출</b><span class="mod">tools/visualize.py · display_chart(spec 경로)</span></div></li>
+        <li><div class="s-body"><b>렌더</b><span class="mod">chart_renderer.py · render_spec_to_echarts() → charts.json</span></div></li>
+      </ol>
+    </div>
+    <div class="card soft">
+      <h3>상호작용 (사용자)</h3>
+      <ol class="steps" style="margin-top:8px">
+        <li><div class="s-body"><b>brush/레전드 선택</b><span class="mod">ArtifactLightbox</span></div></li>
+        <li><div class="s-body"><b>필터 요청</b><span class="mod">POST /api/chart/filter</span></div></li>
+        <li><div class="s-body"><b>ViewState push</b><span class="mod">chart_filter_store.py (undo/redo)</span></div></li>
+        <li><div class="s-body"><b>재렌더</b><span class="mod">제외 행·레전드 반영 → charts.json 갱신</span></div></li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="sec"><span class="sec-no">2</span><h2>선언 스키마 — chart_spec.py</h2></div>
+  <table class="tbl">
+    <thead><tr><th>클래스</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">ChartSpecV1</td><td>최상위 — charts 목록 선언 (Vega-Lite 류 축소판)</td></tr>
+      <tr><td class="mono">ChartV1</td><td>mark(bar/line/scatter/box/histogram/heatmap/ecdf) + encoding + data</td></tr>
+      <tr><td class="mono">Encoding / EncodingChannel</td><td>x / y / color 채널 (field·type·aggregate)</td></tr>
+      <tr><td class="mono">DataRef</td><td>data.source — parquet 경로 (resolve_result_path 로 해석)</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>관용 파싱 (R8):</b> <code class="i">_normalize_alias</code> field_validator(mode="before")가 근사 표기를 정규화(<code class="i">normal→nominal</code>, <code class="i">avg→mean</code>, <code class="i">hist→histogram</code>, 대소문자 무관). 매핑 밖 값만 ValidationError. <code class="i">display_chart</code> 오류 회신은 최대 3건(<code class="i">_SPEC_ERROR_DETAIL_LIMIT</code>).</div>
+
+  <div class="sec"><span class="sec-no">3</span><h2>렌더러 — chart_renderer.py</h2></div>
+  <div class="flow">
+    <div class="node cat-data wide">
+      <div class="node-title">render_spec_to_echarts(spec, base_dir, exclude_by_chart, legend_by_chart)</div>
+      <div class="mod">_load_data_frame → _render_chart (mark별 분기) → _apply_legend_config</div>
+      <div class="desc">parquet 로드 → mark별 빌더(_render_standard/_render_box/_render_histogram/_render_heatmap/_render_ecdf) → 레전드 설정 적용.</div>
+    </div>
+    <div class="arrow"></div>
+    <div class="fork-bar">▽ R8 관용 보정 — mark 별로 병렬 처리</div>
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-cap">R8 — histogram + color</div>
+        <div class="node cat-data">
+          <div class="node-title">_render_histogram</div>
+          <div class="mod">그룹별 시리즈 분리</div>
+          <div class="desc">빈 경계는 전체 범위에서 1회 계산해 그룹 공유(비교 가능).</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">R8 — 레전드 라벨 보정</div>
+        <div class="node cat-data">
+          <div class="node-title">_restore_mismatched_legend</div>
+          <div class="mod">extra_option.legend.data 임의 라벨</div>
+          <div class="desc">실존 시리즈 이름과 교집합 유지, 전부 어긋나면 시리즈 이름으로 복원.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-cap">레전드 Filter 환원</div>
+        <div class="node cat-data">
+          <div class="node-title">resolve_legend_row_ids</div>
+          <div class="mod">color.field 컬럼 기반</div>
+          <div class="desc">레전드 이름 → 행 역추적 → exclude 환원.</div>
+        </div>
+      </div>
+    </div>
+    <div class="join-bar">∥ → charts.json (ECharts option 직렬화)</div>
+  </div>
+
+  <div class="sec"><span class="sec-no">4</span><h2>ViewState 스택 — chart_filter_store.py</h2></div>
+  <p class="lead">v2 스키마로 <b>필터(exclude)와 레전드 오버라이드(legend)를 단일 undo/redo 스택</b>에 통합. cursor 가 가리키는 <code class="i">ViewSnapshot</code> 이 현재 상태.</p>
+  <table class="tbl">
+    <thead><tr><th>전이 함수 / action</th><th>효과</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">apply_exclude(state, ...)</td><td>brush/레전드 Filter → 행 제외 push (legend carry)</td></tr>
+      <tr><td class="mono">apply_legend(state, ...)</td><td>순서·색상·Hide → legend 갱신 push (exclude carry)</td></tr>
+      <tr><td class="mono">reset / undo / redo</td><td>빈 스냅샷 push / cursor 이동(양쪽 동작 무관하게 되감음)</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>/api/chart/filter (api/chart.py)</b> action: <code class="i">exclude</code> · <code class="i">exclude_legend</code> · <code class="i">set_legend</code> · <code class="i">undo</code>/<code class="i">redo</code>/<code class="i">reset</code>. 응답 <code class="i">{items, can_undo, can_redo}</code> 로 charts.json 도 덮어 재진입 일관성 보장. 데이터 원본(parquet)은 불변 — 필터는 row id 제외 목록.</div>
+
+  <div class="sec"><span class="sec-no">5</span><h2>데이터 칩 HTTP — api/artifact.py</h2></div>
+  <table class="tbl">
+    <thead><tr><th>엔드포인트</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /api/artifact/preview</td><td>head(N) 미리보기 — scan_parquet 로 total_rows 집계 + read_parquet(n_rows). NaN/inf→null</td></tr>
+      <tr><td class="mono">GET /api/artifact/csv</td><td>전체 데이터 CSV 변환 첨부(RFC 5987 한글 파일명)</td></tr>
+      <tr><td class="mono">POST /api/artifact/reveal</td><td>산출물 폴더를 OS 탐색기로 열기(Windows os.startfile)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="xlinks">
+    <a href="../index.html">← 메인 흐름도</a>
+    <a href="09-artifact-pipeline.html">← 09 산출물</a>
+    <a href="02-api-boundary.html">02 차트 API →</a>
+    <a href="12-safety.html">12 R8 관용 파싱 →</a>
+  </div>
+  <div class="foot">출처: <code class="i">.claude/rules/charts_pipeline.md</code> · <code class="i">docs/overview/04-backend-flow.md</code> §14 · <code class="i">backend/agent/charts/</code></div>
+</div>
+</body>
+</html>
