@@ -36,6 +36,7 @@
       <div class="node-cat">상태 로드</div>
       <div class="node-title">state_store.get(client_id) → AgentState</div>
       <div class="mod">agent/stores/state.py · todo_list · pending_* · active_skills</div>
+      <div class="desc">클라이언트의 영속 상태(todo·pending·active_skills)를 불러와 이번 턴의 출발점으로 삼는다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -87,6 +88,7 @@
       <div class="node-cat">도구 스펙 빌드</div>
       <div class="node-title">_build_orchestrator_specs(active_skills, api_refs)</div>
       <div class="mod">LLM 에 노출할 tool JSON Schema 목록 + api_refs 주입 여부 결정</div>
+      <div class="desc">이번 턴 LLM에 노출할 도구 JSON Schema 목록을 활성 SKILL·api_refs 기준으로 추린다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -102,6 +104,7 @@
       <div class="node-cat">에이전트 실행</div>
       <div class="node-title">_run_agent_turn(ctx, agent_registry, state, budget, ...) — 아래 §2 루프</div>
       <div class="mod">run_turn 에서 yield from 으로 이벤트 전달</div>
+      <div class="desc">준비된 컨텍스트로 provider↔도구 반복 루프(§2)를 돌리고 이벤트를 run_turn으로 흘려보낸다.</div>
     </div>
   </div>
 
@@ -140,11 +143,13 @@
         </div>
         <div class="arrow lbl" data-label="소비 성공"></div>
 
-        <div class="node cat-core wide">
+        <a class="node linked cat-core wide" href="04b-provider-astream.html">
           <div class="node-cat">스트리밍</div>
           <div class="node-title">provider.astream(messages, tool_specs) → 이벤트 yield</div>
           <div class="mod">delta·reasoning·tool_call·DoneEvent 를 순서대로 emit</div>
-        </div>
+          <div class="desc">LLM 응답을 스트리밍하며 delta·reasoning·tool_call·done 이벤트를 순서대로 내보낸다.</div>
+          <span class="more">자세히 →</span>
+        </a>
         <div class="arrow"></div>
 
         <!-- tool_call 게이트: 없으면 옆으로 빠져 정상 완료 -->
@@ -166,6 +171,7 @@
           <div class="node-cat">tool_call 처리</div>
           <div class="node-title">_handle_tool_call(ctx, call, outcome) — 상세 → 05</div>
           <div class="mod">harness/call_handlers.py · outcome.interrupted / outcome.stop / CONTINUE</div>
+          <div class="desc">emit된 tool_call 1건을 3단계 결정트리로 처리하고 interrupted/stop/CONTINUE를 outcome에 기록한다.</div>
         </div>
         <div class="arrow"></div>
 
@@ -202,6 +208,7 @@
       <div class="node-cat">for-else — 상한 도달 (F6)</div>
       <div class="node-title">_emit_max_iterations_fallback(state, messages)</div>
       <div class="mod">harness/loop.py · todo 완료 여부에 따라 is_recovered 분기</div>
+      <div class="desc">반복 상한에 닿으면 도구 없이 최종 요약을 만들고, todo 완료 여부로 복구(초록)/미완(빨강)을 가른다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -270,6 +277,7 @@
   <div class="xlinks">
     <a href="../index.html">← 메인 흐름도</a>
     <a href="03-chat-turn.html">← 03 턴 진입</a>
+    <a href="04b-provider-astream.html">04b provider.astream →</a>
     <a href="05-call-handlers.html">05 핸들러 →</a>
     <a href="07-prompt.html">07 프롬프트 →</a>
     <a href="08-state.html">08 상태 →</a>

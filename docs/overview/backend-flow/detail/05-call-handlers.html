@@ -88,6 +88,7 @@
       <div class="node-cat">2단계 — 슬롯 가드</div>
       <div class="node-title">_guard_tool_args(ctx, call) → block_event | None</div>
       <div class="mod">agent/guard.py · validate_tool_args</div>
+      <div class="desc">LLM 인자를 도구 Pydantic 모델로 검증 — 누락/형식 오류면 차단 이벤트, 통과면 None을 반환한다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -120,6 +121,7 @@
       <div class="node-cat">3단계 — 루프가드</div>
       <div class="node-title">_loop_guard_denial(ctx, call) → block | None (R4)</div>
       <div class="mod">history_calls · _call_signature(이름+인자+파일 fingerprint)</div>
+      <div class="desc">같은 시그니처(이름+인자+파일 fingerprint) 호출이 이미 있으면 반복으로 보고 차단, 처음이면 None을 반환한다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -140,6 +142,7 @@
     <!-- 실행 (spine) -->
     <div class="node cat-core">
       <div class="node-title">history_calls 에 시그니처 기록</div>
+      <div class="desc">이번 호출 시그니처를 남겨 다음 동일 호출을 루프가드가 잡을 수 있게 한다.</div>
     </div>
     <div class="arrow"></div>
 

@@ -46,26 +46,36 @@
     </div>
     <div class="arrow lbl" data-label="예 (frozen)"></div>
 
-    <!-- frozen 검증: Origin 헤더 유무로 갈라지는 대칭 분기 (둘 다 통과/403 로 귀결) -->
+    <!-- frozen 검증: Origin 헤더 유무로 갈라지는 분기 — 403은 side exit(종단), 통과만 merge로 수렴 -->
     <div class="gate"><span class="q">◇ Origin 헤더 있음?</span></div>
     <div class="split">
       <div class="col">
         <span class="edge-lbl yes">있음</span>
         <div class="arrow short"></div>
-        <div class="gate"><span class="q">◇ ALLOWED_ORIGIN 일치?</span><small>config.ALLOWED_ORIGIN — 런타임 포트 매 요청 참조</small></div>
-        <div class="split">
-          <div class="col"><span class="edge-lbl yes">일치</span><div class="arrow short"></div><div class="node cat-api"><div class="node-title">통과</div></div></div>
-          <div class="col"><span class="edge-lbl no">불일치</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403 Forbidden</div></div></div>
+        <div class="guard">
+          <div class="gate"><span class="q">◇ ALLOWED_ORIGIN 일치?</span><small>config.ALLOWED_ORIGIN — 런타임 포트 매 요청 참조</small></div>
+          <div class="exit left">
+            <span class="edge-lbl no">불일치</span>
+            <div class="node cat-safe"><div class="node-title">403</div></div>
+          </div>
         </div>
+        <span class="edge-lbl yes">일치</span>
+        <div class="arrow short"></div>
+        <div class="node cat-api"><div class="node-title">통과</div></div>
       </div>
       <div class="col">
         <span class="edge-lbl no">없음</span>
         <div class="arrow short"></div>
-        <div class="gate"><span class="q">◇ sec-fetch-site: same-origin/none?</span></div>
-        <div class="split">
-          <div class="col"><span class="edge-lbl yes">예</span><div class="arrow short"></div><div class="node cat-api"><div class="node-title">통과</div></div></div>
-          <div class="col"><span class="edge-lbl no">아니오</span><div class="arrow short"></div><div class="node cat-safe"><div class="node-title">403 Forbidden</div></div></div>
+        <div class="guard">
+          <div class="gate"><span class="q">◇ sec-fetch-site: same-origin/none?</span></div>
+          <div class="exit right">
+            <span class="edge-lbl no">아니오</span>
+            <div class="node cat-safe"><div class="node-title">403</div></div>
+          </div>
         </div>
+        <span class="edge-lbl yes">예</span>
+        <div class="arrow short"></div>
+        <div class="node cat-api"><div class="node-title">통과</div></div>
       </div>
     </div>
     <div class="merge">▽ 통과 — 라우터 분배</div>

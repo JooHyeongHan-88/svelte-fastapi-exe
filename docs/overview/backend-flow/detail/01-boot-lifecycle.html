@@ -66,6 +66,7 @@
         <div class="node cat-life">
           <div class="node-title">OS 동적 포트 (최후수단)</div>
           <div class="mod">bind(('127.0.0.1', 0))</div>
+          <div class="desc">후보 포트가 전수 실패했을 때의 폴백. OS가 빈 포트를 골라주지만 origin이 매번 달라져 대화 기록이 격리된다.</div>
         </div>
       </div>
       <div class="col">
@@ -74,6 +75,7 @@
         <div class="node cat-life">
           <div class="node-title">후보 포트 바인딩 성공</div>
           <div class="mod">set_runtime_port() 갱신</div>
+          <div class="desc">set_runtime_port()로 실제 포트를 전역 전파 — open_browser 진입 URL·Origin 가드가 이 포트를 참조한다.</div>
         </div>
       </div>
     </div>
@@ -235,6 +237,7 @@
       <div class="node-cat">HTTP 요청 진입</div>
       <div class="node-title">모든 /api/* 라우터 — require_local_origin 의존성 적용</div>
       <div class="mod">api/deps.py · Depends(require_local_origin) · 라우터 레벨 적용</div>
+      <div class="desc">라우터 레벨 의존성으로 모든 API 요청에 로컬 origin 검사를 일괄 적용하는 보안 경계.</div>
     </div>
     <div class="arrow"></div>
 

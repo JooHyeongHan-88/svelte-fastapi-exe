@@ -76,6 +76,7 @@
       <div class="node-cat">② apply_update</div>
       <div class="node-title">PAT + octet-stream 인증 스트리밍 다운로드 → {stem}.new.exe</div>
       <div class="mod">updater.py · _download() · REST API 에셋 엔드포인트 + Accept:application/octet-stream</div>
+      <div class="desc">검증 통과한 EXE를 PAT 인증 octet-stream으로 스트리밍 다운로드해 {stem}.new.exe로 staging한다.</div>
     </div>
     <div class="arrow"></div>
 
@@ -95,6 +96,7 @@
       <div class="node-cat">③ Updater.exe 기동</div>
       <div class="node-title">DETACHED Popen(Updater.exe, pid, new, current) → 1s 후 server.should_exit</div>
       <div class="mod">부모 pid 폴링 최대 60s + POST_EXIT_GRACE 3s</div>
+      <div class="desc">분리(DETACHED)된 Updater.exe를 띄우고 1초 뒤 자신을 종료해, 교체할 EXE의 파일 잠금을 푼다.</div>
     </div>
     <div class="arrow"></div>
 

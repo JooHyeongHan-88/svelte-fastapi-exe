@@ -74,6 +74,7 @@
           <div class="node-cat">단일 인스턴스</div>
           <div class="node-title">기존 탭 열고 sys.exit(0)</div>
           <div class="mod">_probe_same_app → 기존 인스턴스 재사용</div>
+          <div class="desc">이미 떠 있는 인스턴스의 탭만 새로 열고 자신은 종료 — 새 프로세스 없이 단일 인스턴스를 유지한다.</div>
         </div>
         <div class="arrow short"></div>
         <div class="term">■ 종료</div>
@@ -91,6 +92,7 @@
           <div class="node-cat">폴백</div>
           <div class="node-title">동적 포트 최후수단</div>
           <div class="mod">core/server_socket — bind(127.0.0.1, 0)</div>
+          <div class="desc">고정·후보 포트가 모두 막히면 OS가 비운 포트에 바인딩. origin이 실행마다 달라져 대화 기록이 격리된다.</div>
         </div>
       </div>
       <div class="col">
@@ -99,6 +101,7 @@
         <div class="node cat-life">
           <div class="node-title">후보 포트 바인딩 성공</div>
           <div class="mod">set_runtime_port() 갱신</div>
+          <div class="desc">실제 바인딩된 포트를 전역에 전파(set_runtime_port) — 브라우저 진입 URL과 Origin 가드가 같은 포트를 참조하게 한다.</div>
         </div>
       </div>
     </div>
@@ -119,7 +122,7 @@
     <div class="lanes">
       <div class="lane">
         <div class="lane-cap">스레드 1</div>
-        <div class="node cat-life"><div class="node-title">watchdog</div><div class="mod">core/browser.py · 클라이언트 0명 감지</div></div>
+        <div class="node cat-life"><div class="node-title">watchdog</div><div class="mod">core/browser.py · 클라이언트 0명 감지</div><div class="desc">클라이언트가 0명이 되면 서버를 종료시키는 감시 데몬.</div></div>
       </div>
       <div class="lane">
         <div class="lane-cap">스레드 2</div>
@@ -191,6 +194,7 @@
     <a class="node linked cat-api" href="detail/03-chat-turn.html">
       <div class="node-title">event_source() 진입</div>
       <div class="mod">api/chat.py</div>
+      <div class="desc">응답 SSE 제너레이터 — run_turn이 내보내는 이벤트를 data: 프레임으로 직렬화해 브라우저로 흘려보낸다.</div>
       <span class="more">→</span>
     </a>
     <div class="arrow"></div>
@@ -210,6 +214,7 @@
     <a class="node linked cat-api" href="detail/03-chat-turn.html">
       <div class="node-title">get_provider() → harness.run_turn()</div>
       <div class="mod">_active_turn_clients.add(id) · 설정으로 provider 즉석 생성</div>
+      <div class="desc">매 요청 최신 설정으로 provider를 즉석 생성(hot-swap)하고 한 턴 처리를 하니스에 위임한다.</div>
       <span class="more">→</span>
     </a>
   </div>
@@ -235,6 +240,7 @@
         <a class="node linked cat-state" href="detail/08-state.html">
           <div class="node-title">리셋 / 유지</div>
           <div class="mod">state/todo.py · _TERMINAL_STATUSES</div>
+          <div class="desc">직전 턴 todo가 전원 terminal이면 리스트를 비우고, 비-terminal이 남으면 보존 — 완료 todo의 UI·프롬프트 누적을 막는다(R5).</div>
           <span class="more">상태 →</span>
         </a>
       </div>
@@ -244,6 +250,7 @@
         <a class="node linked cat-state" href="detail/07-prompt.html">
           <div class="node-title">get_by_names / select()</div>
           <div class="mod">prompt/compose.py · 슬래시 강제 vs 트리거 매칭</div>
+          <div class="desc">force_skills면 이름으로 직접 조회(슬래시 강제), 없으면 메시지 트리거로 SKILL을 자동 선택한다.</div>
           <span class="more">프롬프트 →</span>
         </a>
       </div>
@@ -261,6 +268,7 @@
           <div class="node-cat">① 예산 임박 (R7)</div>
           <div class="node-title">wind-down 주입</div>
           <div class="mod">_maybe_inject_wind_down() · 남은 호출 ≤ 2 면 마무리 지시 1회</div>
+          <div class="desc">남은 호출을 새 분석 대신 저장된 산출물 표시·요약에 쓰도록 LLM에 마무리를 유도한다(R7).</div>
           <span class="more">자세히 →</span>
         </a>
         <div class="arrow"></div>
@@ -275,16 +283,17 @@
           <div class="col">
             <span class="edge-lbl yes">여유</span>
             <div class="arrow short"></div>
-            <div class="node cat-core"><div class="node-title">budget.try_consume()</div><div class="mod">budget.py · 1회 소비</div></div>
+            <div class="node cat-core"><div class="node-title">budget.try_consume()</div><div class="mod">budget.py · 1회 소비</div><div class="desc">이번 iteration 몫의 provider 호출 예산을 1회 차감하고, 한도 내면 통과시킨다.</div></div>
           </div>
         </div>
         <div class="arrow"></div>
 
-        <div class="node cat-core wide">
+        <a class="node linked cat-core wide" href="detail/04b-provider-astream.html">
           <div class="node-cat">③ LLM 스트리밍</div>
           <div class="node-title">provider.astream(messages, specs)</div>
           <div class="mod">delta·reasoning 즉시 yield · tool_call 누적 · done → break</div>
-        </div>
+          <span class="more">자세히 →</span>
+        </a>
         <div class="arrow"></div>
 
         <div class="gate"><span class="q">◇ tool_call 있음?</span></div>
@@ -300,6 +309,7 @@
             <a class="node linked cat-core" href="detail/05-call-handlers.html">
               <div class="node-title">_handle_tool_call</div>
               <div class="mod">call_handlers.py · 3단계 결정트리</div>
+              <div class="desc">tool_call 1건을 깨진 인자→sentinel→일반도구 3단계 결정트리로 분기 처리한다.</div>
               <span class="more">핸들러 →</span>
             </a>
           </div>
@@ -395,6 +405,7 @@
         <a class="node linked cat-safe" href="detail/12-safety.html">
           <div class="node-title">R1 실패 턴 영속</div>
           <div class="mod">_persist_failed_turn · 미해결 쌍 보정 + 안전화 ErrorEvent(F12)</div>
+          <div class="desc">예외로 끝난 턴도 미해결 tool_call 쌍을 보정해 저장하고 안전화한 ErrorEvent를 보낸다 — 턴 증발·다음 턴 오염을 막는다.</div>
           <span class="more">안전장치 →</span>
         </a>
       </div>
@@ -473,6 +484,7 @@
     <a href="detail/02-api-boundary.html">02 API 경계</a>
     <a href="detail/03-chat-turn.html">03 채팅 턴·SSE</a>
     <a href="detail/04-turn-loop.html">04 턴 루프</a>
+    <a href="detail/04b-provider-astream.html">04b provider.astream</a>
     <a href="detail/05-call-handlers.html">05 tool_call 핸들러</a>
     <a href="detail/05b-sentinel.html">05b sentinel</a>
     <a href="detail/06-dispatch.html">06 디스패치</a>
