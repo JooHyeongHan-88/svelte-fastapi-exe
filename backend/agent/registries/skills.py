@@ -10,6 +10,7 @@
 """
 
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -20,6 +21,32 @@ from pydantic import BaseModel, Field, ValidationError
 from agent.config import SKILLS_DIR
 
 logger = logging.getLogger(__name__)
+
+# trigger/스킬명 매칭 — ASCII 영숫자 토큰은 경계 매칭으로 'data'∈'metadata' 류 오탐을
+# 막고, 한글/혼합 토큰은 형태소가 공백 없이 붙으므로 substring 을 유지한다('데이터요약'의
+# '데이터'). \b 대신 [a-z0-9] 룩어라운드라 '_'/'-' 토큰 경계·'csv파일' 혼합도 정확하다.
+_ASCII_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _keyword_hit(keyword: str, lowered_text: str) -> bool:
+    """키워드가 (이미 lower 처리된) 텍스트에 매칭되는지 — ASCII 토큰은 경계 매칭.
+
+    Args:
+        keyword: trigger 키워드 또는 스킬 이름 (대소문자 무관).
+        lowered_text: 이미 ``.lower()`` 처리된 사용자 메시지.
+
+    Returns:
+        매칭되면 True. 빈/공백 키워드는 항상 False.
+    """
+    kw = keyword.lower().strip()
+    if not kw:
+        return False
+    if _ASCII_TOKEN_RE.match(kw):
+        return (
+            re.search(rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])", lowered_text)
+            is not None
+        )
+    return kw in lowered_text
 
 
 class SkillMeta(BaseModel):
@@ -149,9 +176,9 @@ class SkillRegistry:
         scored: list[tuple[int, int, Skill]] = []
         for s in self._skills:
             # trigger 키워드 매칭 (우선)
-            hits = sum(1 for kw in s.meta.trigger if kw.lower() in lowered)
+            hits = sum(1 for kw in s.meta.trigger if _keyword_hit(kw, lowered))
             # trigger 매칭 없으면 skill 이름 자체를 fallback 으로 검사
-            if hits == 0 and s.meta.name.lower() in lowered:
+            if hits == 0 and _keyword_hit(s.meta.name, lowered):
                 hits = 1
             if hits == 0:
                 continue

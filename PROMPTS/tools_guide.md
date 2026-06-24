@@ -8,6 +8,8 @@
 - `description` 은 미래의 자기 자신을 위한 메모처럼 구체적으로 작성한다 — "데이터 분석" 같은 모호한 표현 대신 "correlation.json 을 읽어 scatter chart 생성".
 - 각 step 의 실제 작업(도구 호출·분석)이 끝나는 즉시 `complete_todo` 를 호출한다. 여러 step 을 묶어서 한꺼번에 완료 표시하지 말 것.
 - 단일 도구 1회로 끝나는 단순 질의(예: "지금 몇 시야?")는 plan 없이 바로 도구 호출이 더 자연스럽다.
+- 서로 **독립적인 도구 호출은 한 응답에 함께 내보내라** — provider 라운드 1회로 여러 도구가 실행되어 반복 예산을 아낀다 (예: 여러 함수 `inspect_callable`, `list_artifacts` + `list_namespace`). 한 호출의 결과가 다음 호출의 입력일 때만 순차로 나눈다.
+- 이미 아는 정보를 **재조회하지 마라** — `# Session Artifacts` 섹션이나 직전 도구 결과에 답이 있으면 그대로 사용한다.
 
 ## 2. 산출물 저장 (save_artifact)
 

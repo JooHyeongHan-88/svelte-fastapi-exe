@@ -473,9 +473,7 @@ async def _run_agent_turn(
                 case "tool_call":
                     pending_tool_calls.append(event.call)
                     yield event
-                case "reasoning" | "skill_active":
-                    # skill_active: provider 가 내부 단계 전환 시점에 직접 emit 하는 경우
-                    # (mock 시나리오 등). 루프를 끊지 않고 그대로 흘려보낸다.
+                case "reasoning":
                     yield event
                 case "done":
                     break

@@ -35,6 +35,7 @@ from agent.harness.state.pending import (  # noqa: E402
     clear_all_pending,
     clear_pending_tool,
 )
+from agent.harness.state.todo import _mark_running_todo_done  # noqa: E402
 from agent.models import (  # noqa: E402
     MALFORMED_TOOL_ARGS_KEY,
     AgentState,
@@ -42,11 +43,15 @@ from agent.models import (  # noqa: E402
     Message,
     SkillActiveEvent,
     SkillCompleteEvent,
+    TodoItem,
+    TodoStatus,
     ToolCall,
     ToolResultEvent,
     TodoUpdateEvent,
 )
 from agent.registries.skills import Skill, SkillMeta  # noqa: E402
+from agent.tools.artifact_io import LIST_ARTIFACTS  # noqa: E402
+from agent.tools.runtime import DESCRIBE_VARIABLE, LIST_NAMESPACE  # noqa: E402
 from agent.registries.tools import (  # noqa: E402
     ACTIVATE_SKILL,
     ASK_USER,
@@ -484,6 +489,17 @@ def test_loop_guard_denial_records_then_blocks() -> None:
     assert denial[0].is_error is True
 
 
+def test_loop_guard_exempts_ambient_read_tools() -> None:
+    # list_artifacts/list_namespace/describe_variable 는 가변 세션 상태(산출물 집합·
+    # namespace)를 읽으므로, 동일 호출 반복이라도 루프로 차단하지 않는다 — 상태 변경
+    # 후 재조회가 정당한 행동이기 때문 (A-1).
+    for name in (LIST_ARTIFACTS, LIST_NAMESPACE, DESCRIBE_VARIABLE):
+        ctx = _make_ctx(state=AgentState())
+        call = ToolCall(id="c", name=name, arguments={})
+        assert _loop_guard_denial(ctx, call) is None
+        assert _loop_guard_denial(ctx, call) is None  # 재호출도 면제(차단 안 함)
+
+
 async def test_post_tool_events_clear_matching_pending() -> None:
     state = AgentState(
         pending_tool="echo", pending_args={"x": 1}, missing_slots={"y": "?"}
@@ -504,6 +520,55 @@ async def test_post_tool_events_noop_without_state() -> None:
         _emit_post_tool_todo_events(ctx, call, "ok", is_error=False)
     )
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# todo 자동완료 — 단일 일치일 때만 (C-2)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_running_todo_skips_when_ambiguous() -> None:
+    # 같은 tool_name 을 쓰는 비-terminal todo 가 둘이면 어느 단계인지 모호하므로
+    # 자동완료를 건너뛰고 명시 complete_todo 에 위임한다.
+    state = AgentState()
+    state.todo_list = [
+        TodoItem(
+            task_id="t1",
+            description="저장 1",
+            tool_name="save_artifact",
+            status=TodoStatus.PENDING,
+        ),
+        TodoItem(
+            task_id="t2",
+            description="저장 2",
+            tool_name="save_artifact",
+            status=TodoStatus.PENDING,
+        ),
+    ]
+    assert _mark_running_todo_done(state, "save_artifact", "ok") is False
+    assert all(t.status == TodoStatus.PENDING for t in state.todo_list)
+
+
+def test_mark_running_todo_closes_single_match() -> None:
+    # 일치가 정확히 하나면 그 단계만 닫는다(흔한 경우 — 기존 동작 유지).
+    state = AgentState()
+    state.todo_list = [
+        TodoItem(
+            task_id="t1",
+            description="저장",
+            tool_name="save_artifact",
+            status=TodoStatus.PENDING,
+        ),
+        TodoItem(
+            task_id="t2",
+            description="차트",
+            tool_name="display_chart",
+            status=TodoStatus.PENDING,
+        ),
+    ]
+    assert _mark_running_todo_done(state, "save_artifact", "done") is True
+    assert state.todo_list[0].status == TodoStatus.COMPLETED
+    assert state.todo_list[1].status == TodoStatus.PENDING
 
 
 # ---------------------------------------------------------------------------

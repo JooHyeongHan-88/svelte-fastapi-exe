@@ -89,21 +89,28 @@ def _mark_running_todo_done(
 ) -> bool:
     """일반 도구 실행 결과를 같은 tool_name 의 활성 todo 에 자동 반영한다.
 
-    PENDING 또는 RUNNING 중 tool_name 이 일치하는 첫 항목을 갱신한다.
+    PENDING/RUNNING 중 tool_name 이 일치하는 항목이 **정확히 하나일 때만** 갱신한다.
+    둘 이상이면 어느 단계가 이번 실행에 대응하는지 모호하므로(같은 도구를 쓰는 다단계
+    plan) 자동완료를 건너뛰고 명시 ``complete_todo(task_id)`` 신호에 위임한다 —
+    엉뚱한 단계를 완료로 라벨링하는 것보다 정확하다.
     is_error=True 면 FAILED, 아니면 COMPLETED 로 전이한다.
 
     Returns:
         True: todo 가 실제로 갱신된 경우 (호출자가 TodoUpdateEvent 를 yield 해야 함).
-        False: 일치하는 항목 없음.
+        False: 일치 항목이 없거나(0개) 모호한(2개 이상) 경우.
     """
     target_statuses = {TodoStatus.PENDING, TodoStatus.RUNNING}
-    new_status = TodoStatus.FAILED if is_error else TodoStatus.COMPLETED
-    for item in state.todo_list:
-        if item.status in target_statuses and item.tool_name == tool_name:
-            item.status = new_status
-            item.result_summary = result_text[:120]
-            return True
-    return False
+    matches = [
+        item
+        for item in state.todo_list
+        if item.status in target_statuses and item.tool_name == tool_name
+    ]
+    if len(matches) != 1:
+        return False
+    item = matches[0]
+    item.status = TodoStatus.FAILED if is_error else TodoStatus.COMPLETED
+    item.result_summary = result_text[:120]
+    return True
 
 
 def _all_todos_terminal(state: AgentState) -> bool:

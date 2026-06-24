@@ -51,6 +51,8 @@ from agent.registries.tools import (
     ToolRegistry,
 )
 from agent.providers.factory import LLMProvider
+from agent.tools.artifact_io import LIST_ARTIFACTS
+from agent.tools.runtime import DESCRIBE_VARIABLE, LIST_NAMESPACE
 
 from agent.harness.budget import TurnBudget
 from agent.harness.dispatch.parallel import _dispatch_parallel_sub_agents
@@ -455,13 +457,28 @@ async def _handle_parallel_dispatch(
 # ---------------------------------------------------------------------------
 
 
+# 출력이 인자가 아니라 가변 세션 상태(산출물 집합·namespace)에 의존하는 멱등 read 도구.
+# R4 fingerprint 는 인자에 박힌 result/ 파일만 보므로, 이들이 상태 변경 후 재조회되면
+# 같은 시그니처가 되어 정당한 재조회가 루프로 오인 차단된다 — 면제한다.
+_LOOP_GUARD_EXEMPT_TOOLS: frozenset[str] = frozenset(
+    {LIST_ARTIFACTS, LIST_NAMESPACE, DESCRIBE_VARIABLE}
+)
+
+
 def _loop_guard_denial(ctx: TurnContext, call: ToolCall) -> list[StreamEvent] | None:
     """동일 시그니처 재호출이면 루프가드 이벤트, 처음 보는 호출이면 기록 후 None.
 
     ``_guard_tool_args`` 와 같은 "통과면 None, 차단이면 yield 이벤트" 계약을 따른다.
     R4: 시그니처는 ``result/`` 인자 파일 fingerprint 까지 포함해, 파일을 고쳐 쓴
     뒤 같은 경로로 재호출하는 정당한 재시도는 차단하지 않는다.
+
+    멱등 ambient-read 도구(``_LOOP_GUARD_EXEMPT_TOOLS``)는 면제한다 — 출력이 인자가
+    아니라 가변 세션 상태에 의존해, 상태 변경 후 재조회를 루프로 오인하면 안 된다.
+    형식오류 경로는 ``_handle_normal_tool`` 에서 이보다 먼저 돌므로 인자 오류 루프는
+    면제 도구라도 여전히 잡힌다.
     """
+    if call.name in _LOOP_GUARD_EXEMPT_TOOLS:
+        return None
     call_sig = _call_signature(call)
     if call_sig not in ctx.history_calls:
         ctx.history_calls.add(call_sig)

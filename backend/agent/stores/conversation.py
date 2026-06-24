@@ -18,15 +18,20 @@ import threading
 
 from agent.models import Message
 
-# 히스토리에 저장할 tool 결과의 최대 문자 수.
+# 히스토리에 저장할 tool 결과 절단 파라미터.
 # 현재 턴 LLM 컨텍스트(messages)는 제한 없음 — truncation 은 storage 시점에만 적용.
+# head 만 남기면 exec_code 결론(print 는 stdout 끝)·에러 타입(끝)이 다음 턴에서 소실되므로
+# head+tail 을 모두 보존한다. head+tail(750) < 트리거 임계(800) 이라 항상 축소되고 중첩 없음.
 _TOOL_HISTORY_MAX_CHARS: int = 800
-_TOOL_HISTORY_TRUNCATION_SUFFIX: str = "\n... [이전 턴 결과 요약 생략]"
+_TOOL_HISTORY_HEAD_CHARS: int = 550
+_TOOL_HISTORY_TAIL_CHARS: int = 200
+_TOOL_HISTORY_ELISION: str = "\n... [중략] ...\n"
 
 
 def _truncate_for_history(msg: Message) -> Message:
-    """role='tool' 메시지의 content 를 히스토리 저장 한도로 절단한다.
+    """role='tool' 메시지의 content 를 head+tail 로 절단한다.
 
+    "무엇을 실행했는지"(head)와 "무엇이 나왔는지·에러 타입"(tail)을 모두 보존한다.
     절단 시 새 Message 객체를 생성하므로 현재 턴 messages 리스트의 원본 객체를
     변형하지 않는다. 다른 role 은 그대로 반환한다.
     """
@@ -34,7 +39,9 @@ def _truncate_for_history(msg: Message) -> Message:
         return msg
     if len(msg.content) <= _TOOL_HISTORY_MAX_CHARS:
         return msg
-    truncated = msg.content[:_TOOL_HISTORY_MAX_CHARS] + _TOOL_HISTORY_TRUNCATION_SUFFIX
+    head = msg.content[:_TOOL_HISTORY_HEAD_CHARS]
+    tail = msg.content[-_TOOL_HISTORY_TAIL_CHARS:]
+    truncated = f"{head}{_TOOL_HISTORY_ELISION}{tail}"
     return Message(role=msg.role, content=truncated, tool_call_id=msg.tool_call_id)
 
 

@@ -19,8 +19,10 @@ from agent.harness import _balance_unresolved_tool_calls  # noqa: E402
 from agent.models import Message, ToolCall  # noqa: E402
 from agent.stores.conversation import (  # noqa: E402
     ConversationStore,
+    _TOOL_HISTORY_ELISION,
+    _TOOL_HISTORY_HEAD_CHARS,
     _TOOL_HISTORY_MAX_CHARS,
-    _TOOL_HISTORY_TRUNCATION_SUFFIX,
+    _TOOL_HISTORY_TAIL_CHARS,
     _truncate_for_history,
 )
 from tests._runner import run_tests  # noqa: E402
@@ -120,14 +122,16 @@ def test_balance_noop_without_tool_calls() -> None:
 
 
 def test_tool_message_truncated_on_store() -> None:
-    # 임계값 초과 tool 결과는 히스토리에 절단본으로 저장된다.
+    # 임계값 초과 tool 결과는 head+tail 로 저장되어 도입부와 결론(끝)이 모두 보존된다.
     store = ConversationStore(max_history=10)
-    big_result = "x" * (_TOOL_HISTORY_MAX_CHARS + 500)
+    big_result = "H" * 1000 + "TAILMARK"
     tool_msg = _msg("tool", big_result, tool_call_id="t1")
     store.append("cx", tool_msg)
 
     stored = store.get_history("cx")[0]
-    assert stored.content.endswith(_TOOL_HISTORY_TRUNCATION_SUFFIX)
+    assert _TOOL_HISTORY_ELISION in stored.content
+    assert stored.content.startswith("H")  # 도입부(head) 보존
+    assert stored.content.endswith("TAILMARK")  # 결론(tail) 보존
     assert len(stored.content) < len(big_result)
     assert stored.tool_call_id == "t1"
 
@@ -166,8 +170,8 @@ def test_truncate_for_history_standalone() -> None:
     long_msg = _msg("tool", "z" * 2000, tool_call_id="b")
     result = _truncate_for_history(long_msg)
     assert result is not long_msg  # 새 객체
-    assert len(result.content) == _TOOL_HISTORY_MAX_CHARS + len(
-        _TOOL_HISTORY_TRUNCATION_SUFFIX
+    assert len(result.content) == (
+        _TOOL_HISTORY_HEAD_CHARS + len(_TOOL_HISTORY_ELISION) + _TOOL_HISTORY_TAIL_CHARS
     )
     assert result.tool_call_id == "b"
 
