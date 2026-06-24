@@ -9,10 +9,15 @@ from agent.registries.skills import Skill
 from agent.runtime import introspect
 
 
-def _render_skills_api_refs(skills: list[Skill]) -> str:
-    """활성 SKILL 목록의 api_refs 를 평면화해 ApiDoc 섹션으로 렌더링한다.
+def _render_skills_api_refs(
+    skills: list[Skill], extra_refs: list[str] | None = None
+) -> str:
+    """활성 SKILL 목록(+ extra_refs)의 api_refs 를 평면화해 ApiDoc 섹션으로 렌더링한다.
 
     중복 ref 는 한 번만 노출하고, 모두 비어 있으면 빈 문자열 반환.
+    extra_refs 는 오케스트레이터 baseline api_refs(APP_ORCHESTRATOR_API_REFS) 용 —
+    활성 SKILL 이 없거나 api_refs 가 없어도 상시 노출하고 싶은 dotted-path 들이다.
+    SKILL refs 뒤에 이어 붙여 dedup 한다.
     """
     refs: list[str] = []
     seen: set[str] = set()
@@ -21,6 +26,10 @@ def _render_skills_api_refs(skills: list[Skill]) -> str:
             if r not in seen:
                 refs.append(r)
                 seen.add(r)
+    for r in extra_refs or []:
+        if r not in seen:
+            refs.append(r)
+            seen.add(r)
     if not refs:
         return ""
     docs = introspect.collect_api_docs(refs)

@@ -146,6 +146,22 @@ type Session = {
 
 `ui.streaming === true`이면 세션 전환·삭제·새 대화 모두 차단.
 
+### ESC 재동기화 (중단 턴 desync 치유)
+
+ESC 로 답변을 중지하면 백엔드 `run_turn` 은 그 턴을 store 에 영속하지 않는다(`CancelledError` 는
+`BaseException` 이라 영속 경로를 안 탐 — 의도된 설계, → `harness_resilience.md` R1). 반면
+localStorage 는 중단 턴을 그대로 보존하므로 **화면(전체 대화)과 백엔드(LLM 컨텍스트, 중단 턴 누락)가
+desync** 된다. 그대로 다음 질문을 보내면 LLM 이 직전 맥락을 잃는다.
+
+치유는 프론트가 전담한다 (`chatActions.svelte.js`):
+- `stopStreaming()` 이 모듈 플래그 `_needsBackendResync = true` 설정.
+- 다음 `sendMessage()` 가 새 턴을 append 하기 **전에**, 플래그가 서 있으면
+  `restoreConversation(session.id, toBackendMessages(session.messages))` 로 localStorage 정제본을
+  백엔드에 재주입(`{role,content}` 만 — tool_calls 없는 wire-safe)하고 플래그를 내린다(best-effort).
+- `selectSession()`·`createSession()` 은 자체 restore/빈 세션이라 시작부에서 플래그를 해제(이월 방지).
+  그 외 restore 경로(delete/rewind/initApp)는 self-healing 이라 잔여 플래그가 1회 중복 재동기화를
+  유발해도 무해.
+
 ---
 
 ## 마크다운 렌더링

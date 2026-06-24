@@ -50,6 +50,33 @@
 
 > `exec_code` scope 에는 `artifact_dir()` 헬퍼가 주입된다 - 이번 턴 산출물 폴더(`Path`)를 반환해 라이브러리가 파일을 직접 쓰게 한다. `run_in_executor` 가 contextvars 를 전파하지 않으므로 `_ArtifactDirProvider` 가 생성 시점에 client_id/title/슬롯을 캡처하고, 실행 후 `adopt_turn_slot` 으로 메인 턴 캐시에 역동기화한다 (같은 턴 `save_artifact` 와 폴더 공유). `artifact_dir` 은 예약어로 namespace 저장에서 silent skip.
 
+> **도구 노출 vs docstring 노출 (중요)**: 위 8개 메타 도구는 `registry.specs()` 에 항상 들어
+> 있어 **오케스트레이터에는 api_refs 와 무관하게 늘 노출**된다 (`_build_orchestrator_specs` 는
+> 이를 제거하지 않는다). `_inject_runtime_tools` 의 api_refs 게이팅이 실효를 갖는 곳은 **서브
+> 에이전트**다 - 화이트리스트(`agent.meta.tools`)로 걸러진 뒤 api_refs 가 있으면 다시 더해진다
+> (`_filter_specs_for_sub_agent`). 즉 오케스트레이터에서 api_refs 가 추가로 제공하는 것은 *도구*가
+> 아니라 system prompt 의 `# Available Library APIs`(시그니처·docstring) 섹션이다 - LLM 이 "무슨
+> 함수가 있는지" 알게 하는 단서. 이 docstring 이 없으면 도구는 있어도 무엇을 호출할지 모른다.
+
+### 오케스트레이터 baseline api_refs (`APP_ORCHESTRATOR_API_REFS`)
+
+SKILL/서브에이전트 없이도 오케스트레이터가 라이브러리 함수를 docstring 기반으로 쓰게 하려면
+`APP_ORCHESTRATOR_API_REFS`(CSV) 에 dotted-path 를 등록한다 (`agent.config.ORCHESTRATOR_API_REFS`).
+`run_turn(orchestrator_api_refs=...)` → `_make_system_prompt_composer(baseline_api_refs=...)` →
+`_compose_orchestrator_system_prompt`/`_compose_system_prompt` 의 `_render_skills_api_refs(skills, extra_refs=...)`
+로 활성 SKILL refs 와 합쳐 `# Available Library APIs` 에 상시 주입한다 (도구 specs 는 손대지 않음 -
+위 블록 참고). **빈 값이면 기존(SKILL 주도) 동작과 100% 동일**, 잘못된 경로는 `collect_api_docs` 가
+경고 후 skip 하므로 어떤 값이어도 부팅/턴이 깨지지 않는다. 서브에이전트는 자체 meta/skill api_refs 를
+쓰므로 baseline 미적용(오케스트레이터 전용).
+
+### `scripts` 우선순위
+
+resolver 는 명시 dotted-path 만 해석할 뿐 우선순위 로직이 없다 (`scripts.*` vs `polars.*` 는 root
+이름이 다를 뿐 동급). "고수준 작업은 `scripts.*` 우선, raw 라이브러리는 scripts 로 불가능할 때만"은
+**프롬프트가 유도**한다 (`PROMPTS/tools_guide.md` §8.1). 레버는 ① raw 라이브러리 함수를 api_refs 에
+올리지 않아 광고하지 않음(=scripts 만 1급 표면) + ② 프롬프트 지시. `APP_ALLOWED_LIBRARIES` 의 CSV
+나열 순서는 해석 우선순위와 무관하다.
+
 ---
 
 ## 산출물 재발견·재사용 도구 (always-exposed)

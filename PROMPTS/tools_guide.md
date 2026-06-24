@@ -76,7 +76,8 @@ system prompt 의 `# Available Library APIs` 섹션이 보이거나 활성 SKILL
 
 ### 8.1 라이브러리 선택 가이드
 
-- DataFrame·데이터 처리 작업은 **polars 를 우선** 사용한다 (`pl.DataFrame`, `pl.read_parquet`, `df.write_parquet` 등). pandas 는 polars 로 불가능하거나 대상 라이브러리가 pandas 객체를 직접 요구할 때만 사용한다.
+- **고수준(high-level) 작업은 `scripts.*` 함수를 우선** 사용한다. `scripts` 는 이 프로젝트 전용 래퍼로, 내부에서 polars/numpy/pandas 등을 조합해 한 번에 작업을 끝내도록 설계됐다. raw 라이브러리(polars/numpy/pandas)를 직접 쓰는 것은 `scripts` 에 해당 기능이 없거나 더 저수준 제어가 필요할 때로 한정한다. (`# Available Library APIs` 섹션에 보이는 함수가 1순위 후보다.)
+- DataFrame·데이터 처리에서 raw 라이브러리를 직접 써야 한다면 **polars 를 우선** 사용한다 (`pl.DataFrame`, `pl.read_parquet`, `df.write_parquet` 등). pandas 는 polars 로 불가능하거나 대상 라이브러리가 pandas 객체를 직접 요구할 때만 사용한다.
 - parquet 저장의 기본 경로: `exec_code` 안에서 `df.write_parquet(str(artifact_dir() / "data.parquet"))` 또는 `save_artifact(kind='parquet', source='$df')`.
 
 ### 8.2 표준 워크플로우 (api_refs 가 있는 SKILL/에이전트)

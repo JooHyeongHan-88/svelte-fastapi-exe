@@ -282,19 +282,17 @@
         </a>
         <div class="arrow"></div>
 
-        <div class="gate"><span class="q">◇ 예산 소진? (used ≥ max_calls)</span></div>
-        <div class="split">
-          <div class="col">
+        <div class="guard">
+          <div class="gate"><span class="q">◇ 예산 소진? (used ≥ max_calls)</span></div>
+          <div class="exit right">
             <span class="edge-lbl no">소진</span>
+            <div class="node cat-safe"><div class="node-title">ErrorEvent → return</div><div class="mod">루프 탈출</div></div>
             <div class="arrow short"></div>
-            <div class="node cat-safe"><div class="node-title">ErrorEvent → return</div><div class="mod">루프 탈출 → ⑦ 영속화</div></div>
-          </div>
-          <div class="col">
-            <span class="edge-lbl yes">여유</span>
-            <div class="arrow short"></div>
-            <div class="node cat-core"><div class="node-title">budget.try_consume()</div><div class="mod">budget.py · 1회 소비</div><div class="desc">이번 iteration 몫의 provider 호출 예산을 1회 차감하고, 한도 내면 통과시킨다.</div></div>
+            <div class="term">→ ⑦ 영속화</div>
           </div>
         </div>
+        <div class="arrow lbl" data-label="여유 — 계속"></div>
+        <div class="node cat-core"><div class="node-title">budget.try_consume()</div><div class="mod">budget.py · 1회 소비</div><div class="desc">이번 iteration 몫의 provider 호출 예산을 1회 차감하고, 한도 내면 통과시킨다.</div></div>
         <div class="arrow"></div>
 
         <a class="node linked cat-core wide" href="detail/04b-provider-astream.html">
@@ -305,24 +303,22 @@
         </a>
         <div class="arrow"></div>
 
-        <div class="gate"><span class="q">◇ tool_call 있음?</span></div>
-        <div class="split">
-          <div class="col">
+        <div class="guard">
+          <div class="gate"><span class="q">◇ tool_call 있음?</span></div>
+          <div class="exit right">
             <span class="edge-lbl no">없음</span>
+            <div class="node cat-core"><div class="node-title">assistant 텍스트 append → return</div><div class="mod">턴 정상 종료</div></div>
             <div class="arrow short"></div>
-            <div class="node cat-core"><div class="node-title">assistant 텍스트 append → return</div><div class="mod">턴 정상 종료 → ⑦ 영속화</div></div>
-          </div>
-          <div class="col">
-            <span class="edge-lbl yes">있음</span>
-            <div class="arrow short"></div>
-            <a class="node linked cat-core" href="detail/05-call-handlers.html">
-              <div class="node-title">_handle_tool_call</div>
-              <div class="mod">call_handlers.py · 3단계 결정트리</div>
-              <div class="desc">tool_call 1건을 깨진 인자→sentinel→일반도구 3단계 결정트리로 분기 처리한다.</div>
-              <span class="more">핸들러 →</span>
-            </a>
+            <div class="term">→ ⑦ 영속화</div>
           </div>
         </div>
+        <div class="arrow lbl" data-label="있음"></div>
+        <a class="node linked cat-core" href="detail/05-call-handlers.html">
+          <div class="node-title">_handle_tool_call</div>
+          <div class="mod">call_handlers.py · 3단계 결정트리</div>
+          <div class="desc">tool_call 1건을 깨진 인자→sentinel→일반도구 3단계 결정트리로 분기 처리한다.</div>
+          <span class="more">핸들러 →</span>
+        </a>
         <div class="arrow lbl" data-label="tool_call 1건씩 분기"></div>
 
         <!-- tool_call 결정트리 -->

@@ -105,6 +105,7 @@ async def run_turn(
     force_skills: list[str] | None = None,
     session_title: str = "",
     user_prompt: str = "",
+    orchestrator_api_refs: list[str] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """사용자 메시지 1건에 대한 응답 이벤트 스트림을 생성한다.
 
@@ -123,6 +124,10 @@ async def run_turn(
         max_agent_calls: 한 사용자 turn 전체에서 허용하는 provider 호출 합계.
         force_skills: 슬래시 커맨드로 명시된 skill 이름들. 지정 시 trigger 매칭
             대신 이 목록을 그대로 활성화한다.
+        orchestrator_api_refs: 오케스트레이터 baseline api_refs
+            (APP_ORCHESTRATOR_API_REFS). None/빈 리스트면 기존 동작(SKILL 주도)과
+            동일하다. 지정 시 활성 SKILL 과 무관하게 라이브러리 API 노출 +
+            런타임 도구 주입이 상시 켜진다.
 
     Yields:
         StreamEvent: delta / tool_call / tool_result / ask_user / todo_update
@@ -145,6 +150,7 @@ async def run_turn(
         state.todo_list = []
     user_msg = Message(role="user", content=user_message)
     turn_messages: list[Message] = [user_msg]
+    baseline_api_refs = orchestrator_api_refs or []
     # 성공 경로의 append 이후 예외 시 except 가 재-append 해 턴이 중복 영속되는 것을
     # 막는 플래그 (append 성공 ↔ state flush 실패 사이의 좁은 창).
     turn_persisted = False
@@ -175,6 +181,7 @@ async def run_turn(
             skill_registry=skill_registry,
             state=state,
             user_prompt_section=user_prompt_section,
+            baseline_api_refs=baseline_api_refs,
         )
         composed_system = _recompose(skills)
 
@@ -263,6 +270,7 @@ def _make_system_prompt_composer(
     skill_registry: SkillRegistry,
     state: AgentState,
     user_prompt_section: str,
+    baseline_api_refs: list[str] | None = None,
 ) -> Callable[[list[Skill]], str]:
     """activate_skill 시 system prompt 를 동적 재조립하는 클로저를 만든다.
 
@@ -273,10 +281,13 @@ def _make_system_prompt_composer(
     Args:
         has_agents: AGENTS 카탈로그 보유 여부 — 오케스트레이터/단층 분기.
         user_prompt_section: SettingsModal 사용자 지침 (base 뒤에 덧붙음, 빈 문자열 가능).
+        baseline_api_refs: 오케스트레이터 baseline api_refs — 두 경로 모두에 전달돼
+            활성 SKILL 과 무관하게 라이브러리 API 섹션을 상시 노출한다.
 
     Returns:
         활성 SKILL 목록을 받아 완성된 system prompt 문자열을 돌려주는 클로저.
     """
+    refs = baseline_api_refs or []
     if has_agents:
         base = prompt_registry.compose(include_orchestrator=True) + user_prompt_section
 
@@ -287,12 +298,19 @@ def _make_system_prompt_composer(
                 state=state,
                 agent_registry=agent_registry,  # type: ignore[arg-type]
                 skill_registry=skill_registry,
+                baseline_api_refs=refs,
             )
     else:
         base = prompt_registry.compose(include_orchestrator=False) + user_prompt_section
 
         def recompose(updated_skills: list[Skill]) -> str:
-            return _compose_system_prompt(base, updated_skills, state, skill_registry)
+            return _compose_system_prompt(
+                base,
+                updated_skills,
+                state,
+                skill_registry,
+                baseline_api_refs=refs,
+            )
 
     return recompose
 
@@ -303,8 +321,12 @@ def _build_orchestrator_specs(
     """오케스트레이터 provider 에 노출할 도구 스펙을 선별한다.
 
     COMPLETE_SUB_AGENT 는 서브 에이전트 전용이라 숨기고, AGENTS 가 없으면 위임
-    도구(순차·병렬)도 제거한다. api_refs 를 가진 SKILL 이 활성화되면 SKILL 본문에
-    명시하지 않아도 infrastructure 도구를 자동 주입해 LLM 이 자체 plan 에 쓰게 한다.
+    도구(순차·병렬)도 제거한다. infrastructure 메타 도구(call_function 등)는
+    registry.specs() 에 항상 포함되므로 오케스트레이터에는 이미 노출돼 있다 —
+    `_inject_runtime_tools` 는 누락분 보강용 idempotent 안전망이다(서브 에이전트는
+    화이트리스트로 걸러지므로 거기서 실효). 따라서 오케스트레이터에서 baseline
+    api_refs 가 추가로 필요로 하는 것은 도구가 아니라 prompt 의 docstring 섹션뿐이다
+    (compose 가 담당). 도구 노출은 손대지 않는다.
     """
     delegation_tools = {SUB_AGENT_DISPATCH, SUB_AGENTS_PARALLEL_DISPATCH}
     specs = [

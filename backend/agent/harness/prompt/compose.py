@@ -32,8 +32,13 @@ def _compose_orchestrator_system_prompt(
     state: AgentState,
     agent_registry: AgentRegistry,
     skill_registry: SkillRegistry | None = None,
+    baseline_api_refs: list[str] | None = None,
 ) -> str:
-    """오케스트레이터 system prompt — 기존 조립 + 가용 에이전트 카탈로그 동적 주입."""
+    """오케스트레이터 system prompt — 기존 조립 + 가용 에이전트 카탈로그 동적 주입.
+
+    baseline_api_refs: APP_ORCHESTRATOR_API_REFS — 활성 SKILL 의 api_refs 와 합쳐
+    'Available Library APIs' 섹션에 상시 노출한다(SKILL 없이도 라이브러리 사용 가능).
+    """
     parts: list[str] = [base] if base else []
 
     for s in skills:
@@ -110,8 +115,8 @@ def _compose_orchestrator_system_prompt(
             )
         parts.append("\n".join(catalog_lines))
 
-    # Library runtime — 활성 스킬들의 api_refs 를 모아 한 섹션으로 주입.
-    api_section = _render_skills_api_refs(skills)
+    # Library runtime — 활성 스킬들의 api_refs + 오케스트레이터 baseline 을 한 섹션으로 주입.
+    api_section = _render_skills_api_refs(skills, extra_refs=baseline_api_refs)
     if api_section:
         parts.append("\n" + api_section)
 
@@ -164,11 +169,15 @@ def _compose_system_prompt(
     skills: list[Skill],
     state: AgentState,
     skill_registry: SkillRegistry | None = None,
+    baseline_api_refs: list[str] | None = None,
 ) -> str:
     """PROMPTS 베이스 + 선택된 SKILLS 본문 + AgentState 요약을 합성한다 (단층).
 
     오케스트레이터 카탈로그 / Case 3 매핑 없이 기존 동작 그대로. agent_registry 가
     None 일 때만 사용 — 하위호환을 위해 보존.
+
+    baseline_api_refs: APP_ORCHESTRATOR_API_REFS — 단층 모드에서도 런타임 도구 주입
+    (공유 경로)과 프롬프트 문서를 일치시키기 위해 baseline 이 있으면 API 섹션을 붙인다.
     """
     parts: list[str] = [base] if base else []
 
@@ -194,5 +203,12 @@ def _compose_system_prompt(
     pending_slot = _render_pending_slot(state)
     if pending_slot:
         parts.append(pending_slot)
+
+    # 단층 모드는 기존엔 api_refs 섹션을 렌더하지 않았다. baseline 이 지정된 경우에만
+    # 추가해 도구 주입과 문서를 일관시킨다(빈 baseline 이면 기존 동작 그대로).
+    if baseline_api_refs:
+        api_section = _render_skills_api_refs(skills, extra_refs=baseline_api_refs)
+        if api_section:
+            parts.append("\n" + api_section)
 
     return "\n".join(parts)

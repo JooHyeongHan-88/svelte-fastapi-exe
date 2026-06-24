@@ -112,7 +112,8 @@ frozen EXE는 빌드 시 박제된 `.env`를 `override=False`로 읽으므로, *
 | `APP_MAX_PARALLEL_SUBAGENTS` | `3` | 병렬 서브 에이전트 동시 실행 상한 |
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | 도구 1회 실행 타임아웃 (초) |
 | `APP_MAX_HISTORY_MESSAGES` | `40` | 클라이언트당 보관하는 대화 히스토리 상한 |
-| `APP_ALLOWED_LIBRARIES` | `scripts,polars` | 에이전트 런타임에 노출할 Python 패키지 CSV — **EXE 빌드 시 자동 번들링** |
+| `APP_ALLOWED_LIBRARIES` | `scripts,polars` | 에이전트 런타임에 노출할 Python 패키지 CSV — **EXE 빌드 시 자동 번들링**. 나열 순서는 해석 우선순위와 무관 |
+| `APP_ORCHESTRATOR_API_REFS` | (빈 값) | 오케스트레이터 baseline api_refs CSV — 활성 SKILL 없이도 그 함수 시그니처·docstring 을 `# Available Library APIs` 로 상시 주입. 빈 값=기존(SKILL 주도) 동작, 잘못된 경로는 skip(무오류) |
 
 **업데이트·배포 저장소**
 

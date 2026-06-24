@@ -25,6 +25,7 @@ from agent.harness import (  # noqa: E402
     _filter_specs_for_sub_agent,
     _inject_runtime_tools,
 )
+from agent.harness.loop import _build_orchestrator_specs  # noqa: E402
 from agent.models import AgentState, ToolSpec  # noqa: E402
 from agent.registries.agents import Agent, AgentMeta, AgentRegistry  # noqa: E402
 from agent.registries.skills import Skill, SkillMeta  # noqa: E402
@@ -226,6 +227,95 @@ def test_filter_specs_for_sub_agent_skill_api_refs_also_triggers_runtime() -> No
     filtered = _filter_specs_for_sub_agent(all_specs, agent, [skill])
     names = {s.name for s in filtered}
     assert "call_function" in names, "SKILL api_refs 로도 runtime 노출되어야 함"
+
+
+# ---------------------------------------------------------------------------
+# 오케스트레이터 baseline api_refs (APP_ORCHESTRATOR_API_REFS)
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_baseline_injects_api_section_without_skill_refs() -> None:
+    """api_refs 없는 SKILL 만 활성이어도 baseline 으로 API 섹션이 노출된다."""
+    _setup()
+    skill = Skill(
+        meta=SkillMeta(name="plain_skill"),
+        source_path="(test)",
+        body="api_refs 없는 SKILL.",
+    )
+    composed = _compose_orchestrator_system_prompt(
+        base="BASE",
+        skills=[skill],
+        state=AgentState(),
+        agent_registry=AgentRegistry(),
+        baseline_api_refs=["json.loads"],
+    )
+    assert "Available Library APIs" in composed
+    assert "json.loads" in composed
+
+
+def test_orchestrator_baseline_works_with_no_skills() -> None:
+    """활성 SKILL 이 하나도 없어도 baseline 만으로 API 섹션이 노출된다."""
+    _setup()
+    composed = _compose_orchestrator_system_prompt(
+        base="BASE",
+        skills=[],
+        state=AgentState(),
+        agent_registry=AgentRegistry(),
+        baseline_api_refs=["statistics.mean"],
+    )
+    assert "Available Library APIs" in composed
+    assert "statistics.mean" in composed
+
+
+def test_orchestrator_baseline_empty_keeps_legacy_behavior() -> None:
+    """baseline 빈 값 + api_refs 없는 SKILL → API 섹션 없음(회귀 보장)."""
+    _setup()
+    skill = Skill(
+        meta=SkillMeta(name="plain_skill"),
+        source_path="(test)",
+        body="x",
+    )
+    composed = _compose_orchestrator_system_prompt(
+        base="BASE",
+        skills=[skill],
+        state=AgentState(),
+        agent_registry=AgentRegistry(),
+        baseline_api_refs=[],
+    )
+    assert "Available Library APIs" not in composed
+
+
+def test_orchestrator_baseline_bad_ref_no_exception() -> None:
+    """baseline 에 허용 목록 밖/존재하지 않는 ref → 예외 없이 해당 항목만 누락."""
+    _setup()
+    # 'nonexistent_pkg' 는 APP_ALLOWED_LIBRARIES 밖 → LibraryAccessError 가 내부에서
+    # 잡혀 skip. 섹션은 비어 결과 텍스트에 포함되지 않는다.
+    composed = _compose_orchestrator_system_prompt(
+        base="BASE",
+        skills=[],
+        state=AgentState(),
+        agent_registry=AgentRegistry(),
+        baseline_api_refs=["nonexistent_pkg.foo"],
+    )
+    assert "Available Library APIs" not in composed
+
+
+def test_orchestrator_specs_always_expose_infra_tools() -> None:
+    """오케스트레이터 specs 에는 infrastructure 메타 도구가 항상 노출된다.
+
+    registry.specs() 가 등록된 전 도구를 반환하므로 baseline/api_refs 와 무관하게
+    call_function 등은 오케스트레이터에 항상 있다. 따라서 baseline api_refs 가
+    오케스트레이터에 추가로 제공하는 것은 '도구'가 아니라 prompt 의 docstring 섹션이다
+    (이 설계 전제가 깨지면 baseline 기능 의미가 바뀌므로 회귀 가드).
+    """
+    _setup()
+    registry = ToolRegistry()
+    skill = Skill(meta=SkillMeta(name="plain_skill"), source_path="(test)", body="x")
+    specs = _build_orchestrator_specs(registry, [skill], has_agents=True)
+    names = {s.name for s in specs}
+    assert INFRASTRUCTURE_TOOL_NAMES.issubset(names), (
+        f"오케스트레이터는 infra 메타 도구를 항상 노출해야 함: {names}"
+    )
 
 
 if __name__ == "__main__":

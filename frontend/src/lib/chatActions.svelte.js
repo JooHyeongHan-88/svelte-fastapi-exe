@@ -70,6 +70,11 @@ let presenceSource = null;
 let saveTimer = null;
 // 진행 중인 /api/chat 요청을 ESC 로 중지하기 위한 핸들.
 let currentAbortController = null;
+// ESC 중지 시 백엔드 store 는 중단된 턴을 영속하지 않는다(CancelledError 는
+// BaseException 이라 run_turn 의 영속 경로를 타지 않음 — 의도된 설계). 그 결과
+// localStorage(화면)와 백엔드(LLM 컨텍스트)가 desync 된다. 이 플래그를 세워
+// 다음 전송 직전에 localStorage 정제본을 백엔드에 재주입(restore)해 정합을 맞춘다.
+let _needsBackendResync = false;
 
 // ---------- 영속화 ----------
 
@@ -200,6 +205,8 @@ function toBackendMessages(uiMessages) {
 export async function createSession() {
   if (ui.streaming) return;
 
+  // 빈 세션으로 시작 — 직전 세션의 ESC 재동기화 플래그를 이월하지 않는다.
+  _needsBackendResync = false;
   const session = newSession();
   ui.sessions = [session, ...ui.sessions];
   ui.activeSessionId = session.id;
@@ -221,6 +228,10 @@ export async function selectSession(id) {
   ui.activeSessionId = id;
   saveActiveId(id);
   resetArtifactPanelState();
+
+  // 세션 전환은 아래 restore 로 백엔드를 새로 채우므로 ESC 재동기화 플래그를 해제한다
+  // (플래그가 가리키던 세션이 바뀌어 모호해지는 것을 방지).
+  _needsBackendResync = false;
 
   openPresence(id);
   // EXE 재시작 등으로 백엔드 context 가 비어있을 수 있으므로 매 선택마다 다시 주입.
@@ -309,6 +320,16 @@ export async function sendMessage(input) {
 
   const session = activeSession();
   if (!session) return;
+
+  // ESC 직후라면 백엔드 store 는 중단된 턴을 누락한 상태다. 새 턴을 append 하기
+  // 전에 localStorage 정제본(toBackendMessages — {role,content} 만, wire-safe)을
+  // 재주입해 LLM 컨텍스트를 화면과 일치시킨다. best-effort — 실패해도 전송은 진행.
+  if (_needsBackendResync) {
+    _needsBackendResync = false;
+    try {
+      await restoreConversation(session.id, toBackendMessages(session.messages));
+    } catch {}
+  }
 
   const now = Date.now();
   const forced = hasSkills ? skills : null;
@@ -600,6 +621,8 @@ export function stopStreaming() {
     ui.sessions = [...ui.sessions];
     flushSave();
   }
+  // 중단 턴이 백엔드에 없으므로 다음 전송 직전에 재동기화가 필요하다.
+  _needsBackendResync = true;
 }
 
 // ---------- 산출물 용량 ----------

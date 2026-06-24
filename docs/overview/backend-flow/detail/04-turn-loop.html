@@ -257,7 +257,9 @@
         ② F11 pending 클리어 → store.append + state_store.set. ③ ErrorEvent(F12 안전화 — str(exc) 대신 타입명만).
         ④ DoneEvent 정확히 1회.
         <b>영속 실패 시:</b> 로그만 남기고 ErrorEvent/DoneEvent 는 막지 않음.
-        <b>CancelledError(ESC)는 BaseException:</b> 이 경로를 타지 않음(중단 턴 미영속 = 의도된 동작).
+        <b>CancelledError(ESC)는 BaseException:</b> 이 경로를 타지 않음(중단 턴은 백엔드 미영속 = 의도된 동작).
+        그 결과 생기는 프론트 localStorage ↔ 백엔드 store desync 는 <b>프론트가 치유</b>한다 — stopStreaming 이
+        플래그를 세우고 다음 sendMessage 가 chat() 직전 restoreConversation 으로 정제본을 재주입(→ frontend_state.md "ESC 재동기화").
       </div>
     </div>
   </div>

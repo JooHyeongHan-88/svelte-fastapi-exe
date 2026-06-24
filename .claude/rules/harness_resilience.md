@@ -120,7 +120,11 @@ max_iterations 도달 시 salvage 응답의 스타일이 **작업 완료 여부*
   except 가 재-append 해 턴이 중복 영속되는 것을 방지.
 - 영속 자체가 또 실패하면 로그만 남기고 ErrorEvent/DoneEvent 송출은 막지 않는다.
 - ESC/disconnect 의 `CancelledError` 는 `BaseException` 이라 이 경로를 타지 않는다
-  (중단 턴 미영속은 의도된 기존 동작).
+  (중단 턴은 백엔드에 미영속 — 의도된 동작). 단 이러면 프론트 localStorage(중단 턴 보존)와
+  백엔드 store(중단 턴 누락) 가 desync 돼 다음 질문에서 LLM 이 직전 맥락을 잃는다. 이 desync 는
+  **프론트가 치유**한다: `stopStreaming` 이 재동기화 플래그를 세우고 다음 `sendMessage` 가
+  `chat()` 직전에 `restoreConversation(toBackendMessages(...))` 로 정제본(텍스트만, wire-safe)을
+  백엔드에 재주입한다 (→ `frontend_state.md` "ESC 재동기화").
 
 테스트: `backend/tests/test_harness_error_path.py`
 

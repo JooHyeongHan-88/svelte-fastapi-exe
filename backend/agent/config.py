@@ -91,6 +91,15 @@ MAX_HISTORY_MESSAGES: int = int(os.environ.get("APP_MAX_HISTORY_MESSAGES", "40")
 # Tool 1회 실행 timeout (초). 데코레이터에서 도구별로 override 가능.
 TOOL_DEFAULT_TIMEOUT: float = float(os.environ.get("APP_TOOL_DEFAULT_TIMEOUT", "30"))
 
+# 오케스트레이터 baseline api_refs (CSV) — SKILL/서브에이전트 없이도 오케스트레이터가
+# 상시 노출받을 라이브러리 dotted-path 목록. 빈 값이면 기존 동작(활성 SKILL 의 api_refs
+# 가 있을 때만 라이브러리 API 노출·런타임 도구 주입)과 100% 동일하다. 잘못된 경로는
+# collect_api_docs 가 경고 후 skip 하므로 어떤 값이어도 부팅/턴이 깨지지 않는다.
+_orch_refs_raw: str = os.environ.get("APP_ORCHESTRATOR_API_REFS", "")
+ORCHESTRATOR_API_REFS: list[str] = [
+    r.strip() for r in _orch_refs_raw.split(",") if r.strip()
+]
+
 
 # ---------------------------------------------------------------------------
 # Legacy env var fallback for initial settings seed (deprecated, use settings file)

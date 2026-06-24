@@ -35,6 +35,14 @@ tools_guide.md   ← 도구 사용 지침
 그 뒤에 하니스가 활성 SKILL 본문, 현재 To-do, 서브 에이전트 카탈로그, 세션 산출물
 목록(Session Artifacts)을 이어 붙여 최종 system prompt가 완성된다.
 
+> **오케스트레이터 baseline 라이브러리**: SKILL 없이도 오케스트레이터가 라이브러리 함수를
+> docstring 기반으로 쓰게 하려면 `.env` 의 `APP_ORCHESTRATOR_API_REFS`(CSV) 에 함수 경로를
+> 등록한다. 그 함수들의 시그니처·docstring 이 매 턴 `# Available Library APIs` 로 상시 주입된다
+> (런타임 메타 도구 `call_function` 등은 원래 오케스트레이터에 항상 노출돼 있어, 이 변수가
+> 채워주는 건 "무슨 함수가 있는지"라는 단서다). 빈 값이면 기존(SKILL 주도) 동작. 고수준 작업용
+> 자체 래퍼는 `backend/scripts/`(루트명 `scripts`)에 두고 프롬프트가 `scripts.*` 를 우선
+> 고르도록 유도한다 — raw 라이브러리는 scripts 가 내부에서 조합해 쓴다.
+
 ### SKILLS — 키워드로 발동하는 작업 지침
 
 YAML Front Matter + 본문. 사용자 메시지에 `trigger` 키워드가 포함되면 본문이

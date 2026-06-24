@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from agent import harness
-from agent.config import MAX_AGENT_CALLS_PER_TURN, MAX_AGENT_ITERATIONS
+from agent.config import (
+    MAX_AGENT_CALLS_PER_TURN,
+    MAX_AGENT_ITERATIONS,
+    ORCHESTRATOR_API_REFS,
+)
 from agent.models import (
     ChatRequest,
     ConversationResponse,
@@ -75,6 +79,7 @@ async def chat(
                 force_skills=req.force_skills,
                 session_title=session_title,
                 user_prompt=settings.user_prompt,
+                orchestrator_api_refs=ORCHESTRATOR_API_REFS,
             ):
                 yield f"data: {event.model_dump_json()}\n\n"
         except asyncio.CancelledError:

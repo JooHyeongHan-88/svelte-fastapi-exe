@@ -42,6 +42,43 @@ api_refs:
 
 ---
 
+## 도구 노출 vs docstring 노출 (오케스트레이터 vs 서브에이전트)
+
+라이브러리 런타임을 쓰려면 두 가지가 필요하다: ① 메타 도구(`call_function` 등)가 LLM 에 노출 + ② 어떤 함수가 있는지 알려주는 시그니처·docstring(`# Available Library APIs` 섹션). 이 둘이 노출되는 방식이 오케스트레이터와 서브에이전트에서 다르다.
+
+| | 메타 도구(call_function 등) | docstring 섹션 |
+|---|---|---|
+| **오케스트레이터** | **항상 노출** (`registry.specs()` 가 전 도구 반환) | 활성 SKILL 의 `api_refs` 또는 baseline 이 있을 때만 |
+| **서브에이전트** | 화이트리스트(`agent.meta.tools`)로 걸러짐 — `api_refs` 있으면 다시 더해짐 | 에이전트/학습 SKILL 의 `api_refs` 가 있을 때만 |
+
+즉 오케스트레이터는 도구 자체는 늘 있지만, `api_refs` 가 없으면 **무슨 함수를 호출할지 모른다**(docstring 부재). docstring 만 채워주면 SKILL 없이도 라이브러리 작업이 가능하다.
+
+### 오케스트레이터 baseline api_refs (`APP_ORCHESTRATOR_API_REFS`)
+
+SKILL/서브에이전트 없이 오케스트레이터가 docstring 기반으로 라이브러리를 쓰게 하려면 `.env` 에 등록한다:
+
+```env
+APP_ALLOWED_LIBRARIES=scripts,polars
+APP_ORCHESTRATOR_API_REFS=scripts.stats_df.compute_summary_stats_df,scripts.stats.describe
+```
+
+- 활성 SKILL 의 `api_refs` 와 합쳐(dedup) `# Available Library APIs` 에 상시 주입된다.
+- **빈 값(기본)이면 기존 동작과 100% 동일** — 활성 SKILL 의 `api_refs` 가 있을 때만 노출.
+- 잘못된 경로(허용 목록 밖·존재하지 않음)는 `collect_api_docs` 가 경고 후 skip — 어떤 값이어도 부팅/턴이 깨지지 않는다.
+- 서브에이전트에는 적용되지 않는다(자체 meta/skill `api_refs` 사용). 오케스트레이터 전용.
+- SKILL 은 docstring 외에 *작업 절차*까지 주입하므로, 정형 워크플로가 필요하면 baseline 대신 SKILL 을 쓴다. 둘은 보완 관계.
+
+### `scripts` 우선순위 — 고수준 래퍼 먼저
+
+`resolve` 는 명시 dotted-path 만 해석하고 **우선순위 로직이 없다**(`scripts.*` vs `polars.*` 동급). "고수준 작업은 `scripts.*` 우선, raw 라이브러리는 scripts 로 불가능할 때만"은 두 레버로 유도한다:
+
+1. **api_refs 큐레이션** — raw 라이브러리(polars/numpy/pandas) 함수를 `api_refs` 에 올리지 않는다. `# Available Library APIs` 에는 `scripts.*` 만 1급 표면으로 보이고, raw 라이브러리는 `exec_code` 등으로 여전히 쓸 수 있으나 광고되지 않는다.
+2. **프롬프트 지시** — `PROMPTS/tools_guide.md` §8.1 이 "scripts 우선"을 명시.
+
+`backend/scripts/` 함수 내부에서는 `APP_ALLOWED_LIBRARIES` 의 어떤 라이브러리든 자유롭게 import 해 high-level 작업을 조합할 수 있다. `APP_ALLOWED_LIBRARIES` 의 CSV 나열 순서는 해석 우선순위와 무관하다.
+
+---
+
 ## 보안 모델
 
 ### ALLOWED_LIBRARIES 화이트리스트
