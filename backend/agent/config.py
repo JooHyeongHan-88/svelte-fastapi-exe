@@ -91,6 +91,12 @@ MAX_HISTORY_MESSAGES: int = int(os.environ.get("APP_MAX_HISTORY_MESSAGES", "40")
 # Tool 1회 실행 timeout (초). 데코레이터에서 도구별로 override 가능.
 TOOL_DEFAULT_TIMEOUT: float = float(os.environ.get("APP_TOOL_DEFAULT_TIMEOUT", "30"))
 
+# Dev 전용 디버그 트레이스 토글. frozen EXE 에서는 env 가 있어도 강제 비활성 —
+# 운영 빌드에 wire 페이로드(프롬프트 전문)·결정 트레이스가 새어나가지 않게 한다.
+DEBUG_TRACE_ENABLED: bool = not getattr(sys, "frozen", False) and os.environ.get(
+    "APP_DEBUG_TRACE", "false"
+).lower() not in ("0", "false", "")
+
 # 오케스트레이터 baseline api_refs (CSV) — SKILL/서브에이전트 없이도 오케스트레이터가
 # 상시 노출받을 라이브러리 dotted-path 목록. 빈 값이면 기존 동작(활성 SKILL 의 api_refs
 # 가 있을 때만 라이브러리 API 노출·런타임 도구 주입)과 100% 동일하다. 잘못된 경로는

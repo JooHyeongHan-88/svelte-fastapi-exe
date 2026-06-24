@@ -117,11 +117,18 @@ for _lib in [l.strip() for l in _allowed_libs_raw.split(',') if l.strip()]:
 # 확장 1개 폴더를 지워도 spec 수정 없이 다음 빌드에 자동 반영(삭제 = 미수집).
 # ---------------------------------------------------------------------------
 import glob as _glob
+# dev 전용 확장 — frozen/prod EXE 에 번들하지 않는다. tracer 는 디버그 트레이스 뷰어로,
+# 트레이스 자체가 dev(APP_DEBUG_TRACE)에서만 생성되므로 운영 빌드에서 제외한다.
+# 로컬에 stale 한 dist 가 남아 있어도 여기서 걸러 운영 EXE 에 새지 않게 한다.
+_DEV_ONLY_EXTENSIONS = {'tracer'}
 _extension_datas = []
 for _ext in _glob.glob(os.path.join(root, 'extensions', '*')):
     if not os.path.isdir(_ext):
         continue
     _name = os.path.basename(_ext)
+    if _name in _DEV_ONLY_EXTENSIONS:
+        print(f'[spec] extension skipped (dev-only): extensions/{_name}')
+        continue
     _backend = os.path.join(_ext, 'backend')
     _dist = os.path.join(_ext, 'frontend', 'dist')
     _manifest = os.path.join(_ext, 'extension.json')

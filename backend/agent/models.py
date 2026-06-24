@@ -95,6 +95,9 @@ class ToolResultEvent(BaseModel):
 
 class DoneEvent(BaseModel):
     type: Literal["done"] = "done"
+    # provider 가 스트림을 끝낸 사유(stop/length/tool_calls 등). 디버그 트레이스가
+    # "왜 멈췄나"(예: length 잘림)를 보기 위한 선택 필드 — 기존 소비자는 무시한다.
+    finish_reason: Annotated[str | None, "스트림 종료 사유 (디버그용)"] = None
 
 
 class ErrorEvent(BaseModel):

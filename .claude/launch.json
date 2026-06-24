@@ -21,6 +21,12 @@
       "port": 5174
     },
     {
+      "name": "tracer",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "extensions/tracer/frontend", "run", "dev"],
+      "port": 5175
+    },
+    {
       "name": "backend-flow-docs",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "python", "-m", "http.server", "8900", "--directory", "docs/overview/backend-flow"],

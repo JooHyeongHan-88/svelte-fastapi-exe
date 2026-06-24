@@ -1,0 +1,82 @@
+/* tracer 확장 — 메인 앱 팔레트와 일관(웜 뉴트럴 + 테라코타). 테마는 호스트가
+   data-theme 속성으로 동기화한다(lib/theme.svelte.js → BroadcastChannel("app:theme")). */
+:root {
+  --bg: #faf9f5;
+  --panel: #ffffff;
+  --panel-2: #f0eee6;
+  --border: #e5e2d8;
+  --fg: #1f1e1d;
+  --muted: #6b6a64;
+  --subtle: #9c9a92;
+  --accent: #c96442;
+  --accent-hover: #b5532f;
+  --accent-fg: #ffffff;
+  --success: #44803c;
+  --danger: #bf4133;
+  --warn: #b07d2b;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --shadow: 0 1px 2px rgba(40, 30, 20, 0.05), 0 4px 12px rgba(40, 30, 20, 0.09);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR",
+    sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-soft-strong: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 40%, transparent);
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #262624;
+  --panel: #30302e;
+  --panel-2: #2d2d2b;
+  --border: #3e3d39;
+  --fg: #edebe6;
+  --muted: #b3b0a8;
+  --subtle: #84827a;
+  --accent: #d97757;
+  --accent-hover: #e08b6d;
+  --accent-fg: #ffffff;
+  --success: #7ba876;
+  --danger: #e5705c;
+  --warn: #d3a151;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.45);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+:where(button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

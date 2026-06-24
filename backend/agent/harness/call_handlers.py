@@ -24,6 +24,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 from agent.config import MAX_PARALLEL_SUBAGENTS
+from agent.debug import trace
 from agent.guard import SlotCheckResult, validate_tool_args
 from agent.models import (
     MALFORMED_TOOL_ARGS_KEY,
@@ -192,6 +193,12 @@ def _guard_tool_args(
     guard = validate_tool_args(call.arguments, ctx.registry.get(call.name))
     if guard.invalid_message:
         # 형식 오류 — 사용자에게 묻지 않고 LLM 에 도구 에러로 회신해 self-correct.
+        trace.record(
+            "slot_guard",
+            tool=call.name,
+            outcome="invalid",
+            message=guard.invalid_message,
+        )
         result_content = _invalid_call_message(
             call, ctx.history_calls, guard.invalid_message
         )
@@ -205,6 +212,12 @@ def _guard_tool_args(
             )
         ]
     if not guard.ok:
+        trace.record(
+            "slot_guard",
+            tool=call.name,
+            outcome="missing",
+            slots=[m.key for m in guard.missing],
+        )
         placeholder, ask_ev = _emit_missing_slot(ctx.state, call, guard)
         _append_tool_result(ctx.messages, ctx.turn_messages, call, placeholder)
         outcome.interrupted = True
@@ -224,6 +237,7 @@ async def _handle_malformed_args(
 
     빈 인자로 오인해 슬롯 누락을 질문하는 것을 방지한다. 반복되면 루프가드로 전환.
     """
+    trace.record("malformed_args", tool=call.name)
     result_content = _invalid_call_message(
         call,
         ctx.history_calls,
@@ -482,7 +496,9 @@ def _loop_guard_denial(ctx: TurnContext, call: ToolCall) -> list[StreamEvent] | 
     call_sig = _call_signature(call)
     if call_sig not in ctx.history_calls:
         ctx.history_calls.add(call_sig)
+        trace.record("loop_guard", tool=call.name, blocked=False)
         return None
+    trace.record("loop_guard", tool=call.name, blocked=True)
     _append_tool_result(ctx.messages, ctx.turn_messages, call, _LOOP_GUARD_MESSAGE)
     if ctx.state is not None and ctx.state.pending_tool == call.name:
         clear_pending_tool(ctx.state)
@@ -530,6 +546,12 @@ async def _handle_normal_tool(
         return
 
     result = await _execute_tool(call, ctx.registry)
+    trace.record(
+        "tool_result",
+        tool=call.name,
+        is_error=result.is_error,
+        content=result.content[:500],
+    )
     _append_tool_result(ctx.messages, ctx.turn_messages, call, result.content)
     yield ToolResultEvent(
         tool_call_id=call.id,
@@ -599,6 +621,7 @@ async def _handle_tool_call(
     # 1단계 (특수) — sentinel 디스패치 테이블.
     handler = _select_sentinel_handler(ctx, call)
     if handler is not None:
+        trace.record("sentinel_route", tool=call.name, args=call.arguments)
         async for ev in handler(ctx, call, outcome):
             yield ev
         return

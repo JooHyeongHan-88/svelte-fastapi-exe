@@ -23,6 +23,9 @@ class LLMProvider(Protocol):
 def get_provider(settings: LLMSettings) -> LLMProvider:
     """Get an LLM provider instance based on settings.
 
+    dev 환경에서 ``APP_DEBUG_TRACE`` 가 켜져 있으면 provider 를 ``TracingProvider`` 로
+    감싸 wire in/out 을 디버그 트레이스에 기록한다 (frozen 은 강제 비활성).
+
     Args:
         settings: LLMSettings with provider type and credentials.
 
@@ -32,6 +35,29 @@ def get_provider(settings: LLMSettings) -> LLMProvider:
     Raises:
         ValueError: If provider type is unsupported or credentials are missing.
     """
+    return _maybe_wrap_tracing(_build_provider(settings), settings)
+
+
+def _maybe_wrap_tracing(provider: LLMProvider, settings: LLMSettings) -> LLMProvider:
+    """디버그 트레이스가 활성이면 provider 를 TracingProvider 로 감싼다."""
+    from agent.config import DEBUG_TRACE_ENABLED
+
+    if not DEBUG_TRACE_ENABLED:
+        return provider
+
+    from agent.debug.trace import TracingProvider
+    from settings.masking import mask_api_key
+
+    return TracingProvider(
+        provider,
+        model=settings.model or "",
+        masked_key=mask_api_key(settings.api_key or ""),
+        base_url=settings.base_url,
+    )
+
+
+def _build_provider(settings: LLMSettings) -> LLMProvider:
+    """settings.provider 분기로 실제 provider 인스턴스를 만든다."""
     if settings.provider == "mock":
         from agent.providers.mock import MockProvider
 

@@ -1,0 +1,5 @@
+{
+  "name": "Tracer",
+  "description": "에이전트 턴 디버그 트레이스 뷰어 (dev 전용) — provider in/out·결정점 타임라인",
+  "icon": "file"
+}

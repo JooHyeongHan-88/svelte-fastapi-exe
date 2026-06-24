@@ -111,7 +111,7 @@ Write-Host "==> extension builds  (-> extensions/*/frontend/dist/)"
 $extRoot = Join-Path $root "extensions"
 if (Test-Path $extRoot) {
     Get-ChildItem $extRoot -Directory |
-        Where-Object { $_.Name -notmatch '^[._]' } |
+        Where-Object { $_.Name -notmatch '^[._]' -and $_.Name -ne 'tracer' } |
         ForEach-Object {
             $extName = $_.Name
             $feDir = Join-Path $_.FullName "frontend"

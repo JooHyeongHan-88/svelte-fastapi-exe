@@ -140,7 +140,7 @@ class OpenAIProvider:
                 )
             )
 
-        yield DoneEvent()
+        yield DoneEvent(finish_reason=finish_reason)
 
     async def _create_stream_with_retry(self, wire_messages: list, wire_tools: list):
         """chat.completions.create 를 일시 오류에 한해 지수 백오프로 재시도한다.

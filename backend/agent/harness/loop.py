@@ -54,6 +54,7 @@ from agent.providers.factory import LLMProvider
 from agent.stores.agent_state import AgentStateStore
 from agent.stores.conversation import ConversationStore
 
+from agent.debug import trace
 from agent.harness.budget import TurnBudget
 from agent.harness.call_handlers import (
     CallOutcome,
@@ -138,6 +139,7 @@ async def run_turn(
     from core.result_store import set_session_context
 
     set_session_context(client_id, session_title)
+    trace.start_turn_trace()
 
     history = store.get_history(client_id)
     state = state_store.get(client_id)
@@ -205,6 +207,14 @@ async def run_turn(
             registry, skills, has_agents=has_agents
         )
 
+        trace.record(
+            "turn_start",
+            user_message=user_message,
+            active_skills=state.active_skills,
+            has_agents=has_agents,
+            tools=[s.name for s in orchestrator_specs],
+        )
+
         budget = TurnBudget(max_calls=max_agent_calls)
 
         active_skills = list(skills)  # turn-local mutable copy for activate_skill
@@ -239,10 +249,12 @@ async def run_turn(
         store.append(client_id, *turn_messages)
         turn_persisted = True
         state_store.set(client_id, state)
+        trace.record("turn_end", message_count=len(turn_messages))
         yield DoneEvent()
 
     except Exception as exc:  # noqa: BLE001 — 사용자에게 에러 이벤트로 변환해 전달
         logger.exception("harness run_turn failed")
+        trace.record("turn_error", error_type=type(exc).__name__)
         _persist_failed_turn(
             client_id=client_id,
             turn_messages=turn_messages,
@@ -454,66 +466,72 @@ async def _run_agent_turn(
     wind_down_notified = False
 
     for iteration in range(max_iterations):
-        wind_down_notified = _maybe_inject_wind_down(ctx, iteration, wind_down_notified)
-
-        if not budget.try_consume():
-            yield ErrorEvent(
-                message=f"[budget] {agent_id}: provider 호출 상한({budget.max_calls}) 초과"
+        with trace.scope(agent_id=agent_id, depth=depth, iteration=iteration):
+            wind_down_notified = _maybe_inject_wind_down(
+                ctx, iteration, wind_down_notified
             )
-            return
 
-        assistant_buffer.clear()
-        pending_tool_calls.clear()
-
-        async for event in provider.astream(messages, sub_specs):
-            match event.type:
-                case "delta":
-                    assistant_buffer.append(event.content)
-                    yield event
-                case "tool_call":
-                    pending_tool_calls.append(event.call)
-                    yield event
-                case "reasoning":
-                    yield event
-                case "done":
-                    break
-                case _:
-                    yield event
-                    return
-
-        assistant_text = "".join(assistant_buffer)
-
-        if not pending_tool_calls:
-            if assistant_text and turn_messages is not None:
-                turn_messages.append(Message(role="assistant", content=assistant_text))
-            return
-
-        assistant_msg = Message(
-            role="assistant",
-            content=assistant_text,
-            tool_calls=list(pending_tool_calls),
-        )
-        messages.append(assistant_msg)
-        if turn_messages is not None:
-            turn_messages.append(assistant_msg)
-
-        interrupted = False
-        for call in pending_tool_calls:
-            outcome = CallOutcome()
-            async for ev in _handle_tool_call(ctx, call, outcome):
-                yield ev
-            if outcome.stop:
-                # complete_subagent — 즉시 종료 (남은 호출 무시, 보정 없음).
+            if not budget.try_consume():
+                trace.record("budget_exhausted", max_calls=budget.max_calls)
+                yield ErrorEvent(
+                    message=f"[budget] {agent_id}: provider 호출 상한({budget.max_calls}) 초과"
+                )
                 return
-            if outcome.interrupted:
-                interrupted = True
-                break
 
-        if interrupted:
-            # 배치 도구 호출 중간에 중단되면 뒤따르는 tool_call 이 응답 없이 남는다.
-            # 모든 tool_call 에 placeholder 응답을 채워 메시지 정합성(OpenAI 규약)을 지킨다.
-            _balance_unresolved_tool_calls(messages, turn_messages, assistant_msg)
-            return
+            assistant_buffer.clear()
+            pending_tool_calls.clear()
+
+            async for event in provider.astream(messages, sub_specs):
+                match event.type:
+                    case "delta":
+                        assistant_buffer.append(event.content)
+                        yield event
+                    case "tool_call":
+                        pending_tool_calls.append(event.call)
+                        yield event
+                    case "reasoning":
+                        yield event
+                    case "done":
+                        break
+                    case _:
+                        yield event
+                        return
+
+            assistant_text = "".join(assistant_buffer)
+
+            if not pending_tool_calls:
+                if assistant_text and turn_messages is not None:
+                    turn_messages.append(
+                        Message(role="assistant", content=assistant_text)
+                    )
+                return
+
+            assistant_msg = Message(
+                role="assistant",
+                content=assistant_text,
+                tool_calls=list(pending_tool_calls),
+            )
+            messages.append(assistant_msg)
+            if turn_messages is not None:
+                turn_messages.append(assistant_msg)
+
+            interrupted = False
+            for call in pending_tool_calls:
+                outcome = CallOutcome()
+                async for ev in _handle_tool_call(ctx, call, outcome):
+                    yield ev
+                if outcome.stop:
+                    # complete_subagent — 즉시 종료 (남은 호출 무시, 보정 없음).
+                    return
+                if outcome.interrupted:
+                    interrupted = True
+                    break
+
+            if interrupted:
+                # 배치 도구 호출 중간에 중단되면 뒤따르는 tool_call 이 응답 없이 남는다.
+                # 모든 tool_call 에 placeholder 응답을 채워 메시지 정합성(OpenAI 규약)을 지킨다.
+                _balance_unresolved_tool_calls(messages, turn_messages, assistant_msg)
+                return
     else:
         async for ev in _emit_max_iterations_fallback(ctx):
             yield ev
@@ -545,6 +563,7 @@ def _maybe_inject_wind_down(
     ctx.messages.append(
         Message(role="user", content=_build_wind_down_message(remaining_calls))
     )
+    trace.record("wind_down", remaining_calls=remaining_calls)
     logger.info(
         "agent %s wind-down notified (remaining_calls=%d)",
         ctx.agent_id,
@@ -576,6 +595,11 @@ async def _emit_max_iterations_fallback(
             f"[max_iterations] {ctx.agent_id}: {ctx.max_iterations}회 반복 상한에 "
             "도달했습니다. 작업이 완전히 완료되지 않았을 수 있습니다."
         )
+    trace.record(
+        "max_iter_fallback",
+        max_iterations=ctx.max_iterations,
+        is_recovered=is_recovered,
+    )
     logger.warning(
         "agent harness reached max_iterations=%d (agent=%s, recovered=%s)",
         ctx.max_iterations,
