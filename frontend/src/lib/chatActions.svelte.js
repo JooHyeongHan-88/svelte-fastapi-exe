@@ -155,6 +155,15 @@ function _wireFromParts(parts) {
     .join("");
 }
 
+// 스킬만 전송(텍스트·인용 없음)했을 때 LLM 에 줄 실행 지시문. 스킬 본문은 force_skills 로
+// 이미 system prompt 에 주입되므로 이름만 명시해도 LLM 이 가이드대로 실행한다. (스킬 pill
+// 뒤에 항상 붙는 잔여 공백이 _wireFromParts 를 truthy 로 만들어 본문이 공백뿐이 되는 것을 대체.)
+function _skillOnlyInstruction(skillNames) {
+  const names = [...new Set((skillNames ?? []).filter(Boolean))];
+  if (names.length === 0) return "";
+  return `다음 스킬을 실행해줘: ${names.join(", ")}`;
+}
+
 // parts → 사람이 읽는 표시 문자열 (ref 는 파일명 라벨). 제목 생성·레거시 폴백용.
 // 스킬 pill 은 본문이 아닌 modifier 라 표시 문자열에서도 제외 (제목은 텍스트 기준).
 function _displayFromParts(parts) {
@@ -191,7 +200,11 @@ function _mergeRefPaths(content, refs) {
 
 // 메시지 1건의 백엔드 전송 본문. parts(신규) 우선, refs(구) 차선, 그 외 content 평문.
 function _backendContent(m) {
-  if (Array.isArray(m.parts) && m.parts.length > 0) return _wireFromParts(m.parts);
+  if (Array.isArray(m.parts) && m.parts.length > 0) {
+    const wire = _wireFromParts(m.parts);
+    if (wire.trim()) return wire;
+    return _skillOnlyInstruction(m.appliedSkills); // 스킬만 있는 메시지 — live 전송과 동일 본문
+  }
   if (m.refs && m.refs.length > 0) return _mergeRefPaths(m.content, m.refs);
   return m.content ?? "";
 }
@@ -382,8 +395,10 @@ export async function sendMessage(input) {
   const forceSkills = forced;
 
   // LLM 에 전달할 실제 메시지 — parts 의 pill 자리에 경로를 인라인 합성한다
-  // (toBackendMessages 복원과 동일 와이어 본문). 본문이 비면 skill 이름으로 대체.
-  const llmContent = _wireFromParts(parts) || (forceSkills ? forceSkills.join(", ") : "");
+  // (toBackendMessages 복원과 동일 와이어 본문). _wireFromParts 가 스킬 pill 뒤 잔여 공백만
+  // 담아 truthy 가 되는 케이스를 trim 으로 걸러, 공백 대신 스킬 실행 지시문을 보낸다.
+  const wire = _wireFromParts(parts);
+  const llmContent = wire.trim() ? wire : _skillOnlyInstruction(forceSkills);
 
   currentAbortController = new AbortController();
   const abortSignal = currentAbortController.signal;

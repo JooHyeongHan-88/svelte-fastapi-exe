@@ -36,7 +36,7 @@ def _write_trace(trace_dir: Path) -> None:
             "turn_id": _TURN,
             "agent_id": "orchestrator",
             "kind": "turn_start",
-            "payload": {},
+            "payload": {"user_message": "지금 몇 시야?"},
         },
         {
             "turn_id": _TURN,
@@ -79,6 +79,34 @@ def test_list_turns(client: TestClient) -> None:
     assert len(data) == 1
     assert data[0]["name"] == _TURN
     assert data[0]["path"] == _REL
+    assert data[0]["preview"] == "지금 몇 시야?"
+
+
+def test_turn_preview_blank_user_message_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # turn_start.user_message 가 공백뿐이면 preview 는 빈 문자열 — 프론트가 턴 ID 로 폴백.
+    session = "blank-preview-session"
+    trace_dir = tmp_path / session / "_trace"
+    trace_dir.mkdir(parents=True)
+    line = {
+        "turn_id": _TURN,
+        "agent_id": "orchestrator",
+        "kind": "turn_start",
+        "payload": {"user_message": "   "},
+    }
+    (trace_dir / f"{_TURN}.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
+
+    module = _load_router_module()
+    monkeypatch.setattr("core.result_store.RESULT_DIR", tmp_path)
+    monkeypatch.setattr(module, "RESULT_DIR", tmp_path)
+    app = FastAPI()
+    app.include_router(module.get_router())
+    client = TestClient(app)
+
+    resp = client.get("/api/ext/tracer/turns", params={"session": session})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["preview"] == ""
 
 
 def test_read_trace_parses_and_counts_skipped(client: TestClient) -> None:

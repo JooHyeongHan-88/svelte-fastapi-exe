@@ -29,6 +29,10 @@ from core.result_store import resolve_result_path, to_result_relative
 logger = logging.getLogger(__name__)
 
 _TRACE_DIRNAME = "_trace"
+_TURN_START_KIND = "turn_start"
+_PREVIEW_MAX_CHARS = 80
+# turn_start 는 한 턴의 첫 이벤트라 앞쪽 몇 줄만 읽으면 된다 (대용량 provider_request 줄 회피).
+_PREVIEW_SCAN_LINES = 10
 
 router = APIRouter(
     prefix="/api/ext/tracer",
@@ -80,6 +84,38 @@ def list_sessions() -> list[dict[str, Any]]:
     return out
 
 
+def _turn_preview(turn_path: Path) -> str:
+    """턴 트레이스의 turn_start 이벤트에서 사용자 메시지 앞부분을 추출한다.
+
+    turn_start 는 한 턴의 첫 이벤트라 앞쪽 몇 줄만 스캔하면 된다. 개행·연속 공백은 한 칸으로
+    정리하고, 공백뿐이거나 부재면 빈 문자열을 돌려 프론트가 턴 ID 로 폴백하게 한다.
+
+    Args:
+        turn_path: 턴 트레이스 JSONL 파일 경로.
+
+    Returns:
+        정리·절단된 미리보기 문자열. 추출 실패 시 빈 문자열.
+    """
+    try:
+        with turn_path.open("r", encoding="utf-8") as fh:
+            for _, line in zip(range(_PREVIEW_SCAN_LINES), fh):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("kind") != _TURN_START_KIND:
+                    continue
+                raw = event.get("payload", {}).get("user_message", "")
+                collapsed = " ".join(str(raw).split())
+                return collapsed[:_PREVIEW_MAX_CHARS]
+    except OSError:
+        return ""
+    return ""
+
+
 @router.get("/turns")
 def list_turns(
     session: Annotated[str, Query(description="세션 폴더명")],
@@ -97,6 +133,7 @@ def list_turns(
                 "path": to_result_relative(turn),
                 "mtime": stat.st_mtime,
                 "size": stat.st_size,
+                "preview": _turn_preview(turn),
             }
         )
     out.sort(key=lambda t: t["mtime"], reverse=True)

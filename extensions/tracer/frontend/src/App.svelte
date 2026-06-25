@@ -168,7 +168,7 @@
       <div class="list">
         {#each turns as t (t.path)}
           <button class="row" onclick={() => openTurn(t)}>
-            <span class="row-main">{t.name}</span>
+            <span class="row-main" class:preview={t.preview}>{t.preview || t.name}</span>
             <span class="row-meta">{fmtTime(t.mtime)} · {fmtSize(t.size)}</span>
           </button>
         {/each}
@@ -376,6 +376,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* 자연어 쿼리 미리보기는 가독성 위해 sans 폰트 (폴백 턴 ID 는 mono 유지) */
+  .row-main.preview {
+    font-family: inherit;
   }
   .row-meta {
     flex: 0 0 auto;
