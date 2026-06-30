@@ -57,7 +57,7 @@ svelte-fastapi-exe/
 ├── packaging/
 │   ├── App.spec           # PyInstaller 스펙 — .env에서 APP_NAME/채널 자동 읽음
 │   ├── release.ps1        # 빌드 + sha256 + GitHub Release 게시 자동화 (-Channel 필수)
-│   └── release-dryrun.ps1 # 로컬 HTTP mock 으로 릴리즈 파이프라인 검증
+│   └── build-dev.ps1      # dev: 메인+확장 프론트 전체 빌드 (backend 정적 서빙용)
 ├── docs/                  # 에이전트·도구 개발자 참고 문서
 ├── build/                 # 중간 산출물 (gitignored)
 ├── result/                # 에이전트 실행 산출물 (gitignored) — {제목}-{id8}/{timestamp}/
@@ -342,14 +342,15 @@ pwsh packaging/release.ps1 -Channel prod -Upload -Force -Notes "핫픽스"
 8. `-Upload` 시: `gh release create v{version}` 으로 GitHub Release에 EXE·latest.json 첨부  
    (qa: `--prerelease` → `releases/latest` 포인터에 잡히지 않음)
 
-### 4. Dry-run (업로드 없이 로컬 검증)
+### 4. Dev 프론트 빌드 (EXE 없이 backend 서빙으로 확인)
 
 ```powershell
-pwsh packaging/release-dryrun.ps1                     # 클린 상태 필요
-pwsh packaging/release-dryrun.ps1 -Channel qa -Force  # dirty 브랜치에서도 가능
+pwsh packaging/build-dev.ps1           # 메인 + 모든 확장(tracer 포함) 프론트 빌드
+uv run python backend/main.py          # build/web/ · /ext/<tool>/ 정적 서빙
 ```
 
-로컬 HTTP 서버로 GitHub Releases를 흉내내고, 업데이트 감지·다운로드·sha256 검증까지 실제 네트워크 없이 테스트.
+Vite dev 서버를 따로 띄우지 않고 메인·확장 프론트를 모두 빌드해 backend 정적 서빙으로 확인할 때 쓴다.
+EXE/업데이터 빌드·업로드 없이 프론트만 빌드한다.
 
 ---
 

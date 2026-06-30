@@ -41,6 +41,7 @@ from agent.models import (
     ToolCall,
     ToolSpec,
 )
+from agent.config import COMPACTION_ENABLED, OBJECTIVE_MAX_CHARS
 from agent.registries.agents import AgentRegistry
 from agent.registries.prompts import PromptRegistry
 from agent.registries.skills import Skill, SkillRegistry
@@ -79,7 +80,7 @@ from agent.harness.state.balancing import (
     _balance_all_unresolved,
     _balance_unresolved_tool_calls,
 )
-from agent.harness.state.pending import clear_all_pending
+from agent.harness.state.pending import clear_all_pending, has_pending
 from agent.harness.state.todo import _TERMINAL_STATUSES, _all_todos_terminal
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,10 @@ async def run_turn(
         item.status in _TERMINAL_STATUSES for item in state.todo_list
     ):
         state.todo_list = []
+    # 세션 첫 턴(history 비어있음)의 사용자 메시지를 원래 목표로 1회 박제한다 —
+    # 이후 히스토리가 트림돼도 매 턴 '# 이전 진행 요약' 으로 재주입되는 안정 앵커.
+    if not state.objective and not history and user_message.strip():
+        state.objective = user_message.strip()[:OBJECTIVE_MAX_CHARS]
     user_msg = Message(role="user", content=user_message)
     turn_messages: list[Message] = [user_msg]
     baseline_api_refs = orchestrator_api_refs or []
@@ -164,6 +169,14 @@ async def run_turn(
             skills = skill_registry.select(
                 user_message, available_tools=registry.names()
             )
+            # ask_user 등으로 끊겼던 작업의 SKILL 지침을 마저 들고 간다. pending 이
+            # 살아있는 동안만 — 영구 sticky 가 아니라 다음 턴 pending 해소 시 자동
+            # 종료한다(R5/F11 공격적 클리어 철학 유지). 캐리된 SKILL 은 skills 리스트를
+            # 타고 그대로 compose 의 '# Skill:' 본문 주입을 받으므로 composer 무변경.
+            if has_pending(state) and state.active_skills:
+                carried = skill_registry.get_by_names(state.active_skills)
+                seen = {s.meta.name for s in skills}
+                skills.extend(s for s in carried if s.meta.name not in seen)
         state.active_skills = [s.meta.name for s in skills]
 
         has_agents = agent_registry is not None and len(agent_registry.list_meta()) > 0
@@ -246,8 +259,14 @@ async def run_turn(
         if not ask_user_occurred:
             clear_all_pending(state)
 
-        store.append(client_id, *turn_messages)
+        dropped = store.append(client_id, *turn_messages)
         turn_persisted = True
+        # summarize-then-drop: 슬라이딩 윈도우가 버린 턴을 요약해 보존(망각 방지).
+        # happy path 전용 — 예외 경로(_persist_failed_turn)엔 LLM 콜을 추가하지 않는다.
+        if COMPACTION_ENABLED and dropped:
+            state.progress_summary = await _compact_history(
+                provider, state.progress_summary, dropped
+            )
         state_store.set(client_id, state)
         trace.record("turn_end", message_count=len(turn_messages))
         yield DoneEvent()
@@ -540,6 +559,56 @@ async def _run_agent_turn(
 # ---------------------------------------------------------------------------
 # 루프 생애주기 헬퍼 — wind-down 주입 + max_iterations fallback
 # ---------------------------------------------------------------------------
+
+_COMPACTION_SYSTEM_PROMPT: str = (
+    "당신은 대화 압축기다. 아래 '기존 요약'에 '새로 잘린 대화'를 통합해 갱신된 진행 "
+    "요약 하나를 만들어라. 원래 목표·내려진 결정·제약 조건·핵심 수치 결과·산출물 "
+    "경로(result/...)를 반드시 보존하라. 한국어 200단어 이내로 간결하게, 요약 본문만 출력하라."
+)
+_COMPACTION_MAX_CHARS: int = 2000
+
+
+async def _compact_history(
+    provider: LLMProvider, prior_summary: str | None, dropped: list[Message]
+) -> str | None:
+    """슬라이딩 윈도우가 버린 메시지를 기존 요약에 접어 갱신 요약을 만든다 (summarize-then-drop).
+
+    best-effort: 요약 콜이 어떤 이유로든 실패하면 ``prior_summary`` 를 그대로 돌려준다
+    (graceful degrade — content_sync 와 동일 철학). 턴은 막지 않는다.
+
+    Args:
+        provider: 현재 세션 LLM provider (요약도 같은 모델로).
+        prior_summary: 직전까지 누적된 롤링 요약. 없으면 None.
+        dropped: 이번 트림에서 버려진 메시지(시간순, tool 은 절단본).
+
+    Returns:
+        갱신된 요약 문자열. 잘린 내용이 비었거나 실패 시 ``prior_summary``.
+    """
+    rendered = "\n".join(
+        f"[{m.role}] {m.content}".strip() for m in dropped if m.content
+    )
+    if not rendered:
+        return prior_summary
+
+    payload = (
+        f"## 기존 요약\n{prior_summary or '(없음)'}\n\n## 새로 잘린 대화\n{rendered}"
+    )
+    messages = [
+        Message(role="system", content=_COMPACTION_SYSTEM_PROMPT),
+        Message(role="user", content=payload),
+    ]
+    try:
+        buffer: list[str] = []
+        async for event in provider.astream(messages, []):
+            if event.type == "delta":
+                buffer.append(event.content)
+            elif event.type == "done":
+                break
+        summary = "".join(buffer).strip()
+        return summary[:_COMPACTION_MAX_CHARS] if summary else prior_summary
+    except Exception:  # noqa: BLE001 — best-effort, 실패해도 직전 요약 유지
+        logger.warning("history compaction failed — keeping prior summary")
+        return prior_summary
 
 
 def _maybe_inject_wind_down(

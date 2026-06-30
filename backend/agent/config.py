@@ -88,6 +88,16 @@ if MAX_AGENT_DEPTH > 1:
 # store 가 client 한 명당 보관하는 메시지 수 상한 (system 제외).
 MAX_HISTORY_MESSAGES: int = int(os.environ.get("APP_MAX_HISTORY_MESSAGES", "40"))
 
+# summarize-then-drop 압축 토글. 히스토리 슬라이딩 윈도우가 메시지를 버리기 직전
+# 그 내용을 LLM 으로 요약해 state.progress_summary 에 접어 망각을 방지한다. 기본 ON.
+# best-effort — 요약 콜이 실패해도 기존 요약을 유지하고 턴은 그대로 진행한다.
+COMPACTION_ENABLED: bool = os.environ.get(
+    "APP_COMPACTION_ENABLED", "true"
+).lower() not in ("0", "false", "")
+
+# 세션 첫 턴 사용자 메시지를 state.objective 로 박제할 때의 길이 상한.
+OBJECTIVE_MAX_CHARS: int = int(os.environ.get("APP_OBJECTIVE_MAX_CHARS", "500"))
+
 # Tool 1회 실행 timeout (초). 데코레이터에서 도구별로 override 가능.
 TOOL_DEFAULT_TIMEOUT: float = float(os.environ.get("APP_TOOL_DEFAULT_TIMEOUT", "30"))
 

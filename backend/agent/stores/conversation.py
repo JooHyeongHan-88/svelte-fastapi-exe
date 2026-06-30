@@ -59,7 +59,7 @@ class ConversationStore:
         with self._lock:
             return list(self._data.get(client_id, []))
 
-    def append(self, client_id: str, *messages: Message) -> None:
+    def append(self, client_id: str, *messages: Message) -> list[Message]:
         """히스토리 끝에 메시지 여러 개를 추가하고, 오래된 항목을 트리밍한다.
 
         저장 전 tool 메시지 content 를 ``_TOOL_HISTORY_MAX_CHARS`` 로 절단한다.
@@ -71,20 +71,27 @@ class ConversationStore:
         앞자르기로 선행 assistant 가 잘려 나가면 고아 tool 메시지가 첫 메시지로 남아
         다음 턴 요청이 400 으로 거부된다. 잘린 직후 첫 메시지가 tool 이면 비-tool
         메시지가 나올 때까지 cut 을 앞으로 더 밀어 항상 유효한 경계에서 자른다.
+
+        Returns:
+            트림으로 **버려진** 메시지 리스트(시간순, 절단본 형태). 버린 게 없으면
+            빈 리스트. 하니스가 이를 받아 summarize-then-drop 압축(progress_summary)에
+            쓴다 — store 는 provider 무접근 순수 저장소라 요약은 하니스 책임이다.
         """
         with self._lock:
             history = self._data.setdefault(client_id, [])
             history.extend(_truncate_for_history(m) for m in messages)
 
             if len(history) <= self._max_history:
-                return
+                return []
 
             # system prompt 는 harness 가 매 턴 다시 머리에 붙이므로 여기서 보존 불필요.
             cut = len(history) - self._max_history
             # 경계 보정: 고아 tool 메시지가 첫 항목이 되지 않도록 cut 을 전진시킨다.
             while cut < len(history) and history[cut].role == "tool":
                 cut += 1
+            dropped = history[:cut]
             del history[:cut]
+            return dropped
 
     def reset(self, client_id: str) -> None:
         with self._lock:

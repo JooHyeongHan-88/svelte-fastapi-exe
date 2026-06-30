@@ -96,8 +96,9 @@ sync_agent_content() -> dict[str, Path]
 - **격리**: 한 확장의 `npm` 빌드 실패는 메인 앱 릴리즈를 막지 않는다(경고 후 계속). App.spec 은 그 경우
   기존 dist 만 번들하거나, 없으면 그 확장을 건너뛴다(빈손 no-op).
 - `node_modules` 부재 시에만 설치(`package-lock.json` 있으면 `npm ci`, 없으면 `npm install`) 후 `npm run build`.
-- `release-dryrun.ps1` 은 release.ps1 을 호출하므로 확장 빌드를 그대로 상속하며, 끝에 각 확장의
-  `dist`/`router` 번들 존재를 확인 출력한다. 수동 검증 시나리오 `[E]` 가 `/ext/<tool>/` 진입을 안내한다.
+- **dev 프론트 빌드**: `build-dev.ps1` 은 EXE/업데이터·업로드 없이 메인+확장 프론트만 빌드해
+  backend 정적 서빙(`build/web/`·`/ext/<tool>/`)으로 확인하게 한다. release.ps1 과 달리 `tracer`
+  (dev 디버그 뷰어)도 포함한다.
 
 ## Release 스크립트 — PowerShell 5.1 주의점
 

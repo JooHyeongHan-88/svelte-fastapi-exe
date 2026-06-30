@@ -21,6 +21,9 @@
 | `APP_TOOL_DEFAULT_TIMEOUT` | `30` | Tool 1회 실행 timeout (초) |
 | `APP_DEBUG_TRACE` | `false` | **dev 전용** 디버그 트레이스 토글. 켜면 턴마다 provider in/out(프롬프트 전문·raw 응답)과 하니스 결정점(루프가드·슬롯가드·wind-down 등)을 `result/<session>/_trace/<turn>.jsonl` 로 기록 — `tracer` 확장(런처 드롭다운)으로 타임라인 조회. frozen EXE 는 강제 비활성 — `agent.debug.trace` |
 | `APP_ALLOWED_LIBRARIES` | `scripts,polars` | 런타임에 노출할 패키지 루트 CSV — EXE 빌드 시 자동 번들링. `scripts`(고수준 래퍼) 우선은 프롬프트가 유도; CSV 순서는 해석 우선순위와 무관 |
+| `APP_MAX_HISTORY_MESSAGES` | `40` | store 가 client 한 명당 보관하는 메시지 수 상한(system 제외). 초과 시 앞에서 트림되며 버린 턴은 압축 요약으로 보존(R10) — `agent.config` |
+| `APP_COMPACTION_ENABLED` | `true` | summarize-then-drop 압축 토글. 히스토리 윈도우가 메시지를 버리기 직전 LLM 으로 요약해 `state.progress_summary` 에 보존(망각 방지). best-effort — 실패해도 직전 요약 유지·턴 진행. happy path 전용 — `agent.config` (R10) |
+| `APP_OBJECTIVE_MAX_CHARS` | `500` | 세션 첫 턴 user_message 를 `state.objective`(원래 목표 앵커, `# 이전 진행 요약` 재주입)로 박제할 때 길이 상한 — `agent.config` (R10) |
 | `APP_ORCHESTRATOR_API_REFS` | (빈 값) | 오케스트레이터 baseline api_refs CSV. 지정 시 활성 SKILL 없이도 그 함수들의 시그니처·docstring 을 `# Available Library APIs` 로 상시 주입(런타임 메타 도구는 원래 항상 노출이라, 이 변수가 주는 건 prompt 의 docstring). 빈 값=기존 SKILL 주도 동작. 잘못된 경로는 skip — 무오류 |
 | `APP_REPO_BASE_URL` | — | GitHub 레포 루트 URL — updater가 REST API base(`.../api/v3`)·owner/repo 유도 |
 | `APP_REPO_READ_TOKEN` | — | 읽기 전용 Classic PAT — EXE에 번들, REST API 릴리즈 메타·에셋 다운로드 인증용 (콘텐츠 동기화와 공유) |

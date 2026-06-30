@@ -8,6 +8,22 @@ import 하지 않으므로(state/ 는 loop·call_handlers 를 모름) 순환 없
 from agent.models import AgentState
 
 
+def has_pending(state: AgentState) -> bool:
+    """직전 턴에서 넘어온 미해결 pending 이 하나라도 있는지.
+
+    ask_user(슬롯 가드·sentinel)·서브에이전트 슬롯으로 턴이 끊겼던 작업이 이번 턴에
+    재개되는 신호다. SKILL 캐리(loop.py)가 이 동안에만 직전 SKILL 본문을 다시 들고
+    간다 — 영구 sticky 가 아니라 pending 해소 시 자동 종료(R5/F11 공격적 클리어 철학 유지).
+    ``clear_all_pending`` 과 동일한 필드 묶음을 본다(SSOT).
+    """
+    return bool(
+        state.pending_tool
+        or state.missing_slots
+        or state.pending_question
+        or state.pending_sub_agent
+    )
+
+
 def clear_pending_tool(state: AgentState) -> None:
     """일반 도구의 슬롯 재질문 잔재(pending_tool/args/missing_slots)를 비운다.
 

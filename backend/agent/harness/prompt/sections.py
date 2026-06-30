@@ -47,6 +47,26 @@ def _render_multi_skill_instruction(skills: list[Skill]) -> str | None:
     )
 
 
+def _render_progress_summary_section(state: AgentState) -> str | None:
+    """원래 목표 + 롤링 압축 요약 섹션 — 히스토리 트림으로 인한 망각을 보완한다.
+
+    objective(첫 턴 박제)와 progress_summary(summarize-then-drop 누적)가 둘 다 비어
+    있으면 섹션을 생략한다. 마지막 줄은 namespace 휘발 대비 load_artifact 복원 너지다.
+    """
+    if not state.objective and not state.progress_summary:
+        return None
+    lines: list[str] = ["\n# 이전 진행 요약"]
+    if state.objective:
+        lines.append(f"원래 목표: {state.objective}")
+    if state.progress_summary:
+        lines.append(f"지금까지의 진행: {state.progress_summary}")
+    lines.append(
+        "오래된 대화 일부가 컨텍스트에서 잘렸을 수 있다. 과거 산출물이 필요하면 "
+        "아래 # Session Artifacts 의 경로를 load_artifact 로 복원하라."
+    )
+    return "\n".join(lines)
+
+
 def _render_todo_section(state: AgentState) -> str | None:
     """현재 To-do 목록 섹션."""
     if not state.todo_list:

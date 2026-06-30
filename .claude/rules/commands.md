@@ -57,7 +57,7 @@ uv run python -m pytest backend/tests/test_display_chart_spec.py -v    # display
 pwsh packaging/release.ps1 -Channel qa             # QA 빌드 (Mock 노출, 업데이트 차단, --prerelease)
 pwsh packaging/release.ps1 -Channel prod -Upload -Notes "..."  # Prod 빌드 + GitHub Release 게시
 pwsh packaging/release.ps1 -Channel prod -Force    # git dirty 상태 강제 통과
-pwsh packaging/release-dryrun.ps1                  # 네트워크 없이 업데이트 파이프라인 검증
+pwsh packaging/build-dev.ps1                       # dev: 메인+확장 프론트 전체 빌드 (backend 정적 서빙용, EXE 미빌드)
 ```
 
 산출물: `release/{AppName}.exe`, `release/{AppName}-X.X.X.exe`, `release/latest.json`

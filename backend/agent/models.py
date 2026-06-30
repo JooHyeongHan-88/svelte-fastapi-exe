@@ -151,6 +151,10 @@ class AgentState(BaseModel):
     # 스킬 간 공유되는 임시 컨텍스트 (예: 직전 검색 결과 id).
     context_data: dict[str, Any] = Field(default_factory=dict)
     active_skills: list[str] = Field(default_factory=list)
+    # 세션 첫 턴에 1회 박제하는 원래 목표 — 히스토리가 트림돼도 흔들리지 않는 앵커.
+    objective: str | None = None
+    # summarize-then-drop 롤링 압축 요약 — 슬라이딩 윈도우가 버린 턴을 접어 보존.
+    progress_summary: str | None = None
     # 서브 에이전트가 슬롯 부족으로 중단됐을 때 — 다음 턴에 재위임 유도.
     pending_sub_agent: str | None = None
     pending_sub_task: str | None = None

@@ -176,5 +176,47 @@ def test_truncate_for_history_standalone() -> None:
     assert result.tool_call_id == "b"
 
 
+# ---------------------------------------------------------------------------
+# append() 가 트림으로 버린 메시지를 반환 (summarize-then-drop 입력)
+# ---------------------------------------------------------------------------
+
+
+def test_append_returns_empty_when_under_limit() -> None:
+    store = ConversationStore(max_history=10)
+    dropped = store.append("d1", _msg("user", "a"), _msg("assistant", "b"))
+    assert dropped == []
+
+
+def test_append_returns_dropped_messages_when_over_limit() -> None:
+    store = ConversationStore(max_history=3)
+    dropped = store.append(
+        "d2",
+        _msg("user", "1"),
+        _msg("user", "2"),
+        _msg("user", "3"),
+        _msg("user", "4"),
+    )
+    # 가장 오래된 1건이 잘려 반환되고, 남은 히스토리와 합쳐 원본 순서가 보존된다.
+    assert [m.content for m in dropped] == ["1"]
+    assert [m.content for m in store.get_history("d2")] == ["2", "3", "4"]
+
+
+def test_append_dropped_respects_tool_boundary() -> None:
+    # cut 이 고아 tool 에 떨어지면 경계를 앞으로 밀어, 반환된 dropped 도 그 경계와 일치한다.
+    store = ConversationStore(max_history=2)
+    dropped = store.append(
+        "d3",
+        _msg("user", "분석해줘"),
+        _msg("assistant", "", tool_call_id=None),
+        _msg("tool", "결과 A", tool_call_id="A"),
+        _msg("assistant", "완료"),
+    )
+    history = store.get_history("d3")
+    # 경계 전진으로 tool 까지 함께 버려진다 → 남은 첫 메시지는 고아 tool 이 아니다.
+    assert history[0].role != "tool"
+    assert [m.content for m in dropped] == ["분석해줘", "", "결과 A"]
+    assert [m.content for m in history] == ["완료"]
+
+
 if __name__ == "__main__":
     run_tests(globals())

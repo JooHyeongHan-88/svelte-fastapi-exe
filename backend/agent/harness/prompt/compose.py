@@ -21,6 +21,7 @@ from agent.harness.prompt.sections import (
     _render_inactive_skill_catalog,
     _render_multi_skill_instruction,
     _render_pending_slot,
+    _render_progress_summary_section,
     _render_todo_section,
 )
 
@@ -51,6 +52,10 @@ def _compose_orchestrator_system_prompt(
     multi_skill = _render_multi_skill_instruction(skills)
     if multi_skill:
         parts.append(multi_skill)
+
+    progress_section = _render_progress_summary_section(state)
+    if progress_section:
+        parts.append(progress_section)
 
     todo_section = _render_todo_section(state)
     if todo_section:
@@ -191,6 +196,10 @@ def _compose_system_prompt(
     multi_skill = _render_multi_skill_instruction(skills)
     if multi_skill:
         parts.append(multi_skill)
+
+    progress_section = _render_progress_summary_section(state)
+    if progress_section:
+        parts.append(progress_section)
 
     todo_section = _render_todo_section(state)
     if todo_section:
