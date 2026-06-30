@@ -1,6 +1,6 @@
 [project]
 name = "senpia"
-version = "0.0.34"
+version = "0.1.1"
 description = "Sensor PA Team Data-Curation-In-The-Loop AI Agent Tool"
 readme = "README.md"
 requires-python = ">=3.12"
