@@ -108,8 +108,18 @@ class AgentRegistry:
         logger.info("agents loaded: %d from %s", len(loaded), self._dir)
 
     def list_meta(self) -> list[AgentMeta]:
-        """등록된 모든 agent 의 메타데이터 — 오케스트레이터 카탈로그 주입용."""
-        return [a.meta for a in self._agents]
+        """등록된 모든 agent 의 메타데이터 — priority 내림차순(동점은 파일명 순).
+
+        오케스트레이터 카탈로그·Case 3 역매핑이 이 순서를 그대로 신뢰한다. 여러
+        에이전트가 같은 스킬을 등록하면 priority 가 높은 에이전트가 전담자로 확정된다.
+
+        Returns:
+            list[AgentMeta]: priority 높은 순으로 정렬된 메타데이터. 동일 priority 는
+                파일명 순(로드 순)을 유지한다.
+        """
+        # Why: priority 를 실제 tie-breaker 로 쓰기 위해 정렬. stable sort 라 동점은
+        # self._agents(파일명 순) 순서를 보존해 결정론을 유지한다.
+        return sorted((a.meta for a in self._agents), key=lambda m: -m.priority)
 
     def get_by_name(self, name: str) -> Agent | None:
         """call_sub_agent 디스패치 — 정확한 이름 매칭."""

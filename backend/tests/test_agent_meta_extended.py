@@ -1,8 +1,9 @@
-"""AgentMeta role/goal/when_to_delegate 필드 — 백워드 호환 및 프롬프트 주입 검증."""
+"""AgentMeta 필드 — 백워드 호환·프롬프트 주입·priority tie-break 라우팅 검증."""
 
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ from agent.harness import (  # noqa: E402
     _compose_sub_agent_system_prompt,
 )
 from agent.models import AgentState  # noqa: E402
-from agent.registries.agents import Agent, AgentMeta  # noqa: E402
+from agent.registries.agents import Agent, AgentMeta, AgentRegistry  # noqa: E402
 from tests._runner import run_tests  # noqa: E402
 
 
@@ -116,6 +117,79 @@ def test_sub_agent_prompt_legacy_agent_has_no_role_block() -> None:
     assert "Role:" not in prompt
     assert "Goal:" not in prompt
     assert "레거시 본문" in prompt
+
+
+def _write_agent(dir_path: Path, filename: str, *, name: str, priority: int) -> None:
+    """priority tie-break 테스트용 최소 AGENTS/*.md 파일을 쓴다(shared_skill 전담)."""
+    body = (
+        "---\n"
+        f"name: {name}\n"
+        "description: 우선순위 테스트 에이전트\n"
+        "skills:\n"
+        "  - shared_skill\n"
+        f"priority: {priority}\n"
+        "---\n\n"
+        "본문.\n"
+    )
+    (dir_path / filename).write_text(body, encoding="utf-8")
+
+
+def test_list_meta_orders_by_priority_desc() -> None:
+    """priority 높은 에이전트가 앞선다 — 파일명 순서를 이긴다."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        # 파일명 순(alpha_ < zeta_)이 priority 순과 반대가 되도록 배치 —
+        # 정렬이 파일명이 아니라 priority 를 따르는지 확인한다.
+        _write_agent(tmp, "alpha_low.md", name="alpha_low", priority=5)
+        _write_agent(tmp, "zeta_high.md", name="zeta_high", priority=9)
+        reg = AgentRegistry(agents_dir=tmp)
+        reg.load()
+        names = [m.name for m in reg.list_meta()]
+
+    assert names == ["zeta_high", "alpha_low"]
+
+
+def test_list_meta_equal_priority_keeps_filename_order() -> None:
+    """동일 priority 는 파일명 순(로드 순)을 유지한다 — stable sort."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        _write_agent(tmp, "a_agent.md", name="a_agent", priority=5)
+        _write_agent(tmp, "b_agent.md", name="b_agent", priority=5)
+        reg = AgentRegistry(agents_dir=tmp)
+        reg.load()
+        names = [m.name for m in reg.list_meta()]
+
+    assert names == ["a_agent", "b_agent"]
+
+
+def test_case3_mapping_picks_highest_priority_agent() -> None:
+    """동일 스킬을 두 에이전트가 등록하면 Case 3 매핑은 priority 높은 쪽으로 확정된다.
+
+    list_meta() 가 priority 내림차순을 반환한다는 계약 위에서, compose 의
+    setdefault(첫 등록 유지)가 최고 priority 에이전트를 전담자로 고르는지 검증한다.
+    """
+    high = AgentMeta(
+        name="high_prio_agent", description="높음", skills=["shared"], priority=9
+    )
+    low = AgentMeta(
+        name="low_prio_agent", description="낮음", skills=["shared"], priority=5
+    )
+
+    agent_registry = MagicMock()
+    # list_meta() 계약대로 priority 내림차순으로 반환.
+    agent_registry.list_meta.return_value = [high, low]
+
+    prompt = _compose_orchestrator_system_prompt(
+        base="BASE",
+        skills=[],
+        state=AgentState(),
+        agent_registry=agent_registry,
+    )
+
+    assert "## Case 3 결정론 매핑" in prompt
+    assert "'shared' 트리거가 들어오면 반드시 `high_prio_agent` 에게" in prompt
+    # low_prio 는 shared 의 전담자로 등장하지 않는다.
+    assert "'shared' 트리거가 들어오면 반드시 `low_prio_agent` 에게" not in prompt
 
 
 if __name__ == "__main__":

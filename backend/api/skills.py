@@ -1,6 +1,6 @@
-"""SKILLS 카탈로그 + 디버그 라우팅 라우터."""
+"""SKILLS 카탈로그 라우터."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from agent.registries.skills import registry as skill_registry
 from api.deps import require_local_origin
@@ -24,26 +24,3 @@ async def list_skills() -> list[dict]:
         }
         for meta in skill_registry.list_meta(exposed_only=True)
     ]
-
-
-@router.get("/debug/skill-route")
-async def debug_skill_route(message: str = Query(...)) -> dict:
-    """입력 메시지에 대해 어떤 SKILL 이 매칭되는지 반환한다 (개발·검증용).
-
-    LLM 연결 없이 SKILLS/ 라우팅 동작을 확인할 수 있다.
-    예: GET /api/debug/skill-route?message=지금 몇 시야
-    """
-    matched = skill_registry.select(message)
-    return {
-        "message": message,
-        "matched_skills": [
-            {
-                "name": s.meta.name,
-                "description": s.meta.description,
-                "trigger": s.meta.trigger,
-                "priority": s.meta.priority,
-                "requires_tools": s.meta.requires_tools,
-            }
-            for s in matched
-        ],
-    }
