@@ -111,6 +111,8 @@ def _compose_orchestrator_system_prompt(
             agent_block.append(f"  전담 스킬: {skills_str}")
             catalog_lines.append("\n".join(agent_block))
             for sk in m.skills:
+                # list_meta() 가 priority 내림차순이라, setdefault(첫 등록 유지)가
+                # 곧 '최고 priority 에이전트를 전담자로 확정' 이 된다.
                 skill_to_agent.setdefault(sk, m.name)
 
         if skill_to_agent:
