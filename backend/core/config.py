@@ -1,9 +1,13 @@
+import getpass
 import os
+import ssl
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+from core import tls
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +197,44 @@ CONTENT_SYNC_TIMEOUT: int = int(os.environ.get("APP_CONTENT_SYNC_TIMEOUT", "5"))
 # ---------------------------------------------------------------------------
 
 APP_NAME: str = os.environ.get("APP_NAME", "MyAgent")
+
+
+# ---------------------------------------------------------------------------
+# 사용자 식별 — OS 로그인 계정.
+#
+# 앱 사용 로그(Loki)의 user 라벨로 쓴다. 프로세스 전역 정보라 import 시 1회만 계산한다.
+# getpass.getuser() 는 값이 falsy 인 게 아니라 조회 실패 시 raise 할 수 있으므로
+# (pwd 미존재 등) 방어적으로 감싼다 — 로깅은 절대 부팅을 막지 않는다.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_os_user() -> str:
+    try:
+        return getpass.getuser() or "anonymous"
+    except Exception:
+        return "anonymous"
+
+
+OS_USER: str = _resolve_os_user()
+
+
+# ---------------------------------------------------------------------------
+# 사용자 로깅 (Grafana Loki)
+#
+# 앱 사용 로그(질의·tool call·응답)를 Loki push API 로 전송한다. base URL 만 넣으면
+# 코드가 /loki/api/v1/push 를 붙인다. 빈 값이면 로깅 비활성(no-op) — 오버헤드 0.
+# HTTPS 인증서는 Windows 시스템 CA(사내 CA 포함)로 검증하므로 사내 인증서가 설치된
+# PC 에서는 추가 조치가 필요 없다. 검증이 SSLError 로 막히는 최후의 경우에만
+# APP_LOKI_TLS_VERIFY=false 로 끈다(신뢰할 수 있는 자체 서비스 전제).
+# ---------------------------------------------------------------------------
+
+LOKI_BASE_URL: str = os.environ.get("APP_LOKI_BASE_URL", "").rstrip("/")
+LOKI_TIMEOUT: float = float(os.environ.get("APP_LOKI_TIMEOUT", "5"))
+LOKI_TLS_VERIFY: bool = os.environ.get("APP_LOKI_TLS_VERIFY", "true").lower() not in (
+    "0",
+    "false",
+)
+LOKI_SSL_VERIFY: bool | ssl.SSLContext = tls.resolve_ssl_verify(LOKI_TLS_VERIFY)
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ from api import router as api_router
 from api.deps import state_store
 from core import browser, content_sync, updater
 from core.browser import open_browser, watchdog
+from core.log_collector import collector as log_collector
 from core.config import (
     ASSETS_DIR,
     RESULT_DIR,
@@ -35,7 +36,13 @@ mimetypes.add_type("image/svg+xml", ".svg")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     browser.init_shutdown_event()
-    yield
+    # 사용 로그 수집기의 백그라운드 워커를 실행 중인 event loop 안에서 기동한다
+    # (APP_LOKI_BASE_URL 미설정 시 no-op). 종료 시 남은 로그를 flush 한다.
+    log_collector.start()
+    try:
+        yield
+    finally:
+        await log_collector.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
