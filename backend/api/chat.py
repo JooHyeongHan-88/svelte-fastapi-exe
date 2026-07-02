@@ -25,6 +25,7 @@ from agent.registries.prompts import registry as prompt_registry
 from agent.registries.skills import registry as skill_registry
 from agent.registries.tools import registry
 from api.deps import _settings_store, _state_store, _store, require_local_origin
+from core.log_collector import collector as log_collector
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,11 @@ async def chat(
             yield f"data: {DoneEvent().model_dump_json()}\n\n"
             return
         _active_turn_clients.add(client_id)
+        # 사용 로그 tap — run_turn 이 흘리는 이벤트를 여기 한 곳에서 관찰해 Loki 로 남긴다
+        # (하니스 무변경, 미설정 시 no-op). ESC 취소 포함 모든 경로에서 finally 로 마감.
+        tap = log_collector.new_turn(client_id)
+        tap.query(req.message, title=session_title)
+        cancelled = False
         try:
             settings = _settings_store.get()
             provider = get_provider(settings)
@@ -81,10 +87,12 @@ async def chat(
                 user_prompt=settings.user_prompt,
                 orchestrator_api_refs=ORCHESTRATOR_API_REFS,
             ):
+                tap.observe(event)
                 yield f"data: {event.model_dump_json()}\n\n"
         except asyncio.CancelledError:
             # 클라이언트가 SSE 연결을 닫았거나 사용자가 ESC 로 취소 — 정상 종료.
             # Exception 으로 로깅하면 운영 로그에 노이즈가 쌓이므로 debug 레벨로만 기록.
+            cancelled = True
             logger.debug(
                 "chat SSE cancelled for client_id=%s (client disconnect or ESC)",
                 client_id,
@@ -94,8 +102,10 @@ async def chat(
             logger.exception("chat event_source error for client_id=%s", client_id)
             # str(exc) 는 API 키·URL 등 민감 정보를 노출할 수 있으므로 type 만 전달.
             safe_msg = f"[{type(exc).__name__}] 처리 중 오류가 발생했습니다."
+            tap.observe(ErrorEvent(message=safe_msg))
             yield f"data: {ErrorEvent(message=safe_msg).model_dump_json()}\n\n"
         finally:
+            tap.finish(cancelled=cancelled)
             # CancelledError 포함 모든 종료 경로에서 가드 해제.
             _active_turn_clients.discard(client_id)
 

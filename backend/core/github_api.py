@@ -12,9 +12,8 @@ private 레포의 에셋/콘텐츠는 브라우저 다운로드 URL(`.../downloa
 from __future__ import annotations
 
 import ssl
-import sys
 
-from core import config
+from core import config, tls
 
 # GitHub REST API 매체 타입. JSON 은 메타·디렉터리 목록·blob, octet-stream 은 에셋 바이너리.
 JSON_ACCEPT = "application/vnd.github+json"
@@ -55,21 +54,6 @@ def api_headers(accept: str) -> dict[str, str]:
     return headers
 
 
-def _make_ssl_verify() -> bool | ssl.SSLContext:
-    """httpx SSL 검증 설정.
-
-    APP_REPO_TLS_VERIFY=false: 검증 비활성화 (내부망 자체 서명 인증서 최후 수단).
-    Windows: certifi 대신 Windows 인증서 저장소를 써서 회사 내부 CA 를 자동 신뢰한다.
-    certifi 는 Windows 인증서 저장소를 읽지 않아 기업 내부 CA 가 누락될 수 있다.
-
-    Returns:
-        False(검증 비활성), ssl.SSLContext(Windows 시스템 CA), 또는 True(certifi 기본값).
-    """
-    if not config.REPO_TLS_VERIFY:
-        return False
-    if sys.platform == "win32":
-        return ssl.create_default_context()
-    return True
-
-
-SSL_VERIFY: bool | ssl.SSLContext = _make_ssl_verify()
+# APP_REPO_TLS_VERIFY=false 면 검증 비활성(내부망 자체 서명 인증서 최후 수단), 그 외엔
+# Windows 시스템 인증서 저장소(사내 CA 포함)를 신뢰한다. 상세는 core.tls 참고.
+SSL_VERIFY: bool | ssl.SSLContext = tls.resolve_ssl_verify(config.REPO_TLS_VERIFY)
